@@ -2,9 +2,10 @@ package wv.codeclip;
 
 import javax.swing.*;
 import java.awt.*;
-import java.io.File;
+import java.io.*;
 import java.nio.file.Files;
 import java.util.Map;
+import java.util.Properties;
 
 public class CodeClipFrame extends JFrame {
 
@@ -15,7 +16,7 @@ public class CodeClipFrame extends JFrame {
     private final JCheckBox showMissingFileMessages =
             new JCheckBox("Show missing file messages", true);
     private final JCheckBox alwaysOnTopCheck =
-            new JCheckBox("Always on Top", false);
+            new JCheckBox("Always on Top", true); // initially selected
 
     private final JLabel enabledCountLabel = new JLabel("Enabled Classes: 0");
     private final JLabel charCountLabel = new JLabel("Code Characters: 0");
@@ -23,11 +24,11 @@ public class CodeClipFrame extends JFrame {
     private final ClassRepository repo = new ClassRepository();
     private final ClassActions actions;
 
+    private final File propFile = new File(System.getProperty("user.home"), "codeclip.properties");
+    private final Properties props = new Properties();
+
     public CodeClipFrame() {
-        setTitle("Code Clip");
-        setSize(950, 600);
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setLayout(new BorderLayout());
+        loadProperties();
 
         actions = new ClassActions(
                 this,
@@ -37,8 +38,39 @@ public class CodeClipFrame extends JFrame {
                 repo
         );
 
+        setTitle("Code Clip");
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+
+        // Restore frame size
+        int width = Integer.parseInt(props.getProperty("frame.width", "475"));
+        int height = Integer.parseInt(props.getProperty("frame.height", "300"));
+        setSize(width, height);
+
+        setLayout(new BorderLayout());
+
         buildUI();
         installDnD();
+
+        setAlwaysOnTop(alwaysOnTopCheck.isSelected());
+
+        // Restore added classes
+        String files = props.getProperty("classes");
+        if (files != null && !files.isEmpty()) {
+            for (String path : files.split("\\|")) {
+                File f = new File(path);
+                if (f.exists()) addClass(f);
+            }
+        }
+
+        // Restore notes
+        notesTextArea.setText(props.getProperty("notes", ""));
+
+        // Save properties on exit
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            public void windowClosing(java.awt.event.WindowEvent e) {
+                saveProperties();
+            }
+        });
 
         setVisible(true);
     }
@@ -47,15 +79,12 @@ public class CodeClipFrame extends JFrame {
         classTextArea.setEditable(false);
         classTextArea.setLineWrap(true);
 
-        // Panel to hold code area + stats labels
-        JPanel codePanel = new JPanel();
-        codePanel.setLayout(new BorderLayout());
+        JPanel codePanel = new JPanel(new BorderLayout());
         codePanel.add(new JScrollPane(classTextArea), BorderLayout.CENTER);
 
         JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         statsPanel.add(enabledCountLabel);
         statsPanel.add(charCountLabel);
-
         codePanel.add(statsPanel, BorderLayout.SOUTH);
         add(codePanel, BorderLayout.NORTH);
 
@@ -67,8 +96,7 @@ public class CodeClipFrame extends JFrame {
         right.setPreferredSize(new Dimension(280, 0));
         add(right, BorderLayout.EAST);
 
-        JPanel buttons = new JPanel();
-
+        JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
         JButton reset = new JButton("Reset");
         JButton update = new JButton("Update All");
         JButton copy = new JButton("Copy All");
@@ -244,5 +272,35 @@ public class CodeClipFrame extends JFrame {
         }
         classPanel.revalidate();
         classPanel.repaint();
+    }
+
+    private void loadProperties() {
+        if (propFile.exists()) {
+            try (FileReader reader = new FileReader(propFile)) {
+                props.load(reader);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void saveProperties() {
+        props.setProperty("frame.width", String.valueOf(getWidth()));
+        props.setProperty("frame.height", String.valueOf(getHeight()));
+        props.setProperty("notes", notesTextArea.getText());
+
+        // Save class paths
+        StringBuilder sb = new StringBuilder();
+        for (String path : repo.getClassCodeMap().keySet()) {
+            if (sb.length() > 0) sb.append("|");
+            sb.append(path);
+        }
+        props.setProperty("classes", sb.toString());
+
+        try (FileWriter writer = new FileWriter(propFile)) {
+            props.store(writer, "CodeClip Settings");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }
