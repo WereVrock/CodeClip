@@ -1,3 +1,4 @@
+// ===== ClassRepository.java =====
 package wv.codeclip;
 
 import java.io.File;
@@ -27,3 +28,4 @@ public class ClassRepository {
         disabledClasses.clear();
     }
 }
+

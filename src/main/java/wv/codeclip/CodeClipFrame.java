@@ -1,4 +1,3 @@
-// ===== CodeClipFrame.java =====
 package wv.codeclip;
 
 import javax.swing.*;
@@ -11,6 +10,7 @@ public class CodeClipFrame extends JFrame {
 
     private final JTextArea classTextArea = new JTextArea(8, 50);
     private final JTextArea notesTextArea = new JTextArea();
+    private String tempLogs = ""; // temporary logs (not saved as notes)
     private final JPanel classPanel = new JPanel();
 
     private final JCheckBox showMissingFileMessages =
@@ -61,6 +61,14 @@ public class CodeClipFrame extends JFrame {
         // Restore notes
         notesTextArea.setText(settings.loadNotes());
 
+        // Clear logs when notes are clicked
+        notesTextArea.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusGained(java.awt.event.FocusEvent e) {
+                clearTempLogs();
+            }
+        });
+
         // Save properties on exit
         addWindowListener(new java.awt.event.WindowAdapter() {
             public void windowClosing(java.awt.event.WindowEvent e) {
@@ -74,76 +82,89 @@ public class CodeClipFrame extends JFrame {
         setVisible(true);
     }
 
-  private void buildUI() {
-    classTextArea.setEditable(false);
-    classTextArea.setLineWrap(true);
+    private void buildUI() {
+        classTextArea.setEditable(false);
+        classTextArea.setLineWrap(true);
 
-    // Code panel (top)
-    JPanel codePanel = new JPanel(new BorderLayout());
-    codePanel.add(new JScrollPane(classTextArea), BorderLayout.CENTER);
+        // --- Code panel (top) ---
+        JPanel codePanel = new JPanel(new BorderLayout());
+        codePanel.add(new JScrollPane(classTextArea), BorderLayout.CENTER);
 
-    JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-    statsPanel.add(enabledCountLabel);
-    statsPanel.add(charCountLabel);
-    codePanel.add(statsPanel, BorderLayout.SOUTH);
+        JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        statsPanel.add(enabledCountLabel);
+        statsPanel.add(charCountLabel);
+        codePanel.add(statsPanel, BorderLayout.SOUTH);
 
-    add(codePanel, BorderLayout.NORTH);
+        add(codePanel, BorderLayout.NORTH);
 
-    // Notes and Class Panel
-    notesTextArea.setLineWrap(true);
-    JScrollPane notesScroll = new JScrollPane(notesTextArea);
+        // --- Notes and Class Panel ---
+        notesTextArea.setLineWrap(true);
+        JScrollPane notesScroll = new JScrollPane(notesTextArea);
 
-    // Class panel scrollable
-    classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
-    classPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-    classPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
-    JScrollPane classScroll = new JScrollPane(classPanel);
-    classScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        // Class panel scrollable
+        classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
+        classPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        classPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+        JScrollPane classScroll = new JScrollPane(classPanel);
+        classScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 
-    // Split pane: notes on left, class panel on right
-    JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classScroll);
-    splitPane.setResizeWeight(0.7); // 70% notes, 30% classes
-    splitPane.setOneTouchExpandable(true);
-    splitPane.setContinuousLayout(true);
-    add(splitPane, BorderLayout.CENTER);
+        // Split pane: notes on left, class panel on right
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classScroll);
+        splitPane.setResizeWeight(0.7); // 70% notes, 30% classes
+        splitPane.setOneTouchExpandable(true);
+        splitPane.setContinuousLayout(true);
+        add(splitPane, BorderLayout.CENTER);
 
-    // Buttons panel (bottom)
-    JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
-    JButton reset = new JButton("Reset");
-    JButton update = new JButton("Update All");
-    JButton copy = new JButton("Copy All");
-    JButton copyCode = new JButton("Copy Code Only");
-    JButton enableAll = new JButton("Enable All");
-    JButton disableAll = new JButton("Disable All");
+        // --- Buttons panel (bottom) ---
+        JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
 
-    reset.addActionListener(e -> actions.resetAll(classPanel));
-    update.addActionListener(e -> actions.updateAll(this::refreshText));
-    copy.addActionListener(e -> actions.copyAll());
-    copyCode.addActionListener(e -> actions.copyCodeOnly());
-    alwaysOnTopCheck.addActionListener(e ->
-            setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
-    enableAll.addActionListener(e -> {
-        repo.getDisabledClasses().clear();
-        refreshText();
-        refreshPanels();
-    });
-    disableAll.addActionListener(e -> {
-        repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
-        refreshText();
-        refreshPanels();
-    });
+        JButton reset = new JButton("Reset");
+        JButton update = new JButton("Update All");
+        JButton copy = new JButton("Copy All");
+        JButton copyCode = new JButton("Copy Code Only");
+        JButton enableAll = new JButton("Enable All");
+        JButton disableAll = new JButton("Disable All");
+        JButton pasteClass = new JButton("Paste Class"); // NEW BUTTON
 
-    buttons.add(reset);
-    buttons.add(update);
-    buttons.add(copy);
-    buttons.add(copyCode);
-    buttons.add(enableAll);
-    buttons.add(disableAll);
-    buttons.add(showMissingFileMessages);
-    buttons.add(alwaysOnTopCheck);
+        // --- Button actions ---
+        reset.addActionListener(e -> actions.resetAll(classPanel));
+        update.addActionListener(e -> actions.updateAll(this::refreshText));
+        copy.addActionListener(e -> {
+            clearTempLogs();
+            actions.copyAll();
+        });
+        copyCode.addActionListener(e -> actions.copyCodeOnly());
+        alwaysOnTopCheck.addActionListener(e ->
+                setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
+        enableAll.addActionListener(e -> {
+            repo.getDisabledClasses().clear();
+            refreshText();
+            refreshPanels();
+        });
+        disableAll.addActionListener(e -> {
+            repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
+            refreshText();
+            refreshPanels();
+        });
 
-    add(buttons, BorderLayout.SOUTH);
-}
+        pasteClass.addActionListener(e -> {
+            new PasteClassHandler(repo, this, this::refreshText, this::appendTempLog).handlePasteFromClipboard();
+            refreshPanels();
+        });
+
+        // --- Add buttons to panel ---
+        buttons.add(reset);
+        buttons.add(update);
+        buttons.add(copy);
+        buttons.add(copyCode);
+        buttons.add(enableAll);
+        buttons.add(disableAll);
+        buttons.add(showMissingFileMessages);
+        buttons.add(alwaysOnTopCheck);
+        buttons.add(pasteClass); // add at the end
+
+        add(buttons, BorderLayout.SOUTH);
+    }
 
     private void installDnD() {
         new FileDropHandler(this::addClass).install(this);
@@ -281,5 +302,21 @@ public class CodeClipFrame extends JFrame {
         }
         classPanel.revalidate();
         classPanel.repaint();
+    }
+
+    // --- Temporary log helpers ---
+    public void appendTempLog(String message) {
+        tempLogs += message + "\n";
+        notesTextArea.setText(tempLogs + notesTextArea.getText());
+    }
+
+    private void clearTempLogs() {
+        if (!tempLogs.isEmpty()) {
+            String currentText = notesTextArea.getText();
+            if (currentText.startsWith(tempLogs)) {
+                notesTextArea.setText(currentText.substring(tempLogs.length()));
+            }
+            tempLogs = "";
+        }
     }
 }
