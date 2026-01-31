@@ -1,11 +1,11 @@
+// ===== CodeClipFrame.java =====
 package wv.codeclip;
 
 import javax.swing.*;
 import java.awt.*;
-import java.io.*;
+import java.io.File;
 import java.nio.file.Files;
 import java.util.Map;
-import java.util.Properties;
 
 public class CodeClipFrame extends JFrame {
 
@@ -16,7 +16,7 @@ public class CodeClipFrame extends JFrame {
     private final JCheckBox showMissingFileMessages =
             new JCheckBox("Show missing file messages", true);
     private final JCheckBox alwaysOnTopCheck =
-            new JCheckBox("Always on Top", true); // initially selected
+            new JCheckBox("Always on Top", true);
 
     private final JLabel enabledCountLabel = new JLabel("Enabled Classes: 0");
     private final JLabel charCountLabel = new JLabel("Code Characters: 0");
@@ -24,12 +24,12 @@ public class CodeClipFrame extends JFrame {
     private final ClassRepository repo = new ClassRepository();
     private final ClassActions actions;
 
-    private final File propFile = new File(System.getProperty("user.home"), "codeclip.properties");
-    private final Properties props = new Properties();
+    private final SettingsManager settings = new SettingsManager();
+
+    private static final Color ENABLED_COLOR  = new Color(240, 240, 240);
+    private static final Color DISABLED_COLOR = new Color(210, 210, 210);
 
     public CodeClipFrame() {
-        loadProperties();
-
         actions = new ClassActions(
                 this,
                 classTextArea,
@@ -41,10 +41,9 @@ public class CodeClipFrame extends JFrame {
         setTitle("Code Clip");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
 
-        // Restore frame size
-        int width = Integer.parseInt(props.getProperty("frame.width", "475"));
-        int height = Integer.parseInt(props.getProperty("frame.height", "300"));
-        setSize(width, height);
+        // Restore frame size and position
+        Rectangle bounds = settings.loadFrameBounds();
+        setBounds(bounds);
 
         setLayout(new BorderLayout());
 
@@ -53,85 +52,98 @@ public class CodeClipFrame extends JFrame {
 
         setAlwaysOnTop(alwaysOnTopCheck.isSelected());
 
-        // Restore added classes
-        String files = props.getProperty("classes");
-        if (files != null && !files.isEmpty()) {
-            for (String path : files.split("\\|")) {
-                File f = new File(path);
-                if (f.exists()) addClass(f);
-            }
+        // Restore classes
+        for (String path : settings.loadClassPaths()) {
+            File f = new File(path);
+            if (f.exists()) addClass(f);
         }
 
         // Restore notes
-        notesTextArea.setText(props.getProperty("notes", ""));
+        notesTextArea.setText(settings.loadNotes());
 
         // Save properties on exit
         addWindowListener(new java.awt.event.WindowAdapter() {
             public void windowClosing(java.awt.event.WindowEvent e) {
-                saveProperties();
+                settings.saveFrameBounds(getBounds());
+                settings.saveNotes(notesTextArea.getText());
+                settings.saveClassPaths(repo.getClassCodeMap().keySet().toArray(new String[0]));
+                settings.saveProperties();
             }
         });
 
         setVisible(true);
     }
 
-    private void buildUI() {
-        classTextArea.setEditable(false);
-        classTextArea.setLineWrap(true);
+  private void buildUI() {
+    classTextArea.setEditable(false);
+    classTextArea.setLineWrap(true);
 
-        JPanel codePanel = new JPanel(new BorderLayout());
-        codePanel.add(new JScrollPane(classTextArea), BorderLayout.CENTER);
+    // Code panel (top)
+    JPanel codePanel = new JPanel(new BorderLayout());
+    codePanel.add(new JScrollPane(classTextArea), BorderLayout.CENTER);
 
-        JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        statsPanel.add(enabledCountLabel);
-        statsPanel.add(charCountLabel);
-        codePanel.add(statsPanel, BorderLayout.SOUTH);
-        add(codePanel, BorderLayout.NORTH);
+    JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+    statsPanel.add(enabledCountLabel);
+    statsPanel.add(charCountLabel);
+    codePanel.add(statsPanel, BorderLayout.SOUTH);
 
-        notesTextArea.setLineWrap(true);
-        add(new JScrollPane(notesTextArea), BorderLayout.CENTER);
+    add(codePanel, BorderLayout.NORTH);
 
-        classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
-        JScrollPane right = new JScrollPane(classPanel);
-        right.setPreferredSize(new Dimension(280, 0));
-        add(right, BorderLayout.EAST);
+    // Notes and Class Panel
+    notesTextArea.setLineWrap(true);
+    JScrollPane notesScroll = new JScrollPane(notesTextArea);
 
-        JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
-        JButton reset = new JButton("Reset");
-        JButton update = new JButton("Update All");
-        JButton copy = new JButton("Copy All");
-        JButton copyCode = new JButton("Copy Code Only");
-        JButton enableAll = new JButton("Enable All");
-        JButton disableAll = new JButton("Disable All");
+    // Class panel scrollable
+    classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
+    classPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+    classPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+    JScrollPane classScroll = new JScrollPane(classPanel);
+    classScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 
-        reset.addActionListener(e -> actions.resetAll(classPanel));
-        update.addActionListener(e -> actions.updateAll(this::refreshText));
-        copy.addActionListener(e -> actions.copyAll());
-        copyCode.addActionListener(e -> actions.copyCodeOnly());
-        alwaysOnTopCheck.addActionListener(e ->
-                setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
-        enableAll.addActionListener(e -> {
-            repo.getDisabledClasses().clear();
-            refreshText();
-            refreshPanels();
-        });
-        disableAll.addActionListener(e -> {
-            repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
-            refreshText();
-            refreshPanels();
-        });
+    // Split pane: notes on left, class panel on right
+    JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classScroll);
+    splitPane.setResizeWeight(0.7); // 70% notes, 30% classes
+    splitPane.setOneTouchExpandable(true);
+    splitPane.setContinuousLayout(true);
+    add(splitPane, BorderLayout.CENTER);
 
-        buttons.add(reset);
-        buttons.add(update);
-        buttons.add(copy);
-        buttons.add(copyCode);
-        buttons.add(enableAll);
-        buttons.add(disableAll);
-        buttons.add(showMissingFileMessages);
-        buttons.add(alwaysOnTopCheck);
+    // Buttons panel (bottom)
+    JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
+    JButton reset = new JButton("Reset");
+    JButton update = new JButton("Update All");
+    JButton copy = new JButton("Copy All");
+    JButton copyCode = new JButton("Copy Code Only");
+    JButton enableAll = new JButton("Enable All");
+    JButton disableAll = new JButton("Disable All");
 
-        add(buttons, BorderLayout.SOUTH);
-    }
+    reset.addActionListener(e -> actions.resetAll(classPanel));
+    update.addActionListener(e -> actions.updateAll(this::refreshText));
+    copy.addActionListener(e -> actions.copyAll());
+    copyCode.addActionListener(e -> actions.copyCodeOnly());
+    alwaysOnTopCheck.addActionListener(e ->
+            setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
+    enableAll.addActionListener(e -> {
+        repo.getDisabledClasses().clear();
+        refreshText();
+        refreshPanels();
+    });
+    disableAll.addActionListener(e -> {
+        repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
+        refreshText();
+        refreshPanels();
+    });
+
+    buttons.add(reset);
+    buttons.add(update);
+    buttons.add(copy);
+    buttons.add(copyCode);
+    buttons.add(enableAll);
+    buttons.add(disableAll);
+    buttons.add(showMissingFileMessages);
+    buttons.add(alwaysOnTopCheck);
+
+    add(buttons, BorderLayout.SOUTH);
+}
 
     private void installDnD() {
         new FileDropHandler(this::addClass).install(this);
@@ -159,9 +171,6 @@ public class CodeClipFrame extends JFrame {
         };
         worker.execute();
     }
-
-    private static final Color ENABLED_COLOR  = new Color(240, 240, 240);
-    private static final Color DISABLED_COLOR = new Color(210, 210, 210);
 
     private void addClassPanel(String path, String name) {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -272,35 +281,5 @@ public class CodeClipFrame extends JFrame {
         }
         classPanel.revalidate();
         classPanel.repaint();
-    }
-
-    private void loadProperties() {
-        if (propFile.exists()) {
-            try (FileReader reader = new FileReader(propFile)) {
-                props.load(reader);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-    }
-
-    private void saveProperties() {
-        props.setProperty("frame.width", String.valueOf(getWidth()));
-        props.setProperty("frame.height", String.valueOf(getHeight()));
-        props.setProperty("notes", notesTextArea.getText());
-
-        // Save class paths
-        StringBuilder sb = new StringBuilder();
-        for (String path : repo.getClassCodeMap().keySet()) {
-            if (sb.length() > 0) sb.append("|");
-            sb.append(path);
-        }
-        props.setProperty("classes", sb.toString());
-
-        try (FileWriter writer = new FileWriter(propFile)) {
-            props.store(writer, "CodeClip Settings");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
     }
 }
