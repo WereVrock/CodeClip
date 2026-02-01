@@ -18,7 +18,7 @@ public class PasteClassHandler {
     private final Runnable refreshCallback;
     private final java.util.function.Consumer<String> statusLogger;
 
-    // Matches: class / interface / enum / record with any modifiers
+    // Matches: class / interface / enum / record with modifiers
     private static final Pattern TYPE_PATTERN = Pattern.compile(
             "(?:^|\\s)" +
             "(?:public|protected|private|abstract|final|sealed|non-sealed|static|strictfp|\\s)*" +
@@ -69,7 +69,6 @@ public class PasteClassHandler {
             return;
         }
 
-        // --- Brace integrity check ---
         if (!JavaBraceEndChecker.hasCompleteEnd(classCode)) {
             int choice = JOptionPane.showConfirmDialog(
                     parent,
@@ -80,9 +79,7 @@ public class PasteClassHandler {
                     JOptionPane.OK_CANCEL_OPTION,
                     JOptionPane.WARNING_MESSAGE
             );
-            if (choice != JOptionPane.OK_OPTION) {
-                return;
-            }
+            if (choice != JOptionPane.OK_OPTION) return;
         }
 
         File file = findExistingFile(packageName, className);
@@ -107,23 +104,17 @@ public class PasteClassHandler {
                     MissingMethodDetector.findMissingMethods(oldCode, classCode);
 
             if (!missingMethods.isEmpty()) {
-
                 StringBuilder errorText = new StringBuilder();
                 errorText.append("Error: The new code for class ")
-                         .append(className)
-                         .append(" has these methods missing:\n");
+                        .append(className)
+                        .append(" has these methods missing:\n");
 
                 for (String m : missingMethods) {
                     errorText.append("• ").append(m).append("\n");
                 }
 
                 while (true) {
-                    Object[] options = {
-                            "Overwrite",
-                            "Copy Error",
-                            "Cancel"
-                    };
-
+                    Object[] options = {"Overwrite", "Copy Error", "Cancel"};
                     int choice = JOptionPane.showOptionDialog(
                             parent,
                             errorText.toString(),
@@ -135,37 +126,32 @@ public class PasteClassHandler {
                             options[0]
                     );
 
-                    if (choice == 0) { // Overwrite
-                        break;
-                    }
-
-                    if (choice == 1) { // Copy Error
+                    if (choice == 0) break;
+                    if (choice == 1) {
                         copyToClipboard(errorText.toString());
                         continue;
                     }
-
-                    return; // Cancel / closed
+                    return;
                 }
             }
         }
 
         try {
             if (isNewFile) {
+                File root = detectSourceRoot(packageName);
                 int choice = JOptionPane.showConfirmDialog(
                         parent,
                         "Class: " + className + "\n\n" +
                                 "File does not exist.\n\n" +
                                 "Target Directory:\n" +
-                                detectSourceRoot(packageName).getAbsolutePath() + "\n\n" +
+                                root.getAbsolutePath() + "\n\n" +
                                 "Create new file?",
                         "Create Class",
                         JOptionPane.OK_CANCEL_OPTION,
                         JOptionPane.QUESTION_MESSAGE
                 );
 
-                if (choice != JOptionPane.OK_OPTION) {
-                    return;
-                }
+                if (choice != JOptionPane.OK_OPTION) return;
 
                 file = createClassFile(packageName, className, classCode);
             } else {
@@ -215,38 +201,39 @@ public class PasteClassHandler {
                 .setContents(new StringSelection(text), null);
     }
 
-    // --- Package ---
+    // --- Parsing ---
     private String parsePackage(String code) {
         Matcher m = Pattern.compile("package\\s+([a-zA-Z0-9_.]+)\\s*;")
                 .matcher(code);
         return m.find() ? m.group(1) : null;
     }
 
-    // --- Class / Interface / Enum / Record ---
     private String parseClassName(String code) {
         Matcher m = TYPE_PATTERN.matcher(code);
         return m.find() ? m.group(2) : null;
     }
 
-    // --- Source root detection ---
+    // --- FIXED SOURCE ROOT DETECTION ---
     private File detectSourceRoot(String packageName) {
-        if (repo.getClassFileMap().isEmpty()) {
+        if (packageName == null || repo.getClassFileMap().isEmpty()) {
             return new File(System.getProperty("user.dir"));
         }
 
-        File refFile = repo.getClassFileMap().values().iterator().next();
-        String pkgPath = packageName != null
-                ? packageName.replace('.', File.separatorChar)
-                : "";
+        String pkgPath = packageName.replace('.', File.separatorChar);
 
-        File parent = refFile.getParentFile();
-        if (!pkgPath.isEmpty() && parent.getAbsolutePath().endsWith(pkgPath)) {
-            return new File(
-                    parent.getAbsolutePath()
-                            .substring(0, parent.getAbsolutePath().length() - pkgPath.length() - 1)
-            );
+        for (File file : repo.getClassFileMap().values()) {
+            File parent = file.getParentFile();
+            if (parent == null) continue;
+
+            String abs = parent.getAbsolutePath();
+            if (abs.endsWith(pkgPath)) {
+                return new File(
+                        abs.substring(0, abs.length() - pkgPath.length() - 1)
+                );
+            }
         }
-        return parent;
+
+        return new File(System.getProperty("user.dir"));
     }
 
     // --- File lookup ---
