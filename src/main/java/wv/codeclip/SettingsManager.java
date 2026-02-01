@@ -1,4 +1,3 @@
-// ===== SettingsManager.java =====
 package wv.codeclip;
 
 import java.awt.*;
@@ -7,7 +6,8 @@ import java.util.Properties;
 
 public class SettingsManager {
 
-    private final File propFile = new File(System.getProperty("user.home"), "codeclip.properties");
+    private final File propFile =
+            new File(System.getProperty("user.home"), "codeclip.properties");
     private final Properties props = new Properties();
 
     public SettingsManager() {
@@ -56,12 +56,7 @@ public class SettingsManager {
     }
 
     public void saveClassPaths(String[] paths) {
-        StringBuilder sb = new StringBuilder();
-        for (String path : paths) {
-            if (sb.length() > 0) sb.append("|");
-            sb.append(path);
-        }
-        props.setProperty("classes", sb.toString());
+        props.setProperty("classes", String.join("|", paths));
     }
 
     public String[] loadClassPaths() {

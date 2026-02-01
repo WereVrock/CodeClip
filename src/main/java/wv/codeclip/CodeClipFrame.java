@@ -1,17 +1,24 @@
-// ===== CodeClipFrame.java =====
 package wv.codeclip;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.FocusListener;
 import java.io.File;
 import java.nio.file.Files;
 import java.util.Map;
 
-public class CodeClipFrame extends JFrame {
+public class CodeClipFrame extends JFrame implements FocusListener {
 
     private final JTextArea classTextArea = new JTextArea(8, 50);
     private final JTextArea notesTextArea = new JTextArea();
-    private String tempLogs = ""; // temporary logs (not saved as notes)
+
+    // --- Source of truth ---
+    private String notesBuffer = "";
+    private String logBuffer   = "";
+
+    // Prevent programmatic UI updates from mutating notes
+    private boolean internalUpdate = false;
+
     private final JPanel classPanel = new JPanel();
 
     private final JCheckBox showMissingFileMessages =
@@ -24,13 +31,13 @@ public class CodeClipFrame extends JFrame {
 
     private final ClassRepository repo = new ClassRepository();
     private final ClassActions actions;
-
     private final SettingsManager settings = new SettingsManager();
 
     private static final Color ENABLED_COLOR  = new Color(240, 240, 240);
     private static final Color DISABLED_COLOR = new Color(210, 210, 210);
 
     public CodeClipFrame() {
+
         actions = new ClassActions(
                 this,
                 classTextArea,
@@ -41,10 +48,7 @@ public class CodeClipFrame extends JFrame {
 
         setTitle("Code Clip");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-
-        Rectangle bounds = settings.loadFrameBounds();
-        setBounds(bounds);
-
+        setBounds(settings.loadFrameBounds());
         setLayout(new BorderLayout());
 
         buildUI();
@@ -52,26 +56,31 @@ public class CodeClipFrame extends JFrame {
 
         setAlwaysOnTop(alwaysOnTopCheck.isSelected());
 
+        // Restore persisted state
+        notesBuffer = settings.loadNotes();
+        renderNotes();
+
         for (String path : settings.loadClassPaths()) {
             File f = new File(path);
             if (f.exists()) addClass(f);
         }
 
-        notesTextArea.setText(settings.loadNotes());
+        notesTextArea.addFocusListener(this);
 
-        notesTextArea.addFocusListener(new java.awt.event.FocusAdapter() {
-            @Override
-            public void focusGained(java.awt.event.FocusEvent e) {
-                clearTempLogs();
-            }
-        });
+        notesTextArea.getDocument().addDocumentListener(
+                new SimpleDocumentListener(() -> {
+                    if (!internalUpdate) {
+                        notesBuffer = notesTextArea.getText();
+                    }
+                })
+        );
 
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosing(java.awt.event.WindowEvent e) {
-                clearTempLogs(); // FIX: prevent saving temp logs
+                clearTempLogs();
                 settings.saveFrameBounds(getBounds());
-                settings.saveNotes(notesTextArea.getText());
+                settings.saveNotes(notesBuffer);
                 settings.saveClassPaths(
                         repo.getClassCodeMap().keySet().toArray(new String[0])
                 );
@@ -82,7 +91,25 @@ public class CodeClipFrame extends JFrame {
         setVisible(true);
     }
 
+    // ------------------------------------------------------------------
+    // FocusListener (REQUIRED + BEHAVIOR RESTORED)
+    // ------------------------------------------------------------------
+
+    public void focusGained(java.awt.event.FocusEvent e) {
+        clearTempLogs();
+    }
+
+    @Override
+    public void focusLost(java.awt.event.FocusEvent e) {
+        // no-op
+    }
+
+    // ------------------------------------------------------------------
+    // UI
+    // ------------------------------------------------------------------
+
     private void buildUI() {
+
         classTextArea.setEditable(false);
         classTextArea.setLineWrap(true);
 
@@ -101,17 +128,12 @@ public class CodeClipFrame extends JFrame {
 
         classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
         JScrollPane classScroll = new JScrollPane(classPanel);
-        classScroll.setHorizontalScrollBarPolicy(
-                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
-        );
 
-        JSplitPane splitPane =
+        JSplitPane split =
                 new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classScroll);
-        splitPane.setResizeWeight(0.7);
-        splitPane.setOneTouchExpandable(true);
-        splitPane.setContinuousLayout(true);
+        split.setResizeWeight(0.7);
 
-        add(splitPane, BorderLayout.CENTER);
+        add(split, BorderLayout.CENTER);
 
         JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
 
@@ -125,10 +147,7 @@ public class CodeClipFrame extends JFrame {
 
         reset.addActionListener(e -> actions.resetAll(classPanel));
         update.addActionListener(e -> actions.updateAll(this::refreshText));
-        copy.addActionListener(e -> {
-            clearTempLogs();
-            actions.copyAll();
-        });
+        copy.addActionListener(e -> actions.copyAll());
         copyCode.addActionListener(e -> actions.copyCodeOnly());
 
         alwaysOnTopCheck.addActionListener(e ->
@@ -169,6 +188,32 @@ public class CodeClipFrame extends JFrame {
         add(buttons, BorderLayout.SOUTH);
     }
 
+    // ------------------------------------------------------------------
+    // Logs & Notes (CORRECT, SAFE)
+    // ------------------------------------------------------------------
+
+    public void appendTempLog(String message) {
+        logBuffer += message + "\n";
+        renderNotes();
+    }
+
+    public void clearTempLogs() {
+        if (!logBuffer.isEmpty()) {
+            logBuffer = "";
+            renderNotes();
+        }
+    }
+
+    private void renderNotes() {
+        internalUpdate = true;
+        notesTextArea.setText(logBuffer + notesBuffer);
+        internalUpdate = false;
+    }
+
+    // ------------------------------------------------------------------
+    // Classes
+    // ------------------------------------------------------------------
+
     private void installDnD() {
         new FileDropHandler(this::addClass).install(this);
     }
@@ -196,14 +241,16 @@ public class CodeClipFrame extends JFrame {
         worker.execute();
     }
 
-    // ✅ RESTORED METHOD
+    // ------------------------------------------------------------------
+    // Required methods
+    // ------------------------------------------------------------------
+
     private void addClassPanel(String path, String name) {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         panel.setOpaque(true);
         panel.setBackground(ENABLED_COLOR);
 
         JLabel label = new JLabel(name);
-
         JButton toggle = new JButton("Disable");
         JButton copy = new JButton("Copy");
         JButton delete = new JButton("Delete");
@@ -240,10 +287,8 @@ public class CodeClipFrame extends JFrame {
             repo.getDisabledClasses().remove(path);
 
             classPanel.remove(panel);
-            classPanel.revalidate();
-            classPanel.repaint();
-
             refreshText();
+            refreshPanels();
         });
 
         panel.add(label);
@@ -256,33 +301,15 @@ public class CodeClipFrame extends JFrame {
         classPanel.repaint();
     }
 
-    // --- Temporary log helpers ---
-    public void appendTempLog(String message) {
-        tempLogs += message + "\n";
-        notesTextArea.setText(tempLogs + notesTextArea.getText());
-    }
-
-    private void clearTempLogs() {
-        if (!tempLogs.isEmpty()) {
-            String currentText = notesTextArea.getText();
-            if (currentText.startsWith(tempLogs)) {
-                notesTextArea.setText(
-                        currentText.substring(tempLogs.length())
-                );
-            }
-            tempLogs = "";
-        }
-    }
-
     private void refreshText() {
         StringBuilder sb = new StringBuilder();
         repo.getClassCodeMap().forEach((path, code) -> {
             if (!repo.getDisabledClasses().contains(path)) {
                 sb.append("// ===== ")
-                        .append(new File(path).getName())
-                        .append(" =====\n")
-                        .append(code)
-                        .append("\n\n");
+                  .append(new File(path).getName())
+                  .append(" =====\n")
+                  .append(code)
+                  .append("\n\n");
             }
         });
         classTextArea.setText(sb.toString());
@@ -290,37 +317,27 @@ public class CodeClipFrame extends JFrame {
     }
 
     private void refreshStats() {
-        long enabledCount =
+        long enabled =
                 repo.getClassCodeMap().size() - repo.getDisabledClasses().size();
-        int charCount = classTextArea.getText().length();
-        enabledCountLabel.setText("Enabled Classes: " + enabledCount);
-        charCountLabel.setText("Code Characters: " + charCount);
+        enabledCountLabel.setText("Enabled Classes: " + enabled);
+        charCountLabel.setText(
+                "Code Characters: " + classTextArea.getText().length()
+        );
     }
 
     private void refreshPanels() {
-        for (Component comp : classPanel.getComponents()) {
-            if (comp instanceof JPanel panel) {
-                JButton toggleButton = null;
-                for (Component c : panel.getComponents()) {
-                    if (c instanceof JButton b &&
-                        (b.getText().equals("Enable") ||
-                         b.getText().equals("Disable"))) {
-                        toggleButton = b;
-                        break;
-                    }
-                }
-                if (toggleButton != null) {
-                    String name = ((JLabel) panel.getComponent(0)).getText();
-                    for (Map.Entry<String, File> e : repo.getClassFileMap().entrySet()) {
-                        if (e.getValue().getName().equals(name)) {
-                            boolean disabled =
-                                    repo.getDisabledClasses().contains(e.getKey());
-                            toggleButton.setText(disabled ? "Enable" : "Disable");
-                            panel.setBackground(
-                                    disabled ? DISABLED_COLOR : ENABLED_COLOR
-                            );
-                            break;
-                        }
+        for (Component c : classPanel.getComponents()) {
+            if (c instanceof JPanel panel) {
+                JLabel label = (JLabel) panel.getComponent(0);
+                String name = label.getText();
+
+                for (Map.Entry<String, File> e : repo.getClassFileMap().entrySet()) {
+                    if (e.getValue().getName().equals(name)) {
+                        boolean disabled =
+                                repo.getDisabledClasses().contains(e.getKey());
+                        panel.setBackground(
+                                disabled ? DISABLED_COLOR : ENABLED_COLOR
+                        );
                     }
                 }
             }
