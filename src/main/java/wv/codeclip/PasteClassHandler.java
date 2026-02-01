@@ -107,24 +107,44 @@ public class PasteClassHandler {
                     MissingMethodDetector.findMissingMethods(oldCode, classCode);
 
             if (!missingMethods.isEmpty()) {
-                StringBuilder msg = new StringBuilder();
-                msg.append("Class: ").append(className).append("\n\n");
-                msg.append("The updated source is missing methods:\n\n");
+
+                StringBuilder errorText = new StringBuilder();
+                errorText.append("Error: The new code for class ")
+                         .append(className)
+                         .append(" has these methods missing:\n");
+
                 for (String m : missingMethods) {
-                    msg.append("• ").append(m).append("\n");
+                    errorText.append("• ").append(m).append("\n");
                 }
-                msg.append("\nOverwrite anyway?");
 
-                int choice = JOptionPane.showConfirmDialog(
-                        parent,
-                        msg.toString(),
-                        "Missing Methods Detected",
-                        JOptionPane.OK_CANCEL_OPTION,
-                        JOptionPane.WARNING_MESSAGE
-                );
+                while (true) {
+                    Object[] options = {
+                            "Overwrite",
+                            "Copy Error",
+                            "Cancel"
+                    };
 
-                if (choice != JOptionPane.OK_OPTION) {
-                    return;
+                    int choice = JOptionPane.showOptionDialog(
+                            parent,
+                            errorText.toString(),
+                            "Missing Methods Detected",
+                            JOptionPane.DEFAULT_OPTION,
+                            JOptionPane.WARNING_MESSAGE,
+                            null,
+                            options,
+                            options[0]
+                    );
+
+                    if (choice == 0) { // Overwrite
+                        break;
+                    }
+
+                    if (choice == 1) { // Copy Error
+                        copyToClipboard(errorText.toString());
+                        continue;
+                    }
+
+                    return; // Cancel / closed
                 }
             }
         }
@@ -187,6 +207,12 @@ public class PasteClassHandler {
             }
         } catch (Exception ignored) {}
         return null;
+    }
+
+    private void copyToClipboard(String text) {
+        Toolkit.getDefaultToolkit()
+                .getSystemClipboard()
+                .setContents(new StringSelection(text), null);
     }
 
     // --- Package ---
