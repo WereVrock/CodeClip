@@ -1,3 +1,4 @@
+// ===== PasteClassHandler.java =====
 package wv.codeclip;
 
 import javax.swing.*;
@@ -6,28 +7,48 @@ import java.awt.datatransfer.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class PasteClassHandler {
 
     private final ClassRepository repo;
     private final JFrame parent;
     private final Runnable refreshCallback;
-    private final java.util.function.Consumer<String> statusLogger; // temporary log callback
+    private final java.util.function.Consumer<String> statusLogger;
 
-    public PasteClassHandler(ClassRepository repo, JFrame parent, Runnable refreshCallback,
-                             java.util.function.Consumer<String> statusLogger) {
+    // Matches: class / interface / enum / record with any modifiers
+    private static final Pattern TYPE_PATTERN = Pattern.compile(
+            "(?:^|\\s)" +
+            "(?:public|protected|private|abstract|final|sealed|non-sealed|static|strictfp|\\s)*" +
+            "(class|interface|enum|record)\\s+" +
+            "([A-Za-z_][A-Za-z0-9_]*)",
+            Pattern.MULTILINE
+    );
+
+    public PasteClassHandler(
+            ClassRepository repo,
+            JFrame parent,
+            Runnable refreshCallback,
+            java.util.function.Consumer<String> statusLogger
+    ) {
         this.repo = repo;
         this.parent = parent;
         this.refreshCallback = refreshCallback;
         this.statusLogger = statusLogger;
     }
 
-    // --- Main entry point: reads clipboard and processes class ---
+    // --- Main entry point ---
     public void handlePasteFromClipboard() {
         String classCode = getClipboardText();
         if (classCode == null || classCode.isBlank()) {
-            JOptionPane.showMessageDialog(parent, "Clipboard is empty or does not contain text.",
-                    "Error", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(
+                    parent,
+                    "Clipboard is empty or does not contain text.",
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE
+            );
             return;
         }
         handlePaste(classCode);
@@ -39,63 +60,124 @@ public class PasteClassHandler {
         String className = parseClassName(classCode);
 
         if (className == null) {
-            JOptionPane.showMessageDialog(parent,
-                    "Could not find class declaration in the pasted code.",
-                    "Error",
-                    JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(
+                    parent,
+                    "Could not determine the class/interface/enum name from the pasted code.",
+                    "Invalid Source",
+                    JOptionPane.ERROR_MESSAGE
+            );
             return;
+        }
+
+        // --- Brace integrity check ---
+        if (!JavaBraceEndChecker.hasCompleteEnd(classCode)) {
+            int choice = JOptionPane.showConfirmDialog(
+                    parent,
+                    "Class: " + className + "\n\n" +
+                            "The pasted source appears to have incomplete or unbalanced braces.\n\n" +
+                            "Do you want to continue anyway?",
+                    "Brace Validation Failed",
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.WARNING_MESSAGE
+            );
+            if (choice != JOptionPane.OK_OPTION) {
+                return;
+            }
         }
 
         File file = findExistingFile(packageName, className);
         boolean isNewFile = file == null;
+        String oldCode = null;
+
+        if (!isNewFile) {
+            try {
+                oldCode = Files.readString(file.toPath());
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(
+                        parent,
+                        "Class: " + className + "\n\n" +
+                                "Failed to read existing file:\n" + e.getMessage(),
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE
+                );
+                return;
+            }
+
+            List<String> missingMethods =
+                    MissingMethodDetector.findMissingMethods(oldCode, classCode);
+
+            if (!missingMethods.isEmpty()) {
+                StringBuilder msg = new StringBuilder();
+                msg.append("Class: ").append(className).append("\n\n");
+                msg.append("The updated source is missing methods:\n\n");
+                for (String m : missingMethods) {
+                    msg.append("• ").append(m).append("\n");
+                }
+                msg.append("\nOverwrite anyway?");
+
+                int choice = JOptionPane.showConfirmDialog(
+                        parent,
+                        msg.toString(),
+                        "Missing Methods Detected",
+                        JOptionPane.OK_CANCEL_OPTION,
+                        JOptionPane.WARNING_MESSAGE
+                );
+
+                if (choice != JOptionPane.OK_OPTION) {
+                    return;
+                }
+            }
+        }
 
         try {
             if (isNewFile) {
-                // Ask for confirmation before creating
                 int choice = JOptionPane.showConfirmDialog(
                         parent,
-                        "Class file does not exist.\n" +
-                                "Class Name: " + className + "\n" +
-                                "Directory: " + detectSourceRoot(packageName).getAbsolutePath() + "\n\n" +
-                                "Create new class?",
+                        "Class: " + className + "\n\n" +
+                                "File does not exist.\n\n" +
+                                "Target Directory:\n" +
+                                detectSourceRoot(packageName).getAbsolutePath() + "\n\n" +
+                                "Create new file?",
                         "Create Class",
                         JOptionPane.OK_CANCEL_OPTION,
                         JOptionPane.QUESTION_MESSAGE
                 );
 
                 if (choice != JOptionPane.OK_OPTION) {
-                    return; // user cancelled
+                    return;
                 }
 
-                // Create new file automatically
                 file = createClassFile(packageName, className, classCode);
             } else {
-                // Overwrite existing file
                 Files.writeString(file.toPath(), classCode);
             }
 
-            // --- Automatically add/update in repo ---
             String path = file.getAbsolutePath();
             repo.getClassCodeMap().put(path, classCode);
             repo.getClassFileMap().put(path, file);
-            repo.getDisabledClasses().remove(path); // Ensure enabled by default
+            repo.getDisabledClasses().remove(path);
+
             refreshCallback.run();
 
-            // --- Log success to notes ---
             if (statusLogger != null) {
-                statusLogger.accept((isNewFile ? "Class Created: " : "Class Updated: ") +
-                        className + " (" + file.getAbsolutePath() + ")");
+                statusLogger.accept(
+                        (isNewFile ? "Class Created: " : "Class Updated: ")
+                                + className + " (" + path + ")"
+                );
             }
 
         } catch (IOException e) {
-            JOptionPane.showMessageDialog(parent,
-                    "Failed to create/update file: " + e.getMessage(),
+            JOptionPane.showMessageDialog(
+                    parent,
+                    "Class: " + className + "\n\n" +
+                            "Failed to create/update file:\n" + e.getMessage(),
                     "Error",
-                    JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.ERROR_MESSAGE
+            );
         }
     }
 
-    // --- Clipboard helper ---
+    // --- Clipboard ---
     private String getClipboardText() {
         try {
             Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
@@ -103,81 +185,66 @@ public class PasteClassHandler {
             if (t != null && t.isDataFlavorSupported(DataFlavor.stringFlavor)) {
                 return (String) t.getTransferData(DataFlavor.stringFlavor);
             }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        } catch (Exception ignored) {}
         return null;
     }
 
-    // --- Parse package from class code ---
+    // --- Package ---
     private String parsePackage(String code) {
-        code = code.replaceAll("\\s+", " "); // condense whitespace
-        int pkgIndex = code.indexOf("package ");
-        if (pkgIndex != -1) {
-            int semi = code.indexOf(";", pkgIndex);
-            if (semi != -1) {
-                return code.substring(pkgIndex + 8, semi).trim();
-            }
-        }
-        return null;
+        Matcher m = Pattern.compile("package\\s+([a-zA-Z0-9_.]+)\\s*;")
+                .matcher(code);
+        return m.find() ? m.group(1) : null;
     }
 
-    // --- Parse class name robustly ---
+    // --- Class / Interface / Enum / Record ---
     private String parseClassName(String code) {
-        code = code.replaceAll("\\s+", " "); // condense whitespace
-        String[] keywords = {"public class ", "class ", "public abstract class ", "abstract class "};
-        for (String kw : keywords) {
-            int idx = code.indexOf(kw);
-            if (idx != -1) {
-                int start = idx + kw.length();
-                int end = code.indexOf(" ", start);
-                int brace = code.indexOf("{", start);
-                int stop = (end != -1 && end < brace) ? end : brace;
-                if (stop > start) return code.substring(start, stop).trim();
-            }
-        }
-        return null;
+        Matcher m = TYPE_PATTERN.matcher(code);
+        return m.find() ? m.group(2) : null;
     }
 
-    // --- Detect source root based on already loaded classes ---
+    // --- Source root detection ---
     private File detectSourceRoot(String packageName) {
         if (repo.getClassFileMap().isEmpty()) {
-            return new File(System.getProperty("user.dir")); // fallback
+            return new File(System.getProperty("user.dir"));
         }
 
-        // Use first loaded class as reference
         File refFile = repo.getClassFileMap().values().iterator().next();
-        String packagePath = packageName != null ? packageName.replace('.', File.separatorChar) : "";
+        String pkgPath = packageName != null
+                ? packageName.replace('.', File.separatorChar)
+                : "";
 
-        File fileParent = refFile.getParentFile();
-        if (packagePath.length() > 0 && fileParent.getAbsolutePath().endsWith(packagePath)) {
-            // Strip package path from parent folder
-            String rootPath = fileParent.getAbsolutePath()
-                    .substring(0, fileParent.getAbsolutePath().length() - packagePath.length() - 1);
-            return new File(rootPath);
+        File parent = refFile.getParentFile();
+        if (!pkgPath.isEmpty() && parent.getAbsolutePath().endsWith(pkgPath)) {
+            return new File(
+                    parent.getAbsolutePath()
+                            .substring(0, parent.getAbsolutePath().length() - pkgPath.length() - 1)
+            );
         }
-
-        return fileParent; // fallback
+        return parent;
     }
 
-    // --- Find existing file based on package and class name ---
+    // --- File lookup ---
     private File findExistingFile(String packageName, String className) {
-        File sourceRoot = detectSourceRoot(packageName);
-        String path = packageName != null ? packageName.replace('.', File.separatorChar) : "";
-        File dir = new File(sourceRoot, path);
-        if (dir.exists() && dir.isDirectory()) {
-            File f = new File(dir, className + ".java");
-            if (f.exists()) return f;
-        }
-        return null;
+        File root = detectSourceRoot(packageName);
+        String path = packageName != null
+                ? packageName.replace('.', File.separatorChar)
+                : "";
+        File dir = new File(root, path);
+        File f = new File(dir, className + ".java");
+        return f.exists() ? f : null;
     }
 
-    // --- Create new file in detected source root ---
-    private File createClassFile(String packageName, String className, String code) throws IOException {
-        File sourceRoot = detectSourceRoot(packageName);
-        String path = packageName != null ? packageName.replace('.', File.separatorChar) : "";
-        File dir = new File(sourceRoot, path);
+    // --- File creation ---
+    private File createClassFile(String packageName, String className, String code)
+            throws IOException {
+
+        File root = detectSourceRoot(packageName);
+        String path = packageName != null
+                ? packageName.replace('.', File.separatorChar)
+                : "";
+        File dir = new File(root, path);
         if (!dir.exists()) dir.mkdirs();
+
         File file = new File(dir, className + ".java");
         Files.writeString(file.toPath(), code);
         return file;
