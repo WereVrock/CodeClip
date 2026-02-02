@@ -105,13 +105,14 @@ public class PasteClassHandler {
 
             if (!missingMethods.isEmpty()) {
                 StringBuilder errorText = new StringBuilder();
-                errorText.append("Error: The new code for class ")
+                errorText.append("Warning: The new code for class ")
                         .append(className)
                         .append(" has these methods missing:\n");
 
                 for (String m : missingMethods) {
                     errorText.append("• ").append(m).append("\n");
                 }
+                errorText.append("\n\nMake sure you are not missing functionality. \nDont keep them for the sake of compatibility");
 
                 while (true) {
                     Object[] options = {"Overwrite", "Copy Error", "Cancel"};
