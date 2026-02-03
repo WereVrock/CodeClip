@@ -1,4 +1,3 @@
-// ===== PasteClassHandler.java =====
 package wv.codeclip;
 
 import javax.swing.*;
@@ -7,6 +6,7 @@ import java.awt.datatransfer.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.*;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -24,6 +24,12 @@ public class PasteClassHandler {
             "(?:public|protected|private|abstract|final|sealed|non-sealed|static|strictfp|\\s)*" +
             "(class|interface|enum|record)\\s+" +
             "([A-Za-z_][A-Za-z0-9_]*)",
+            Pattern.MULTILINE
+    );
+
+    // Matches main method
+    private static final Pattern MAIN_METHOD_PATTERN = Pattern.compile(
+            "public\\s+static\\s+void\\s+main\\s*\\(\\s*String\\s*\\[\\]\\s*\\w+\\s*\\)",
             Pattern.MULTILINE
     );
 
@@ -112,7 +118,7 @@ public class PasteClassHandler {
                 for (String m : missingMethods) {
                     errorText.append("• ").append(m).append("\n");
                 }
-                errorText.append("\n\nMake sure you are not missing functionality. \nDont keep them for the sake of compatibility");
+                errorText.append("\n\nMake sure you are not missing functionality. \nDon't keep them for the sake of compatibility");
 
                 while (true) {
                     Object[] options = {"Overwrite", "Copy Error", "Cancel"};
@@ -139,7 +145,7 @@ public class PasteClassHandler {
 
         try {
             if (isNewFile) {
-                File root = detectSourceRoot(packageName);
+                File root = detectSourceRoot(packageName, className);
                 int choice = JOptionPane.showConfirmDialog(
                         parent,
                         "Class: " + className + "\n\n" +
@@ -154,7 +160,7 @@ public class PasteClassHandler {
 
                 if (choice != JOptionPane.OK_OPTION) return;
 
-                file = createClassFile(packageName, className, classCode);
+                file = createClassFile(packageName, className, classCode, root);
             } else {
                 Files.writeString(file.toPath(), classCode);
             }
@@ -214,48 +220,100 @@ public class PasteClassHandler {
         return m.find() ? m.group(2) : null;
     }
 
-    // --- FIXED SOURCE ROOT DETECTION ---
-    private File detectSourceRoot(String packageName) {
-        if (packageName == null || repo.getClassFileMap().isEmpty()) {
-            return new File(System.getProperty("user.dir"));
-        }
+    // --- Improved source root detection ---
+    private File detectSourceRoot(String packageName, String className) {
+        // Package logic
+        if (packageName != null && !packageName.isEmpty()) {
+            String pkgPath = packageName.replace('.', File.separatorChar);
+            for (File file : repo.getClassFileMap().values()) {
+                File parent = file.getParentFile();
+                if (parent == null) continue;
 
-        String pkgPath = packageName.replace('.', File.separatorChar);
-
-        for (File file : repo.getClassFileMap().values()) {
-            File parent = file.getParentFile();
-            if (parent == null) continue;
-
-            String abs = parent.getAbsolutePath();
-            if (abs.endsWith(pkgPath)) {
-                return new File(
-                        abs.substring(0, abs.length() - pkgPath.length() - 1)
-                );
+                String abs = parent.getAbsolutePath();
+                if (abs.endsWith(pkgPath)) {
+                    return new File(abs.substring(0, abs.length() - pkgPath.length() - 1));
+                }
             }
         }
 
-        return new File(System.getProperty("user.dir"));
+        // Unpackage classes: detect main
+        Map<String, File> mainClasses = new HashMap<>();
+        for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
+            try {
+                String code = Files.readString(entry.getValue().toPath());
+                Matcher m = MAIN_METHOD_PATTERN.matcher(code);
+                if (m.find()) {
+                    mainClasses.put(parseClassName(code), entry.getValue());
+                }
+            } catch (IOException ignored) {}
+        }
+
+        if (mainClasses.containsKey("Main")) {
+            return mainClasses.get("Main").getParentFile();
+        }
+
+        if (!mainClasses.isEmpty()) {
+            String[] options = mainClasses.keySet().toArray(new String[0]);
+            String choice = (String) JOptionPane.showInputDialog(
+                    parent,
+                    "Multiple classes with main method detected. Pick folder for new class:",
+                    "Select Main Class Folder",
+                    JOptionPane.QUESTION_MESSAGE,
+                    null,
+                    options,
+                    options[0]
+            );
+            if (choice != null && mainClasses.containsKey(choice)) {
+                return mainClasses.get(choice).getParentFile();
+            }
+        }
+
+        // Guess common ancestor
+        if (!repo.getClassFileMap().isEmpty()) {
+            List<File> parents = new ArrayList<>();
+            for (File f : repo.getClassFileMap().values()) {
+                parents.add(f.getParentFile());
+            }
+            File common = findCommonAncestor(parents);
+            if (common != null) return common;
+        }
+
+        // Fallback
+        return new File(System.getProperty("user.home"),
+                "Documents/NetBeansProjects/CodeClip/src/main/java");
+    }
+
+    private File findCommonAncestor(List<File> paths) {
+        if (paths.isEmpty()) return null;
+        File common = paths.get(0);
+        while (common != null) {
+            boolean allMatch = true;
+            for (File f : paths) {
+                if (!f.getAbsolutePath().startsWith(common.getAbsolutePath())) {
+                    allMatch = false;
+                    break;
+                }
+            }
+            if (allMatch) return common;
+            common = common.getParentFile();
+        }
+        return null;
     }
 
     // --- File lookup ---
     private File findExistingFile(String packageName, String className) {
-        File root = detectSourceRoot(packageName);
-        String path = packageName != null
-                ? packageName.replace('.', File.separatorChar)
-                : "";
+        File root = detectSourceRoot(packageName, className);
+        String path = packageName != null ? packageName.replace('.', File.separatorChar) : "";
         File dir = new File(root, path);
         File f = new File(dir, className + ".java");
         return f.exists() ? f : null;
     }
 
     // --- File creation ---
-    private File createClassFile(String packageName, String className, String code)
+    private File createClassFile(String packageName, String className, String code, File root)
             throws IOException {
 
-        File root = detectSourceRoot(packageName);
-        String path = packageName != null
-                ? packageName.replace('.', File.separatorChar)
-                : "";
+        String path = packageName != null ? packageName.replace('.', File.separatorChar) : "";
         File dir = new File(root, path);
         if (!dir.exists()) dir.mkdirs();
 
