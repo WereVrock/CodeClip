@@ -305,9 +305,10 @@ public class CodeClipFrame extends JFrame implements FocusListener {
         StringBuilder sb = new StringBuilder();
         repo.getClassCodeMap().forEach((path, code) -> {
             if (!repo.getDisabledClasses().contains(path)) {
-                sb.append("// ===== ")
-                  .append(new File(path).getName())
-                  .append(" =====\n")
+                sb
+//                        .append("// ===== ")
+//                  .append(new File(path).getName())
+//                  .append(" =====\n")
                   .append(code)
                   .append("\n\n");
             }
