@@ -1,13 +1,13 @@
 package wv.codeclip;
 
-import javax.swing.*;
 import java.awt.*;
-import java.awt.event.FocusListener;
+import java.awt.datatransfer.*;
 import java.io.File;
 import java.nio.file.Files;
 import java.util.Map;
+import javax.swing.*;
 
-public class CodeClipFrame extends JFrame implements FocusListener {
+public class CodeClipFrame extends JFrame implements java.awt.event.FocusListener {
 
     private final JTextArea classTextArea = new JTextArea(8, 50);
     private final JTextArea notesTextArea = new JTextArea();
@@ -27,9 +27,9 @@ public class CodeClipFrame extends JFrame implements FocusListener {
             new JCheckBox("Always on Top", true);
 
     private final JLabel enabledCountLabel = new JLabel("Enabled Classes: 0");
-    private final JLabel charCountLabel = new JLabel("Code Characters: 0");
+    private final JLabel charCountLabel    = new JLabel("Code Characters: 0");
 
-    private final ClassRepository repo = new ClassRepository();
+    private final ClassRepository repo    = new ClassRepository();
     private final ClassActions actions;
     private final SettingsManager settings = new SettingsManager();
 
@@ -56,7 +56,6 @@ public class CodeClipFrame extends JFrame implements FocusListener {
 
         setAlwaysOnTop(alwaysOnTopCheck.isSelected());
 
-        // Restore persisted state
         notesBuffer = settings.loadNotes();
         renderNotes();
 
@@ -92,9 +91,10 @@ public class CodeClipFrame extends JFrame implements FocusListener {
     }
 
     // ------------------------------------------------------------------
-    // FocusListener (REQUIRED + BEHAVIOR RESTORED)
+    // FocusListener
     // ------------------------------------------------------------------
 
+    @Override
     public void focusGained(java.awt.event.FocusEvent e) {
         clearTempLogs();
     }
@@ -137,17 +137,24 @@ public class CodeClipFrame extends JFrame implements FocusListener {
 
         JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
 
-        JButton reset = new JButton("Reset");
-        JButton update = new JButton("Update All");
-        JButton copy = new JButton("Copy All");
-        JButton copyCode = new JButton("Copy Code Only");
-        JButton enableAll = new JButton("Enable All");
+        JButton reset      = new JButton("Reset");
+        JButton update     = new JButton("Update All");
+        JButton copy       = new JButton("Copy All");
+        JButton copyCode   = new JButton("Copy Code Only");
+        JButton enableAll  = new JButton("Enable All");
         JButton disableAll = new JButton("Disable All");
         JButton pasteClass = new JButton("Paste Class");
 
         reset.addActionListener(e -> actions.resetAll(classPanel));
-        update.addActionListener(e -> actions.updateAll(this::refreshText));
-        copy.addActionListener(e -> actions.copyAll());
+
+        update.addActionListener(e ->
+                actions.updateAll(this::refreshText, this::removeClassPanel)
+        );
+
+        copy.addActionListener(e ->
+                actions.copyAll(this::clearTempLogs)
+        );
+
         copyCode.addActionListener(e -> actions.copyCodeOnly());
 
         alwaysOnTopCheck.addActionListener(e ->
@@ -170,9 +177,9 @@ public class CodeClipFrame extends JFrame implements FocusListener {
                     repo,
                     this,
                     this::refreshText,
-                    this::appendTempLog
+                    this::appendTempLog,
+                    this::addClassPanel
             ).handlePasteFromClipboard();
-            refreshPanels();
         });
 
         buttons.add(reset);
@@ -189,7 +196,7 @@ public class CodeClipFrame extends JFrame implements FocusListener {
     }
 
     // ------------------------------------------------------------------
-    // Logs & Notes (CORRECT, SAFE)
+    // Logs & Notes
     // ------------------------------------------------------------------
 
     public void appendTempLog(String message) {
@@ -242,17 +249,18 @@ public class CodeClipFrame extends JFrame implements FocusListener {
     }
 
     // ------------------------------------------------------------------
-    // Required methods
+    // Class panels
     // ------------------------------------------------------------------
 
-    private void addClassPanel(String path, String name) {
+    public void addClassPanel(String path, String name) {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         panel.setOpaque(true);
         panel.setBackground(ENABLED_COLOR);
+        panel.putClientProperty("path", path);
 
-        JLabel label = new JLabel(name);
+        JLabel label  = new JLabel(name);
         JButton toggle = new JButton("Disable");
-        JButton copy = new JButton("Copy");
+        JButton copy   = new JButton("Copy");
         JButton delete = new JButton("Delete");
 
         toggle.addActionListener(e -> {
@@ -270,14 +278,10 @@ public class CodeClipFrame extends JFrame implements FocusListener {
         copy.addActionListener(e -> {
             String code = repo.getClassCodeMap().get(path);
             if (code != null) {
-                String text =
-                        "// ===== " + name + " =====\n" + code + "\n";
+                String text = "// ===== " + name + " =====\n" + code + "\n";
                 Toolkit.getDefaultToolkit()
                         .getSystemClipboard()
-                        .setContents(
-                                new java.awt.datatransfer.StringSelection(text),
-                                null
-                        );
+                        .setContents(new StringSelection(text), null);
             }
         });
 
@@ -285,7 +289,6 @@ public class CodeClipFrame extends JFrame implements FocusListener {
             repo.getClassCodeMap().remove(path);
             repo.getClassFileMap().remove(path);
             repo.getDisabledClasses().remove(path);
-
             classPanel.remove(panel);
             refreshText();
             refreshPanels();
@@ -301,16 +304,33 @@ public class CodeClipFrame extends JFrame implements FocusListener {
         classPanel.repaint();
     }
 
+    /**
+     * Removes the UI panel whose stored path matches the given path.
+     * Called when a file is confirmed missing and removed from the repo.
+     */
+    private void removeClassPanel(String path) {
+        for (Component c : classPanel.getComponents()) {
+            if (c instanceof JPanel panel) {
+                Object storedPath = panel.getClientProperty("path");
+                if (path.equals(storedPath)) {
+                    classPanel.remove(panel);
+                    break;
+                }
+            }
+        }
+        classPanel.revalidate();
+        classPanel.repaint();
+    }
+
+    // ------------------------------------------------------------------
+    // Refresh
+    // ------------------------------------------------------------------
+
     private void refreshText() {
         StringBuilder sb = new StringBuilder();
         repo.getClassCodeMap().forEach((path, code) -> {
             if (!repo.getDisabledClasses().contains(path)) {
-                sb
-//                        .append("// ===== ")
-//                  .append(new File(path).getName())
-//                  .append(" =====\n")
-                  .append(code)
-                  .append("\n\n");
+                sb.append(code).append("\n\n");
             }
         });
         classTextArea.setText(sb.toString());
@@ -329,16 +349,16 @@ public class CodeClipFrame extends JFrame implements FocusListener {
     private void refreshPanels() {
         for (Component c : classPanel.getComponents()) {
             if (c instanceof JPanel panel) {
-                JLabel label = (JLabel) panel.getComponent(0);
-                String name = label.getText();
+                Object storedPath = panel.getClientProperty("path");
+                if (storedPath instanceof String path) {
+                    boolean disabled = repo.getDisabledClasses().contains(path);
+                    panel.setBackground(disabled ? DISABLED_COLOR : ENABLED_COLOR);
 
-                for (Map.Entry<String, File> e : repo.getClassFileMap().entrySet()) {
-                    if (e.getValue().getName().equals(name)) {
-                        boolean disabled =
-                                repo.getDisabledClasses().contains(e.getKey());
-                        panel.setBackground(
-                                disabled ? DISABLED_COLOR : ENABLED_COLOR
-                        );
+                    for (Component child : panel.getComponents()) {
+                        if (child instanceof JButton btn
+                                && (btn.getText().equals("Enable") || btn.getText().equals("Disable"))) {
+                            btn.setText(disabled ? "Enable" : "Disable");
+                        }
                     }
                 }
             }

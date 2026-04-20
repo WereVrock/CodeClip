@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 public class PasteClassHandler {
 
@@ -12,22 +13,28 @@ public class PasteClassHandler {
     private final JFrame parent;
     private final Runnable refreshCallback;
     private final java.util.function.Consumer<String> statusLogger;
+    private final BiConsumer<String, String> addPanelCallback;
 
     private final ClipboardService clipboard;
     private final JavaSourceParser parser;
     private final SourceRootDetector rootDetector;
     private final ClassFileWriter fileWriter;
 
+    private static final int CLASS_NAME_WRAP_LENGTH = 40;
+    private static final int PATH_WRAP_LENGTH = 60;
+
     public PasteClassHandler(
             ClassRepository repo,
             JFrame parent,
             Runnable refreshCallback,
-            java.util.function.Consumer<String> statusLogger
+            java.util.function.Consumer<String> statusLogger,
+            BiConsumer<String, String> addPanelCallback
     ) {
         this.repo = repo;
         this.parent = parent;
         this.refreshCallback = refreshCallback;
         this.statusLogger = statusLogger;
+        this.addPanelCallback = addPanelCallback;
 
         this.clipboard = new ClipboardService();
         this.parser = new JavaSourceParser();
@@ -68,7 +75,7 @@ public class PasteClassHandler {
         if (!JavaBraceEndChecker.hasCompleteEnd(classCode)) {
             int choice = JOptionPane.showConfirmDialog(
                     parent,
-                    "Class: " + className + "\n\n" +
+                    classLabel(className) +
                             "The pasted source appears to have incomplete or unbalanced braces.\n\n" +
                             "Do you want to continue anyway?",
                     "Brace Validation Failed",
@@ -99,6 +106,10 @@ public class PasteClassHandler {
             fileWriter.registerInRepo(file, classCode);
             refreshCallback.run();
 
+            if (isNewFile) {
+                addPanelCallback.accept(file.getAbsolutePath(), file.getName());
+            }
+
             if (statusLogger != null) {
                 statusLogger.accept(
                         (isNewFile ? "Class Created: " : "Class Updated: ")
@@ -109,7 +120,7 @@ public class PasteClassHandler {
         } catch (IOException e) {
             JOptionPane.showMessageDialog(
                     parent,
-                    "Class: " + className + "\n\n" +
+                    classLabel(className) +
                             "Failed to create/update file:\n" + e.getMessage(),
                     "Error",
                     JOptionPane.ERROR_MESSAGE
@@ -128,7 +139,7 @@ public class PasteClassHandler {
         } catch (IOException e) {
             JOptionPane.showMessageDialog(
                     parent,
-                    "Class: " + className + "\n\nFailed to read existing file:\n" + e.getMessage(),
+                    classLabel(className) + "Failed to read existing file:\n" + e.getMessage(),
                     "Error",
                     JOptionPane.ERROR_MESSAGE
             );
@@ -172,15 +183,43 @@ public class PasteClassHandler {
     private boolean confirmCreate(String className, File sourceRoot) {
         int choice = JOptionPane.showConfirmDialog(
                 parent,
-                "Class: " + className + "\n\n" +
+                classLabel(className) +
                         "File does not exist.\n\n" +
                         "Target Directory:\n" +
-                        sourceRoot.getAbsolutePath() + "\n\n" +
+                        wrapText(sourceRoot.getAbsolutePath(), PATH_WRAP_LENGTH) + "\n\n" +
                         "Create new file?",
                 "Create Class",
                 JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.QUESTION_MESSAGE
         );
         return choice == JOptionPane.OK_OPTION;
+    }
+
+    // --- Helpers ---
+
+    /**
+     * Returns a "Class: ..." header for dialogs. Wraps long class names onto their own line.
+     */
+    private String classLabel(String className) {
+        if (className.length() <= CLASS_NAME_WRAP_LENGTH) {
+            return "Class: " + className + "\n\n";
+        }
+        return "Class:\n" + className + "\n\n";
+    }
+
+    /**
+     * Inserts newlines into long strings at the given column width.
+     */
+    private String wrapText(String text, int width) {
+        if (text.length() <= width) return text;
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < text.length()) {
+            int end = Math.min(i + width, text.length());
+            sb.append(text, i, end);
+            if (end < text.length()) sb.append("\n");
+            i = end;
+        }
+        return sb.toString();
     }
 }

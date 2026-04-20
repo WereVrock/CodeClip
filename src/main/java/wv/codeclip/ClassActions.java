@@ -6,7 +6,10 @@ import java.awt.datatransfer.StringSelection;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public class ClassActions {
 
@@ -40,7 +43,7 @@ public class ClassActions {
         classPanel.repaint();
     }
 
-    public void copyAll() {
+    public void copyAll(Runnable clearLogsCallback) {
         String combined = classTextArea.getText()
                 + "\n\n// === Notes ===\n"
                 + notesTextArea.getText()
@@ -49,6 +52,8 @@ public class ClassActions {
         Toolkit.getDefaultToolkit()
                 .getSystemClipboard()
                 .setContents(new StringSelection(combined), null);
+
+        clearLogsCallback.run();
     }
 
     public void copyCodeOnly() {
@@ -57,32 +62,67 @@ public class ClassActions {
                 .setContents(new StringSelection(classTextArea.getText()), null);
     }
 
-    public void updateAll(Runnable refreshCallback) {
-        SwingWorker<Void, Void> worker = new SwingWorker<>() {
+    /**
+     * Re-reads all tracked files from disk.
+     * For files that no longer exist, prompts the user to remove them from the program.
+     * The removePanelCallback receives the path of any class removed from the repo.
+     */
+    public void updateAll(Runnable refreshCallback, Consumer<String> removePanelCallback) {
+        SwingWorker<List<String>, Void> worker = new SwingWorker<>() {
+
             @Override
-            protected Void doInBackground() {
-                for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
+            protected List<String> doInBackground() {
+                List<String> missingPaths = new ArrayList<>();
+
+                for (Map.Entry<String, File> entry : new ArrayList<>(repo.getClassFileMap().entrySet())) {
+                    String path = entry.getKey();
+                    File file = entry.getValue();
                     try {
-                        String updated = Files.readString(entry.getValue().toPath());
-                        repo.getClassCodeMap().put(entry.getKey(), updated);
+                        String updated = Files.readString(file.toPath());
+                        repo.getClassCodeMap().put(path, updated);
                     } catch (IOException ex) {
-                        if (showMissingFileMessages.isSelected()) {
-                            SwingUtilities.invokeLater(() ->
-                                    JOptionPane.showMessageDialog(
-                                            parent,
-                                            "File missing: " + entry.getValue().getAbsolutePath(),
-                                            "Update Warning",
-                                            JOptionPane.WARNING_MESSAGE
-                                    ));
-                        }
+                        missingPaths.add(path);
                     }
                 }
-                return null;
+
+                return missingPaths;
             }
 
             @Override
             protected void done() {
-                refreshCallback.run();
+                try {
+                    List<String> missingPaths = get();
+
+                    for (String path : missingPaths) {
+                        File file = repo.getClassFileMap().get(path);
+                        String fileName = (file != null) ? file.getName() : path;
+
+                        if (showMissingFileMessages.isSelected()) {
+                            Object[] options = {"Remove from Program", "Keep", "Cancel"};
+                            int choice = JOptionPane.showOptionDialog(
+                                    parent,
+                                    "File not found on disk:\n" + path + "\n\n" +
+                                            "Do you want to remove " + fileName + " from the program?",
+                                    "Missing File",
+                                    JOptionPane.DEFAULT_OPTION,
+                                    JOptionPane.WARNING_MESSAGE,
+                                    null,
+                                    options,
+                                    options[1]
+                            );
+
+                            if (choice == 0) {
+                                repo.getClassCodeMap().remove(path);
+                                repo.getClassFileMap().remove(path);
+                                repo.getDisabledClasses().remove(path);
+                                removePanelCallback.accept(path);
+                            }
+                        }
+                    }
+
+                    refreshCallback.run();
+
+                } catch (Exception ignored) {}
             }
         };
         worker.execute();
