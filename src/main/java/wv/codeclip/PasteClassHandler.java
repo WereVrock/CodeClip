@@ -21,7 +21,6 @@ public class PasteClassHandler {
     private final ClassFileWriter fileWriter;
 
     private static final int CLASS_NAME_WRAP_LENGTH = 40;
-    private static final int PATH_WRAP_LENGTH = 60;
 
     public PasteClassHandler(
             ClassRepository repo,
@@ -42,7 +41,6 @@ public class PasteClassHandler {
         this.fileWriter = new ClassFileWriter(repo);
     }
 
-    // --- Main entry point ---
     public void handlePasteFromClipboard() {
         String classCode = clipboard.read();
         if (classCode == null || classCode.isBlank()) {
@@ -57,7 +55,6 @@ public class PasteClassHandler {
         handlePaste(classCode);
     }
 
-    // --- Core paste handler ---
     private void handlePaste(String classCode) {
         String packageName = parser.parsePackage(classCode);
         String className = parser.parseClassName(classCode);
@@ -128,10 +125,6 @@ public class PasteClassHandler {
         }
     }
 
-    /**
-     * Checks for missing methods vs the existing file, shows warning dialog.
-     * Returns true if the user wants to proceed with overwrite.
-     */
     private boolean confirmOverwrite(String className, File existingFile, String newCode) {
         String oldCode;
         try {
@@ -181,13 +174,23 @@ public class PasteClassHandler {
     }
 
     private boolean confirmCreate(String className, File sourceRoot) {
+        String path = sourceRoot.getAbsolutePath();
+
+        // Use HTML so the path wraps properly inside the dialog
+        JLabel message = new JLabel(
+                "<html>" +
+                "<b>Class:</b> " + escapeHtml(className) + "<br><br>" +
+                "File does not exist.<br><br>" +
+                "<b>Target Directory:</b><br>" +
+                "<tt>" + escapeHtml(path) + "</tt><br><br>" +
+                "Create new file?" +
+                "</html>"
+        );
+        message.setPreferredSize(new java.awt.Dimension(420, message.getPreferredSize().height));
+
         int choice = JOptionPane.showConfirmDialog(
                 parent,
-                classLabel(className) +
-                        "File does not exist.\n\n" +
-                        "Target Directory:\n" +
-                        wrapText(sourceRoot.getAbsolutePath(), PATH_WRAP_LENGTH) + "\n\n" +
-                        "Create new file?",
+                message,
                 "Create Class",
                 JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.QUESTION_MESSAGE
@@ -195,11 +198,6 @@ public class PasteClassHandler {
         return choice == JOptionPane.OK_OPTION;
     }
 
-    // --- Helpers ---
-
-    /**
-     * Returns a "Class: ..." header for dialogs. Wraps long class names onto their own line.
-     */
     private String classLabel(String className) {
         if (className.length() <= CLASS_NAME_WRAP_LENGTH) {
             return "Class: " + className + "\n\n";
@@ -207,19 +205,9 @@ public class PasteClassHandler {
         return "Class:\n" + className + "\n\n";
     }
 
-    /**
-     * Inserts newlines into long strings at the given column width.
-     */
-    private String wrapText(String text, int width) {
-        if (text.length() <= width) return text;
-        StringBuilder sb = new StringBuilder();
-        int i = 0;
-        while (i < text.length()) {
-            int end = Math.min(i + width, text.length());
-            sb.append(text, i, end);
-            if (end < text.length()) sb.append("\n");
-            i = end;
-        }
-        return sb.toString();
+    private static String escapeHtml(String text) {
+        return text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;");
     }
 }

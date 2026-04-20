@@ -1,22 +1,25 @@
 package wv.codeclip;
 
+import javax.swing.*;
+import javax.swing.text.*;
 import java.awt.*;
-import java.awt.datatransfer.*;
+import java.awt.datatransfer.StringSelection;
 import java.io.File;
 import java.nio.file.Files;
 import java.util.Map;
-import javax.swing.*;
 
 public class CodeClipFrame extends JFrame implements java.awt.event.FocusListener {
 
     private final JTextArea classTextArea = new JTextArea(8, 50);
-    private final JTextArea notesTextArea = new JTextArea();
 
-    // --- Source of truth ---
+    // Replaces JTextArea — supports colored segments
+    private final JTextPane notesTextPane = new JTextPane();
+
+    // Source of truth
     private String notesBuffer = "";
     private String logBuffer   = "";
 
-    // Prevent programmatic UI updates from mutating notes
+    // Prevent programmatic UI updates from triggering the notes document listener
     private boolean internalUpdate = false;
 
     private final JPanel classPanel = new JPanel();
@@ -36,12 +39,15 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private static final Color ENABLED_COLOR  = new Color(240, 240, 240);
     private static final Color DISABLED_COLOR = new Color(210, 210, 210);
 
+    // Color used to highlight class names in temp log lines
+    private static final Color LOG_CLASS_COLOR = new Color(30, 120, 220);
+
     public CodeClipFrame() {
 
         actions = new ClassActions(
                 this,
                 classTextArea,
-                notesTextArea,
+                notesTextPane,
                 showMissingFileMessages,
                 repo
         );
@@ -64,12 +70,13 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             if (f.exists()) addClass(f);
         }
 
-        notesTextArea.addFocusListener(this);
+        notesTextPane.addFocusListener(this);
 
-        notesTextArea.getDocument().addDocumentListener(
+        notesTextPane.getDocument().addDocumentListener(
                 new SimpleDocumentListener(() -> {
                     if (!internalUpdate) {
-                        notesBuffer = notesTextArea.getText();
+                        // Extract only the notes portion (after any log prefix)
+                        notesBuffer = extractNotesFromPane();
                     }
                 })
         );
@@ -100,9 +107,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     }
 
     @Override
-    public void focusLost(java.awt.event.FocusEvent e) {
-        // no-op
-    }
+    public void focusLost(java.awt.event.FocusEvent e) {}
 
     // ------------------------------------------------------------------
     // UI
@@ -123,8 +128,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
         add(codePanel, BorderLayout.NORTH);
 
-        notesTextArea.setLineWrap(true);
-        JScrollPane notesScroll = new JScrollPane(notesTextArea);
+        notesTextPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        JScrollPane notesScroll = new JScrollPane(notesTextPane);
 
         classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
         JScrollPane classScroll = new JScrollPane(classPanel);
@@ -199,8 +204,12 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     // Logs & Notes
     // ------------------------------------------------------------------
 
+    /**
+     * Prepends a new log line so latest messages appear at the top.
+     * Format expected: "Class Created: ClassName (path)" or "Class Updated: ClassName (path)"
+     */
     public void appendTempLog(String message) {
-        logBuffer += message + "\n";
+        logBuffer = message + "\n" + logBuffer;
         renderNotes();
     }
 
@@ -211,10 +220,98 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         }
     }
 
+    /**
+     * Rebuilds the JTextPane content:
+     *   - Log lines at the top, with class name colored
+     *   - Plain notes text below
+     */
     private void renderNotes() {
         internalUpdate = true;
-        notesTextArea.setText(logBuffer + notesBuffer);
-        internalUpdate = false;
+        try {
+            StyledDocument doc = notesTextPane.getStyledDocument();
+            doc.remove(0, doc.getLength());
+
+            // --- Styles ---
+            Style base = notesTextPane.addStyle("base", null);
+            StyleConstants.setFontFamily(base, Font.MONOSPACED);
+            StyleConstants.setFontSize(base, 12);
+            StyleConstants.setForeground(base, UIManager.getColor("TextArea.foreground") != null
+                    ? UIManager.getColor("TextArea.foreground") : Color.BLACK);
+
+            Style highlight = notesTextPane.addStyle("highlight", base);
+            StyleConstants.setBold(highlight, true);
+            StyleConstants.setForeground(highlight, LOG_CLASS_COLOR);
+
+            // --- Log lines ---
+            if (!logBuffer.isEmpty()) {
+                for (String line : logBuffer.split("\n", -1)) {
+                    if (line.isEmpty()) continue;
+                    appendLogLine(doc, line, base, highlight);
+                    doc.insertString(doc.getLength(), "\n", base);
+                }
+            }
+
+            // --- Notes ---
+            doc.insertString(doc.getLength(), notesBuffer, base);
+
+        } catch (BadLocationException ignored) {
+        } finally {
+            internalUpdate = false;
+        }
+    }
+
+    /**
+     * Parses a log line like "Class Created: Foo (path)" and inserts it
+     * with the class name (Foo) rendered in the highlight style.
+     *
+     * Pattern: "<prefix>: <ClassName> (<rest>)"
+     */
+    private void appendLogLine(StyledDocument doc, String line,
+                                Style base, Style highlight)
+            throws BadLocationException {
+
+        // Try to split on ": " to find prefix vs remainder
+        int colonSpace = line.indexOf(": ");
+        if (colonSpace < 0) {
+            doc.insertString(doc.getLength(), line, base);
+            return;
+        }
+
+        String prefix = line.substring(0, colonSpace + 2); // e.g. "Class Created: "
+        String rest   = line.substring(colonSpace + 2);    // e.g. "Foo (path)"
+
+        // Class name is everything before the first " ("
+        int parenIdx = rest.indexOf(" (");
+        if (parenIdx < 0) {
+            doc.insertString(doc.getLength(), prefix, base);
+            doc.insertString(doc.getLength(), rest, highlight);
+            return;
+        }
+
+        String className = rest.substring(0, parenIdx);      // e.g. "Foo"
+        String pathPart  = rest.substring(parenIdx);          // e.g. " (path)"
+
+        doc.insertString(doc.getLength(), prefix, base);
+        doc.insertString(doc.getLength(), className, highlight);
+        doc.insertString(doc.getLength(), pathPart, base);
+    }
+
+    /**
+     * When the user edits the pane directly, extracts only the notes portion.
+     * Log lines occupy the top of the document; notes start after them.
+     */
+    private String extractNotesFromPane() {
+        try {
+            String full = notesTextPane.getDocument()
+                    .getText(0, notesTextPane.getDocument().getLength());
+            int logLen = logBuffer.length();
+            if (full.length() >= logLen) {
+                return full.substring(logLen);
+            }
+            return full;
+        } catch (BadLocationException e) {
+            return notesBuffer;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -258,7 +355,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         panel.setBackground(ENABLED_COLOR);
         panel.putClientProperty("path", path);
 
-        JLabel label  = new JLabel(name);
+        JLabel label   = new JLabel(name);
         JButton toggle = new JButton("Disable");
         JButton copy   = new JButton("Copy");
         JButton delete = new JButton("Delete");
@@ -304,10 +401,6 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         classPanel.repaint();
     }
 
-    /**
-     * Removes the UI panel whose stored path matches the given path.
-     * Called when a file is confirmed missing and removed from the repo.
-     */
     private void removeClassPanel(String path) {
         for (Component c : classPanel.getComponents()) {
             if (c instanceof JPanel panel) {

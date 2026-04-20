@@ -1,6 +1,7 @@
 package wv.codeclip;
 
 import javax.swing.*;
+import javax.swing.text.JTextComponent;
 import java.awt.*;
 import java.awt.datatransfer.StringSelection;
 import java.io.File;
@@ -17,20 +18,20 @@ public class ClassActions {
 
     private final JFrame parent;
     private final JTextArea classTextArea;
-    private final JTextArea notesTextArea;
+    private final JTextComponent notesComponent;   // accepts JTextPane or JTextArea
     private final JCheckBox showMissingFileMessages;
     private final ClassRepository repo;
 
     public ClassActions(
             JFrame parent,
             JTextArea classTextArea,
-            JTextArea notesTextArea,
+            JTextComponent notesComponent,
             JCheckBox showMissingFileMessages,
             ClassRepository repo
     ) {
         this.parent = parent;
         this.classTextArea = classTextArea;
-        this.notesTextArea = notesTextArea;
+        this.notesComponent = notesComponent;
         this.showMissingFileMessages = showMissingFileMessages;
         this.repo = repo;
     }
@@ -46,7 +47,7 @@ public class ClassActions {
     public void copyAll(Runnable clearLogsCallback) {
         String combined = classTextArea.getText()
                 + "\n\n// === Notes ===\n"
-                + notesTextArea.getText()
+                + notesComponent.getText()
                 + NOTES_END_MARK;
 
         Toolkit.getDefaultToolkit()
@@ -62,11 +63,6 @@ public class ClassActions {
                 .setContents(new StringSelection(classTextArea.getText()), null);
     }
 
-    /**
-     * Re-reads all tracked files from disk.
-     * For files that no longer exist, prompts the user to remove them from the program.
-     * The removePanelCallback receives the path of any class removed from the repo.
-     */
     public void updateAll(Runnable refreshCallback, Consumer<String> removePanelCallback) {
         SwingWorker<List<String>, Void> worker = new SwingWorker<>() {
 
