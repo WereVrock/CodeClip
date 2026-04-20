@@ -63,4 +63,15 @@ public class SettingsManager {
         String files = props.getProperty("classes", "");
         return files.isEmpty() ? new String[0] : files.split("\\|");
     }
+    public static void main(String[] args) {
+    SettingsManager settings = new SettingsManager();
+
+    // reset to default position and size
+    Rectangle defaultBounds = new Rectangle(100, 100, 475, 300);
+
+    settings.saveFrameBounds(defaultBounds);
+    settings.saveProperties();
+
+    System.out.println("Frame position reset to default.");
+}
 }
