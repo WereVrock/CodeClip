@@ -93,7 +93,7 @@ public class PasteClassHandler {
         try {
             File file;
             if (isNewFile) {
-                if (!confirmCreate(className, sourceRoot)) return;
+                if (!confirmCreate(className,packageName, sourceRoot)) return;
                 file = fileWriter.createFile(packageName, className, classCode, sourceRoot);
             } else {
                 fileWriter.updateFile(existingFile, classCode);
@@ -173,30 +173,44 @@ public class PasteClassHandler {
         }
     }
 
-    private boolean confirmCreate(String className, File sourceRoot) {
-        String path = sourceRoot.getAbsolutePath();
+ private boolean confirmCreate(String className, String packageName, File sourceRoot) {
+    String pkgPath = (packageName != null && !packageName.isEmpty())
+            ? packageName.replace('.', File.separatorChar)
+            : "";
+    File targetDir = new File(sourceRoot, pkgPath);
+    String path = targetDir.getAbsolutePath();
 
-        // Use HTML so the path wraps properly inside the dialog
-        JLabel message = new JLabel(
-                "<html>" +
-                "<b>Class:</b> " + escapeHtml(className) + "<br><br>" +
-                "File does not exist.<br><br>" +
-                "<b>Target Directory:</b><br>" +
-                "<tt>" + escapeHtml(path) + "</tt><br><br>" +
-                "Create new file?" +
-                "</html>"
-        );
-        message.setPreferredSize(new java.awt.Dimension(420, message.getPreferredSize().height));
+    JLabel message = new JLabel(
+            "<html>" +
+            "<b>Class:</b> " + escapeHtml(className) + "<br><br>" +
+            "File does not exist.<br><br>" +
+            "<b>Target Directory:</b><br>" +
+            "<tt>" + wrapPath(escapeHtml(path), 50) + "</tt><br><br>" +
+            "Create new file?" +
+            "</html>"
+    );
 
-        int choice = JOptionPane.showConfirmDialog(
-                parent,
-                message,
-                "Create Class",
-                JOptionPane.OK_CANCEL_OPTION,
-                JOptionPane.QUESTION_MESSAGE
-        );
-        return choice == JOptionPane.OK_OPTION;
+    int choice = JOptionPane.showConfirmDialog(
+            parent,
+            message,
+            "Create Class",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.QUESTION_MESSAGE
+    );
+    return choice == JOptionPane.OK_OPTION;
+}
+
+private static String wrapPath(String path, int lineWidth) {
+    StringBuilder sb = new StringBuilder();
+    int start = 0;
+    while (start < path.length()) {
+        int end = Math.min(start + lineWidth, path.length());
+        sb.append(path, start, end);
+        if (end < path.length()) sb.append("<br>");
+        start = end;
     }
+    return sb.toString();
+}
 
     private String classLabel(String className) {
         if (className.length() <= CLASS_NAME_WRAP_LENGTH) {
