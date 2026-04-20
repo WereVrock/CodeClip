@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.function.BiConsumer;
+import java.util.regex.Pattern;
 
 public class PasteClassHandler {
 
@@ -200,15 +201,21 @@ public class PasteClassHandler {
     return choice == JOptionPane.OK_OPTION;
 }
 
-private static String wrapPath(String path, int lineWidth) {
+private static String wrapPath(String path, int maxLineWidth) {
+    String separator = File.separator.equals("\\") ? "\\" : "/";
+    String[] parts = path.split(Pattern.quote(File.separator));
     StringBuilder sb = new StringBuilder();
-    int start = 0;
-    while (start < path.length()) {
-        int end = Math.min(start + lineWidth, path.length());
-        sb.append(path, start, end);
-        if (end < path.length()) sb.append("<br>");
-        start = end;
+    StringBuilder line = new StringBuilder();
+
+    for (int i = 0; i < parts.length; i++) {
+        String segment = parts[i] + (i < parts.length - 1 ? separator : "");
+        if (line.length() + segment.length() > maxLineWidth && line.length() > 0) {
+            sb.append(line).append("<br>");
+            line = new StringBuilder();
+        }
+        line.append(segment);
     }
+    sb.append(line);
     return sb.toString();
 }
 
