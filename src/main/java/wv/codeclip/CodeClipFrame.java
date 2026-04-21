@@ -172,6 +172,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         JButton disableAll       = new JButton("Disable All");
         JButton pasteClass       = new JButton("Paste Class");
         JButton copyInstructions = new JButton("Copy Instructions");
+        JButton copyArch         = new JButton("Copy Architecture");
         JButton sortOrder        = new JButton(SORT_LABELS[sortMode]);
 
         reset.addActionListener(e -> actions.resetAll(classPanel));
@@ -215,6 +216,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 new ClipboardService().write(AiInstructions.TEXT)
         );
 
+        copyArch.addActionListener(e -> actions.copyArchitecture());
+
         sortOrder.addActionListener(e -> {
             sortMode = (sortMode + 1) % SORT_LABELS.length;
             sortOrder.setText(SORT_LABELS[sortMode]);
@@ -233,6 +236,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         buttons.add(alwaysOnTopCheck);
         buttons.add(includeInstructionsCheck);
         buttons.add(sortOrder);
+        buttons.add(copyArch);
 
         add(buttons, BorderLayout.SOUTH);
     }

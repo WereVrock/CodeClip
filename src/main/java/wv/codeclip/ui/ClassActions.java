@@ -81,6 +81,13 @@ public class ClassActions {
                 .setContents(new StringSelection(classTextArea.getText()), null);
     }
 
+    public void copyArchitecture() {
+        String tree = new ArchitectureBuilder(repo).build();
+        Toolkit.getDefaultToolkit()
+                .getSystemClipboard()
+                .setContents(new StringSelection(tree), null);
+    }
+
     public void updateAll(Runnable refreshCallback, Consumer<String> removePanelCallback) {
         SwingWorker<List<String>, Void> worker = new SwingWorker<>() {
 
