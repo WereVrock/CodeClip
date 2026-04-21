@@ -1,7 +1,8 @@
-package wv.codeclip;
+package wv.codeclip.patch;
 
 import javax.swing.*;
 import java.awt.*;
+import wv.codeclip.io.ClipboardService;
 
 /**
  * Modal dialog shown when a patch fails.

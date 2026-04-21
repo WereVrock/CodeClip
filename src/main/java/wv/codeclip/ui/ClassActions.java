@@ -1,5 +1,6 @@
-package wv.codeclip;
+package wv.codeclip.ui;
 
+import wv.codeclip.model.ClassRepository;
 import javax.swing.*;
 import javax.swing.text.JTextComponent;
 import java.awt.*;
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import wv.codeclip.config.AiInstructions;
 
 public class ClassActions {
 

@@ -1,5 +1,6 @@
-package wv.codeclip;
+package wv.codeclip.patch;
 
+import wv.codeclip.model.PatchChange;
 import java.util.ArrayList;
 import java.util.List;
 

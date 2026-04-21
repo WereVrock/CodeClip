@@ -1,5 +1,9 @@
 package wv.codeclip;
 
+import wv.codeclip.io.SettingsManager;
+import wv.codeclip.io.ClipboardService;
+import wv.codeclip.io.FileDropHandler;
+import wv.codeclip.model.ClassRepository;
 import javax.swing.*;
 import javax.swing.text.*;
 import java.awt.*;
@@ -8,6 +12,10 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import wv.codeclip.config.AiInstructions;
+import wv.codeclip.ui.PasteClassHandler;
+import wv.codeclip.ui.ClassActions;
+import wv.codeclip.ui.SimpleDocumentListener;
 
 public class CodeClipFrame extends JFrame implements java.awt.event.FocusListener {
 

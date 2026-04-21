@@ -1,4 +1,4 @@
-package wv.codeclip;
+package wv.codeclip.ui;
 
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;

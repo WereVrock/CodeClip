@@ -1,4 +1,4 @@
-package wv.codeclip;
+package wv.codeclip.config;
 
 public final class AiInstructions {
 

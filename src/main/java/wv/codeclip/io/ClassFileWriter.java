@@ -1,5 +1,6 @@
-package wv.codeclip;
+package wv.codeclip.io;
 
+import wv.codeclip.model.ClassRepository;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;

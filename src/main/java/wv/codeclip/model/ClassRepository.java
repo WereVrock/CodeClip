@@ -1,5 +1,5 @@
 // ===== ClassRepository.java =====
-package wv.codeclip;
+package wv.codeclip.model;
 
 import java.io.File;
 import java.util.*;

@@ -1,4 +1,4 @@
-package wv.codeclip;
+package wv.codeclip.model;
 
 /**
  * Thrown when a patch cannot be applied cleanly.

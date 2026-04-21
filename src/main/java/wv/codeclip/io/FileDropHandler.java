@@ -1,4 +1,4 @@
-package wv.codeclip;
+package wv.codeclip.io;
 
 import java.awt.Component;
 import java.awt.Container;

@@ -1,5 +1,8 @@
-package wv.codeclip;
+package wv.codeclip.patch;
 
+import wv.codeclip.model.PatchException;
+import wv.codeclip.model.PatchChange;
+import wv.codeclip.model.ClassRepository;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;

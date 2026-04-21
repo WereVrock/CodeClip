@@ -1,4 +1,4 @@
-package wv.codeclip;
+package wv.codeclip.parse;
 
 public final class JavaBraceEndChecker {
 

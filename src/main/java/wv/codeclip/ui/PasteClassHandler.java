@@ -1,5 +1,17 @@
-package wv.codeclip;
+package wv.codeclip.ui;
 
+import wv.codeclip.parse.JavaSourceParser;
+import wv.codeclip.parse.JavaBraceEndChecker;
+import wv.codeclip.parse.MissingMethodDetector;
+import wv.codeclip.parse.SourceRootDetector;
+import wv.codeclip.io.ClipboardService;
+import wv.codeclip.io.ClassFileWriter;
+import wv.codeclip.patch.PatchErrorDialog;
+import wv.codeclip.patch.PatchApplier;
+import wv.codeclip.patch.PatchParser;
+import wv.codeclip.model.PatchException;
+import wv.codeclip.model.PatchChange;
+import wv.codeclip.model.ClassRepository;
 import javax.swing.*;
 import java.io.File;
 import java.io.IOException;

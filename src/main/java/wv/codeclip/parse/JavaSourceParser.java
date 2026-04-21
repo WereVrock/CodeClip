@@ -1,4 +1,4 @@
-package wv.codeclip;
+package wv.codeclip.parse;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;

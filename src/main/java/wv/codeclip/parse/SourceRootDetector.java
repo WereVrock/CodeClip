@@ -1,5 +1,6 @@
-package wv.codeclip;
+package wv.codeclip.parse;
 
+import wv.codeclip.model.ClassRepository;
 import javax.swing.*;
 import java.io.File;
 import java.io.IOException;

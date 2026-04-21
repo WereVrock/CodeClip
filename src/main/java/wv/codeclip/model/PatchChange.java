@@ -1,4 +1,4 @@
-package wv.codeclip;
+package wv.codeclip.model;
 
 /**
  * Represents a single change instruction parsed from a @@PATCH block.
