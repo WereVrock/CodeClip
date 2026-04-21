@@ -263,16 +263,26 @@ public class PasteClassHandler {
     // ------------------------------------------------------------------
 
     private boolean looksLikeJavaSource(String text) {
-        String trimmed = text.stripLeading();
-        return trimmed.startsWith("package ")
-            || trimmed.startsWith("import ")
-            || trimmed.startsWith("public class")
-            || trimmed.startsWith("public interface")
-            || trimmed.startsWith("public enum")
-            || trimmed.startsWith("public record")
-            || trimmed.startsWith("class ")
-            || trimmed.startsWith("interface ")
-            || trimmed.startsWith("enum ");
+        // Skip leading comments and blank lines before checking
+        for (String line : text.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()
+                    || trimmed.startsWith("//")
+                    || trimmed.startsWith("*")
+                    || trimmed.startsWith("/*")) {
+                continue;
+            }
+            return trimmed.startsWith("package ")
+                || trimmed.startsWith("import ")
+                || trimmed.startsWith("public class")
+                || trimmed.startsWith("public interface")
+                || trimmed.startsWith("public enum")
+                || trimmed.startsWith("public record")
+                || trimmed.startsWith("class ")
+                || trimmed.startsWith("interface ")
+                || trimmed.startsWith("enum ");
+        }
+        return false;
     }
 
     private String classLabel(String className) {
