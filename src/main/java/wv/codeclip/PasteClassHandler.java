@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.function.BiConsumer;
-import java.util.regex.Pattern;
 
 public class PasteClassHandler {
 
@@ -42,9 +41,13 @@ public class PasteClassHandler {
         this.fileWriter = new ClassFileWriter(repo);
     }
 
+    // ------------------------------------------------------------------
+    // Main entry point
+    // ------------------------------------------------------------------
+
     public void handlePasteFromClipboard() {
-        String classCode = clipboard.read();
-        if (classCode == null || classCode.isBlank()) {
+        String text = clipboard.read();
+        if (text == null || text.isBlank()) {
             JOptionPane.showMessageDialog(
                     parent,
                     "Clipboard is empty or does not contain text.",
@@ -53,8 +56,65 @@ public class PasteClassHandler {
             );
             return;
         }
-        handlePaste(classCode);
+
+        // Delegate to patch handler if clipboard contains a patch block
+        if (PatchParser.isPatch(text)) {
+            handlePatch(text);
+            return;
+        }
+
+        // Reject text that is clearly not Java source before running regex parsers
+        if (!looksLikeJavaSource(text)) {
+            JOptionPane.showMessageDialog(
+                    parent,
+                    "Clipboard does not appear to contain Java source code.",
+                    "Invalid Input",
+                    JOptionPane.ERROR_MESSAGE
+            );
+            return;
+        }
+
+        handlePaste(text);
     }
+
+    // ------------------------------------------------------------------
+    // Patch handling
+    // ------------------------------------------------------------------
+
+    private void handlePatch(String text) {
+        PatchParser parser = new PatchParser();
+        List<PatchChange> changes;
+
+        try {
+            changes = parser.parse(text);
+        } catch (IllegalArgumentException e) {
+            PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage());
+            return;
+        }
+
+        PatchApplier applier = new PatchApplier(repo);
+        List<String> summary;
+
+        try {
+            summary = applier.apply(changes);
+        } catch (PatchException e) {
+            PatchErrorDialog.show(parent, e.getMessage());
+            return;
+        }
+
+        refreshCallback.run();
+
+        // Log each summary line as a temp log entry (newest at top via appendTempLog)
+        if (statusLogger != null) {
+            for (int i = summary.size() - 1; i >= 0; i--) {
+                statusLogger.accept(summary.get(i));
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Class paste handling (unchanged)
+    // ------------------------------------------------------------------
 
     private void handlePaste(String classCode) {
         String packageName = parser.parsePackage(classCode);
@@ -94,7 +154,7 @@ public class PasteClassHandler {
         try {
             File file;
             if (isNewFile) {
-                if (!confirmCreate(className,packageName, sourceRoot)) return;
+                if (!confirmCreate(className, sourceRoot)) return;
                 file = fileWriter.createFile(packageName, className, classCode, sourceRoot);
             } else {
                 fileWriter.updateFile(existingFile, classCode);
@@ -174,50 +234,46 @@ public class PasteClassHandler {
         }
     }
 
- private boolean confirmCreate(String className, String packageName, File sourceRoot) {
-    String pkgPath = (packageName != null && !packageName.isEmpty())
-            ? packageName.replace('.', File.separatorChar)
-            : "";
-    File targetDir = new File(sourceRoot, pkgPath);
-    String path = targetDir.getAbsolutePath();
+    private boolean confirmCreate(String className, File sourceRoot) {
+        String path = sourceRoot.getAbsolutePath();
 
-    JLabel message = new JLabel(
-            "<html>" +
-            "<b>Class:</b> " + escapeHtml(className) + "<br><br>" +
-            "File does not exist.<br><br>" +
-            "<b>Target Directory:</b><br>" +
-            "<tt>" + wrapPath(escapeHtml(path), 50) + "</tt><br><br>" +
-            "Create new file?" +
-            "</html>"
-    );
+        JLabel message = new JLabel(
+                "<html>" +
+                "<b>Class:</b> " + escapeHtml(className) + "<br><br>" +
+                "File does not exist.<br><br>" +
+                "<b>Target Directory:</b><br>" +
+                "<tt>" + escapeHtml(path) + "</tt><br><br>" +
+                "Create new file?" +
+                "</html>"
+        );
+        message.setPreferredSize(new java.awt.Dimension(420, message.getPreferredSize().height));
 
-    int choice = JOptionPane.showConfirmDialog(
-            parent,
-            message,
-            "Create Class",
-            JOptionPane.OK_CANCEL_OPTION,
-            JOptionPane.QUESTION_MESSAGE
-    );
-    return choice == JOptionPane.OK_OPTION;
-}
-
-private static String wrapPath(String path, int maxLineWidth) {
-    String separator = File.separator.equals("\\") ? "\\" : "/";
-    String[] parts = path.split(Pattern.quote(File.separator));
-    StringBuilder sb = new StringBuilder();
-    StringBuilder line = new StringBuilder();
-
-    for (int i = 0; i < parts.length; i++) {
-        String segment = parts[i] + (i < parts.length - 1 ? separator : "");
-        if (line.length() + segment.length() > maxLineWidth && line.length() > 0) {
-            sb.append(line).append("<br>");
-            line = new StringBuilder();
-        }
-        line.append(segment);
+        int choice = JOptionPane.showConfirmDialog(
+                parent,
+                message,
+                "Create Class",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+        );
+        return choice == JOptionPane.OK_OPTION;
     }
-    sb.append(line);
-    return sb.toString();
-}
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    private boolean looksLikeJavaSource(String text) {
+        String trimmed = text.stripLeading();
+        return trimmed.startsWith("package ")
+            || trimmed.startsWith("import ")
+            || trimmed.startsWith("public class")
+            || trimmed.startsWith("public interface")
+            || trimmed.startsWith("public enum")
+            || trimmed.startsWith("public record")
+            || trimmed.startsWith("class ")
+            || trimmed.startsWith("interface ")
+            || trimmed.startsWith("enum ");
+    }
 
     private String classLabel(String className) {
         if (className.length() <= CLASS_NAME_WRAP_LENGTH) {

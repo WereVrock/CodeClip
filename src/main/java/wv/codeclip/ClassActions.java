@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 public class ClassActions {
 
@@ -18,22 +19,27 @@ public class ClassActions {
 
     private final JFrame parent;
     private final JTextArea classTextArea;
-    private final JTextComponent notesComponent;   // accepts JTextPane or JTextArea
+    private final JTextComponent notesComponent;
     private final JCheckBox showMissingFileMessages;
     private final ClassRepository repo;
+
+    // Supplier so ClassActions always reads the current value from CodeClipFrame
+    private final Supplier<Boolean> includeInstructions;
 
     public ClassActions(
             JFrame parent,
             JTextArea classTextArea,
             JTextComponent notesComponent,
             JCheckBox showMissingFileMessages,
-            ClassRepository repo
+            ClassRepository repo,
+            Supplier<Boolean> includeInstructions
     ) {
         this.parent = parent;
         this.classTextArea = classTextArea;
         this.notesComponent = notesComponent;
         this.showMissingFileMessages = showMissingFileMessages;
         this.repo = repo;
+        this.includeInstructions = includeInstructions;
     }
 
     public void resetAll(JPanel classPanel) {
@@ -44,15 +50,25 @@ public class ClassActions {
         classPanel.repaint();
     }
 
+    /**
+     * Copies code + (optionally) instructions + notes to clipboard.
+     * Order: code → instructions (if ticked) → notes
+     */
     public void copyAll(Runnable clearLogsCallback) {
-        String combined = classTextArea.getText()
-                + "\n\n// === Notes ===\n"
-                + notesComponent.getText()
-                + NOTES_END_MARK;
+        StringBuilder sb = new StringBuilder();
+        sb.append(classTextArea.getText());
+
+        if (Boolean.TRUE.equals(includeInstructions.get())) {
+            sb.append("\n\n").append(AiInstructions.TEXT);
+        }
+
+        sb.append("\n\n// === Notes ===\n")
+          .append(notesComponent.getText())
+          .append(NOTES_END_MARK);
 
         Toolkit.getDefaultToolkit()
                 .getSystemClipboard()
-                .setContents(new StringSelection(combined), null);
+                .setContents(new StringSelection(sb.toString()), null);
 
         clearLogsCallback.run();
     }

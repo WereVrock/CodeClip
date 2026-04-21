@@ -40,9 +40,9 @@ public class SettingsManager {
     }
 
     public Rectangle loadFrameBounds() {
-        int x = Integer.parseInt(props.getProperty("frame.x", "100"));
-        int y = Integer.parseInt(props.getProperty("frame.y", "100"));
-        int width = Integer.parseInt(props.getProperty("frame.width", "475"));
+        int x      = Integer.parseInt(props.getProperty("frame.x", "100"));
+        int y      = Integer.parseInt(props.getProperty("frame.y", "100"));
+        int width  = Integer.parseInt(props.getProperty("frame.width", "475"));
         int height = Integer.parseInt(props.getProperty("frame.height", "300"));
         return new Rectangle(x, y, width, height);
     }
@@ -55,6 +55,14 @@ public class SettingsManager {
         return props.getProperty("notes", "");
     }
 
+    public void saveIncludeInstructions(boolean value) {
+        props.setProperty("include.instructions", String.valueOf(value));
+    }
+
+    public boolean loadIncludeInstructions() {
+        return Boolean.parseBoolean(props.getProperty("include.instructions", "false"));
+    }
+
     public void saveClassPaths(String[] paths) {
         props.setProperty("classes", String.join("|", paths));
     }
@@ -63,15 +71,12 @@ public class SettingsManager {
         String files = props.getProperty("classes", "");
         return files.isEmpty() ? new String[0] : files.split("\\|");
     }
+
     public static void main(String[] args) {
-    SettingsManager settings = new SettingsManager();
-
-    // reset to default position and size
-    Rectangle defaultBounds = new Rectangle(100, 100, 475, 300);
-
-    settings.saveFrameBounds(defaultBounds);
-    settings.saveProperties();
-
-    System.out.println("Frame position reset to default.");
-}
+        SettingsManager settings = new SettingsManager();
+        Rectangle defaultBounds = new Rectangle(100, 100, 475, 300);
+        settings.saveFrameBounds(defaultBounds);
+        settings.saveProperties();
+        System.out.println("Frame position reset to default.");
+    }
 }
