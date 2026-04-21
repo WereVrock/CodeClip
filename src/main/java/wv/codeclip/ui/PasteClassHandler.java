@@ -14,11 +14,11 @@ import wv.codeclip.model.PatchChange;
 import wv.codeclip.model.ClassRepository;
 import javax.swing.*;
 
-import java.awt.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiConsumer;
 
 public class PasteClassHandler {
@@ -112,7 +112,16 @@ public class PasteClassHandler {
         try {
             summary = applier.apply(changes);
         } catch (PatchException e) {
-            PatchErrorDialog.show(parent, e.getMessage());
+            String classCode = null;
+            if (e.getFileName() != null) {
+                for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
+                    if (entry.getValue().getName().equalsIgnoreCase(e.getFileName())) {
+                        classCode = repo.getClassCodeMap().get(entry.getKey());
+                        break;
+                    }
+                }
+            }
+            PatchErrorDialog.show(parent, e.getMessage(), classCode);
             return;
         }
 

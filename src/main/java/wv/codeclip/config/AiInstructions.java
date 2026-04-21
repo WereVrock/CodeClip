@@ -10,7 +10,7 @@ public final class AiInstructions {
         CODECLIP PATCH INSTRUCTIONS
         ================================================================
 
-        When making changes to existing code, produce a @@PATCH block. This should be in a code block.
+        When making surgical changes to existing code, produce a @@PATCH block. This should be in a code block.
         This is the preferred method for targeted changes. As an
         alternative, you can send the entire updated class as plain code.
 

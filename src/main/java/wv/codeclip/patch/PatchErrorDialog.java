@@ -10,7 +10,7 @@ import wv.codeclip.io.ClipboardService;
  */
 public class PatchErrorDialog extends JDialog {
 
-    public PatchErrorDialog(JFrame parent, String errorMessage) {
+    public PatchErrorDialog(JFrame parent, String errorMessage, String classCode) {
         super(parent, "Patch Failed", true);
 
         setLayout(new BorderLayout(10, 10));
@@ -35,6 +35,16 @@ public class PatchErrorDialog extends JDialog {
             copyBtn.setText("Copied!");
         });
 
+        if (classCode != null) {
+            final String code = classCode;
+            JButton copyClassBtn = new JButton("Copy Class");
+            copyClassBtn.addActionListener(e -> {
+                new ClipboardService().write(code);
+                copyClassBtn.setText("Copied!");
+            });
+            buttons.add(copyClassBtn);
+        }
+
         JButton closeBtn = new JButton("Close");
         closeBtn.addActionListener(e -> dispose());
 
@@ -46,7 +56,11 @@ public class PatchErrorDialog extends JDialog {
         setLocationRelativeTo(parent);
     }
 
+    public static void show(JFrame parent, String errorMessage, String classCode) {
+        new PatchErrorDialog(parent, errorMessage, classCode).setVisible(true);
+    }
+
     public static void show(JFrame parent, String errorMessage) {
-        new PatchErrorDialog(parent, errorMessage).setVisible(true);
+        new PatchErrorDialog(parent, errorMessage, null).setVisible(true);
     }
 }

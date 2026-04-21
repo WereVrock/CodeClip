@@ -5,7 +5,19 @@ package wv.codeclip.model;
  * The message is always human-readable and suitable for display in a dialog.
  */
 public class PatchException extends Exception {
-    public PatchException(String message) {
+
+    private final String fileName;
+
+    public PatchException(String message, String fileName) {
         super(message);
+        this.fileName = fileName;
+    }
+
+    public PatchException(String message) {
+        this(message, null);
+    }
+
+    public String getFileName() {
+        return fileName;
     }
 }

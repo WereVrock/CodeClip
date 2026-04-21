@@ -34,7 +34,8 @@ public List<String> apply(List<PatchChange> changes) throws PatchException {
             String path = resolveFilePath(change.fileName());
             if (path == null) {
                 throw new PatchException(
-                        "File not found in loaded classes: " + change.fileName());
+                        "File not found in loaded classes: " + change.fileName(),
+                        change.fileName());
             }
             String code = workingCode.getOrDefault(path, repo.getClassCodeMap().get(path));
 
@@ -63,7 +64,8 @@ public List<String> apply(List<PatchChange> changes) throws PatchException {
                 Files.writeString(file.toPath(), finalCode);
             } catch (IOException e) {
                 throw new PatchException(
-                        "Failed to write file: " + path + "\n" + e.getMessage());
+                        "Failed to write file: " + path + "\n" + e.getMessage(),
+                        file.getName());
             }
             repo.getClassCodeMap().put(path, finalCode);
             repo.getDisabledClasses().remove(path);
@@ -84,12 +86,14 @@ private String applyFindReplace(PatchChange.FindReplace fr, String code)
         if (count == 0) {
             throw new PatchException(
                     "@@FIND block not found in " + fr.fileName() + ".\n\n" +
-                    "Searched for:\n" + find);
+                    "Searched for:\n" + find,
+                    fr.fileName());
         }
         if (count > 1) {
             throw new PatchException(
                     "@@FIND block matches " + count + " locations in " + fr.fileName() +
-                    " — must match exactly once.\n\nSearched for:\n" + find);
+                    " — must match exactly once.\n\nSearched for:\n" + find,
+                    fr.fileName());
         }
         return code.replace(find, fr.replace());
     }
@@ -110,13 +114,15 @@ private String applyFindReplace(PatchChange.FindReplace fr, String code)
 
         if (matches.isEmpty()) {
             throw new PatchException(
-                    "Method '" + mr.methodName() + "' not found in " + mr.fileName());
+                    "Method '" + mr.methodName() + "' not found in " + mr.fileName(),
+                    mr.fileName());
         }
         if (matches.size() > 1) {
             throw new PatchException(
                     "Method '" + mr.methodName() + "' is overloaded (" + matches.size() +
                     " matches) in " + mr.fileName() +
-                    " — use @@FIND/@@REPLACE to target the specific overload.");
+                    " — use @@FIND/@@REPLACE to target the specific overload.",
+                    mr.fileName());
         }
 
         int[] extent = matches.get(0);
