@@ -17,29 +17,37 @@ public class ArchitectureBuilder {
         this.repo = repo;
     }
 
-    public String build() {
-        Map<String, List<String>> packageToClasses = groupByPackage();
+    public enum Mode { ENABLED_ONLY, ADDED_ONLY, ALL }
+
+    public String build(Mode mode, Set<String> disabledPaths) {
+        Map<String, List<String>> packageToClasses = groupByPackage(mode, disabledPaths);
         Map<String, TreeMap<String, Object>> tree = buildPackageTree(packageToClasses);
 
         StringBuilder sb = new StringBuilder();
         sb.append("Architecture\n");
         sb.append("============\n\n");
-        renderTree(tree, packageToClasses, sb, "", true);
+        renderTree(tree, packageToClasses, sb, "", "", true);
         return sb.toString();
     }
 
-    private Map<String, List<String>> groupByPackage() {
+    private Map<String, List<String>> groupByPackage(Mode mode, Set<String> disabledPaths) {
         Map<String, List<String>> result = new TreeMap<>();
 
         for (Map.Entry<String, String> entry : repo.getClassCodeMap().entrySet()) {
             String path = entry.getKey();
             String code = entry.getValue();
 
+            if (mode == Mode.ENABLED_ONLY && disabledPaths.contains(path)) continue;
+
+            File file = repo.getClassFileMap().get(path);
+            boolean existsOnDisk = file != null && file.exists();
+
+            if (mode == Mode.ADDED_ONLY && !existsOnDisk) continue;
+
             String pkg = parser.parsePackage(code);
             String cls = parser.parseClassName(code);
 
             if (cls == null) {
-                File file = repo.getClassFileMap().get(path);
                 cls = (file != null) ? file.getName().replace(".java", "") : path;
             }
 
@@ -82,6 +90,7 @@ public class ArchitectureBuilder {
             Map<String, List<String>> packageToClasses,
             StringBuilder sb,
             String currentPkg,
+            String indent,
             boolean isRoot) {
 
         List<String> keys = new ArrayList<>(node.keySet());
@@ -94,31 +103,30 @@ public class ArchitectureBuilder {
                     : currentPkg + "." + key;
 
             String connector   = last ? "└── " : "├── ";
-            String childIndent = last ? "    " : "│   ";
+            String childIndent = indent + (last ? "    " : "│   ");
 
             if (isRoot) {
                 sb.append(key).append("\n");
             } else {
-                sb.append(connector).append(key).append("\n");
+                sb.append(indent).append(connector).append(key).append("\n");
             }
 
             Map<String, TreeMap<String, Object>> children =
                     (Map<String, TreeMap<String, Object>>) (Object) node.get(key);
 
-            String indent = isRoot ? "" : childIndent;
             List<String> classes = packageToClasses.get(fullPkg);
             boolean hasChildren = children != null && !children.isEmpty();
 
             if (classes != null) {
                 for (int j = 0; j < classes.size(); j++) {
                     boolean lastClass = (j == classes.size() - 1) && !hasChildren;
-                    String classConnector = indent + (lastClass ? "└── " : "├── ");
+                    String classConnector = childIndent + (lastClass ? "└── " : "├── ");
                     sb.append(classConnector).append(classes.get(j)).append(".java\n");
                 }
             }
 
             if (hasChildren) {
-                renderTree(children, packageToClasses, sb, fullPkg, false);
+                renderTree(children, packageToClasses, sb, fullPkg, childIndent, false);
             }
         }
     }

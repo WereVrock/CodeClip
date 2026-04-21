@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import wv.codeclip.config.AiInstructions;
+import wv.codeclip.ui.ArchitectureBuilder;
 
 public class ClassActions {
 
@@ -82,7 +83,27 @@ public class ClassActions {
     }
 
     public void copyArchitecture() {
-        String tree = new ArchitectureBuilder(repo).build();
+        Object[] options = {"Copy Enabled", "Copy Added", "Copy All", "Cancel"};
+        int choice = JOptionPane.showOptionDialog(
+                parent,
+                "Choose which classes to include in the architecture:",
+                "Copy Architecture",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                options,
+                options[0]
+        );
+
+        if (choice < 0 || choice == 3) return;
+
+        ArchitectureBuilder.Mode mode = switch (choice) {
+            case 0 -> ArchitectureBuilder.Mode.ENABLED_ONLY;
+            case 1 -> ArchitectureBuilder.Mode.ADDED_ONLY;
+            default -> ArchitectureBuilder.Mode.ALL;
+        };
+
+        String tree = new ArchitectureBuilder(repo).build(mode, repo.getDisabledClasses());
         Toolkit.getDefaultToolkit()
                 .getSystemClipboard()
                 .setContents(new StringSelection(tree), null);
