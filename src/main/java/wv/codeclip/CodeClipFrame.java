@@ -5,6 +5,9 @@ import javax.swing.text.*;
 import java.awt.*;
 import java.io.File;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 public class CodeClipFrame extends JFrame implements java.awt.event.FocusListener {
 
@@ -16,6 +19,15 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     // Source of truth
     private String notesBuffer = "";
     private String logBuffer   = "";
+
+    // Tracks current sort mode, cycles 0-3
+    private int sortMode = 0;
+    private static final String[] SORT_LABELS = {
+        "Order: Added",
+        "Order: ABC",
+        "Order: Enabled↑ Added",
+        "Order: Enabled↑ ABC"
+    };
 
     // Prevent programmatic UI updates from triggering the notes document listener
     private boolean internalUpdate = false;
@@ -134,6 +146,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
         classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
         JScrollPane classScroll = new JScrollPane(classPanel);
+        classScroll.getVerticalScrollBar().setUnitIncrement(16);
 
         JSplitPane split =
                 new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classScroll);
@@ -151,6 +164,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         JButton disableAll       = new JButton("Disable All");
         JButton pasteClass       = new JButton("Paste Class");
         JButton copyInstructions = new JButton("Copy Instructions");
+        JButton sortOrder        = new JButton(SORT_LABELS[sortMode]);
 
         reset.addActionListener(e -> actions.resetAll(classPanel));
 
@@ -193,6 +207,12 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 new ClipboardService().write(AiInstructions.TEXT)
         );
 
+        sortOrder.addActionListener(e -> {
+            sortMode = (sortMode + 1) % SORT_LABELS.length;
+            sortOrder.setText(SORT_LABELS[sortMode]);
+            refreshPanels();
+        });
+
         buttons.add(reset);
         buttons.add(update);
         buttons.add(copy);
@@ -204,6 +224,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         buttons.add(showMissingFileMessages);
         buttons.add(alwaysOnTopCheck);
         buttons.add(includeInstructionsCheck);
+        buttons.add(sortOrder);
 
         add(buttons, BorderLayout.SOUTH);
     }
@@ -212,12 +233,16 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     // Logs & Notes
     // ------------------------------------------------------------------
 
-    public void appendTempLog(String message) {
+public void appendTempLog(String message) {
         logBuffer = message + "\n" + logBuffer;
         renderNotes();
+        // Scroll to top so the new message is immediately visible
+        SwingUtilities.invokeLater(() ->
+                notesTextPane.setCaretPosition(0)
+        );
     }
 
-    public void clearTempLogs() {
+public void clearTempLogs() {
         if (!logBuffer.isEmpty()) {
             logBuffer = "";
             renderNotes();
@@ -434,24 +459,51 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     }
 
     private void refreshPanels() {
+        List<PanelEntry> entries = new ArrayList<>();
+        List<String> insertionOrder = new ArrayList<>(repo.getClassCodeMap().keySet());
+
         for (Component c : classPanel.getComponents()) {
             if (c instanceof JPanel panel) {
                 Object storedPath = panel.getClientProperty("path");
                 if (storedPath instanceof String path) {
                     boolean disabled = repo.getDisabledClasses().contains(path);
-                    panel.setBackground(disabled ? DISABLED_COLOR : ENABLED_COLOR);
+                    File file = repo.getClassFileMap().get(path);
+                    String name = (file != null) ? file.getName() : path;
+                    int insertionIdx = insertionOrder.indexOf(path);
+                    entries.add(new PanelEntry(panel, path, name, disabled, insertionIdx));
 
+                    panel.setBackground(disabled ? DISABLED_COLOR : ENABLED_COLOR);
                     for (Component child : panel.getComponents()) {
                         if (child instanceof JButton btn
-                                && (btn.getText().equals("Enable")
-                                    || btn.getText().equals("Disable"))) {
+                                && (btn.getText().equals("Enable") || btn.getText().equals("Disable"))) {
                             btn.setText(disabled ? "Enable" : "Disable");
                         }
                     }
                 }
             }
         }
+
+        Comparator<PanelEntry> comparator = switch (sortMode) {
+            case 0 -> Comparator.comparingInt(PanelEntry::insertionIdx);
+            case 1 -> Comparator.comparing(e -> e.name().toLowerCase());
+            case 2 -> Comparator
+                    .comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
+                    .thenComparingInt(PanelEntry::insertionIdx);
+            case 3 -> Comparator
+                    .comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
+                    .thenComparing(e -> e.name().toLowerCase());
+            default -> Comparator.comparingInt(PanelEntry::insertionIdx);
+        };
+        entries.sort(comparator);
+
+        classPanel.removeAll();
+        for (PanelEntry entry : entries) {
+            classPanel.add(entry.panel());
+        }
         classPanel.revalidate();
         classPanel.repaint();
     }
+
+    private record PanelEntry(JPanel panel, String path, String name,
+                               boolean disabled, int insertionIdx) {}
 }
