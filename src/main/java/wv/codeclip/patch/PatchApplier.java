@@ -25,10 +25,11 @@ public class PatchApplier {
         this.repo = repo;
     }
 
-    public List<String> apply(List<PatchChange> changes) throws PatchException {
+public List<String> apply(List<PatchChange> changes) throws PatchException {
         List<ResolvedChange> resolved = new ArrayList<>();
         Map<String, String> workingCode = new HashMap<>();
 
+        // Pass 1: validate and compute all changes in memory only
         for (PatchChange change : changes) {
             String path = resolveFilePath(change.fileName());
             if (path == null) {
@@ -53,7 +54,7 @@ public class PatchApplier {
             }
         }
 
-        // Write only the final state per file and sync repo
+        // Pass 2: all changes validated — now write to disk and update repo
         for (Map.Entry<String, String> entry : workingCode.entrySet()) {
             String path = entry.getKey();
             String finalCode = entry.getValue();
@@ -76,7 +77,7 @@ public class PatchApplier {
         return summary;
     }
 
-    private String applyFindReplace(PatchChange.FindReplace fr, String code)
+private String applyFindReplace(PatchChange.FindReplace fr, String code)
             throws PatchException {
         String find = fr.find();
         int count = countOccurrences(code, find);
