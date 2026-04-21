@@ -13,6 +13,8 @@ import wv.codeclip.model.PatchException;
 import wv.codeclip.model.PatchChange;
 import wv.codeclip.model.ClassRepository;
 import javax.swing.*;
+
+import java.awt.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -166,7 +168,7 @@ public class PasteClassHandler {
         try {
             File file;
             if (isNewFile) {
-                if (!confirmCreate(className, sourceRoot)) return;
+                if (!confirmCreate(className, packageName, sourceRoot)) return;
                 file = fileWriter.createFile(packageName, className, classCode, sourceRoot);
             } else {
                 fileWriter.updateFile(existingFile, classCode);
@@ -246,23 +248,28 @@ public class PasteClassHandler {
         }
     }
 
-    private boolean confirmCreate(String className, File sourceRoot) {
-        String path = sourceRoot.getAbsolutePath();
+    private boolean confirmCreate(String className, String packageName, File sourceRoot) {
+        String pkgPath = (packageName != null) ? packageName.replace('.', File.separatorChar) : "";
+        String path = new File(sourceRoot, pkgPath).getAbsolutePath();
 
-        JLabel message = new JLabel(
-                "<html>" +
-                "<b>Class:</b> " + escapeHtml(className) + "<br><br>" +
-                "File does not exist.<br><br>" +
-                "<b>Target Directory:</b><br>" +
-                "<tt>" + escapeHtml(path) + "</tt><br><br>" +
-                "Create new file?" +
-                "</html>"
+        JTextArea body = new JTextArea(
+                "Class: " + className + "\n\n" +
+                "File does not exist.\n\n" +
+                "Target directory:\n" + path + "\n\n" +
+                "Create new file?"
         );
-        message.setPreferredSize(new java.awt.Dimension(420, message.getPreferredSize().height));
+        body.setEditable(false);
+        body.setLineWrap(true);
+        body.setWrapStyleWord(false);
+        body.setFont(UIManager.getFont("Label.font"));
+        body.setBackground(UIManager.getColor("Panel.background"));
+        body.setFocusable(false);
+        body.setRows(8);
+        body.setColumns(50);
 
         int choice = JOptionPane.showConfirmDialog(
                 parent,
-                message,
+                body,
                 "Create Class",
                 JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.QUESTION_MESSAGE

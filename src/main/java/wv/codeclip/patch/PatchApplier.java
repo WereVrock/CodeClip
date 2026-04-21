@@ -53,7 +53,7 @@ public class PatchApplier {
             }
         }
 
-        // Write only the final state per file
+        // Write only the final state per file and sync repo
         for (Map.Entry<String, String> entry : workingCode.entrySet()) {
             String path = entry.getKey();
             String finalCode = entry.getValue();
@@ -65,6 +65,7 @@ public class PatchApplier {
                         "Failed to write file: " + path + "\n" + e.getMessage());
             }
             repo.getClassCodeMap().put(path, finalCode);
+            repo.getDisabledClasses().remove(path);
         }
 
         List<String> summary = new ArrayList<>();
