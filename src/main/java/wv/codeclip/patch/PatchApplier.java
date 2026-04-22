@@ -11,12 +11,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Applies a list of PatchChange instructions to the ClassRepository.
- * Writes changed files to disk.
- * Returns a summary list of what happened.
- * Throws PatchException if any change cannot be applied cleanly.
- */
 public class PatchApplier {
 
     private final ClassRepository repo;
@@ -25,11 +19,10 @@ public class PatchApplier {
         this.repo = repo;
     }
 
-public List<String> apply(List<PatchChange> changes) throws PatchException {
+    public List<String> apply(List<PatchChange> changes) throws PatchException {
         List<ResolvedChange> resolved = new ArrayList<>();
         Map<String, String> workingCode = new HashMap<>();
 
-        // Pass 1: validate and compute all changes in memory only
         for (PatchChange change : changes) {
             String path = resolveFilePath(change.fileName());
             if (path == null) {
@@ -43,8 +36,7 @@ public List<String> apply(List<PatchChange> changes) throws PatchException {
                 case PatchChange.FindReplace fr -> {
                     String newCode = applyFindReplace(fr, code);
                     workingCode.put(path, newCode);
-                    resolved.add(new ResolvedChange(path, newCode,
-                            "FindReplace in " + fr.fileName()));
+                    resolved.add(new ResolvedChange(path, newCode, "FindReplace in " + fr.fileName()));
                 }
                 case PatchChange.MethodReplace mr -> {
                     String newCode = applyMethodReplace(mr, code);
@@ -55,7 +47,6 @@ public List<String> apply(List<PatchChange> changes) throws PatchException {
             }
         }
 
-        // Pass 2: all changes validated — now write to disk and update repo
         for (Map.Entry<String, String> entry : workingCode.entrySet()) {
             String path = entry.getKey();
             String finalCode = entry.getValue();
@@ -79,26 +70,56 @@ public List<String> apply(List<PatchChange> changes) throws PatchException {
         return summary;
     }
 
-private String applyFindReplace(PatchChange.FindReplace fr, String code)
+    private String applyFindReplace(PatchChange.FindReplace fr, String code)
             throws PatchException {
         String find = fr.find();
+
+        // Step 1: exact match
         int count = countOccurrences(code, find);
-        if (count == 0) {
-            throw new PatchException(
-                    "@@FIND block not found in " + fr.fileName() + ".\n\n" +
-                    "Searched for:\n" + find,
-                    fr.fileName());
-        }
-        if (count > 1) {
-            throw new PatchException(
-                    "@@FIND block matches " + count + " locations in " + fr.fileName() +
-                    " — must match exactly once.\n\nSearched for:\n" + find,
-                    fr.fileName());
-        }
-        return code.replace(find, fr.replace());
+        if (count == 1) return code.replace(find, fr.replace());
+        if (count > 1) throw ambiguousException(fr.fileName(), count, find, "exact");
+
+        // Step 2: normalize line endings
+        String normCode = normalize(code);
+        String normFind = normalize(find);
+        count = countOccurrences(normCode, normFind);
+        if (count == 1) return normCode.replace(normFind, normalize(fr.replace()));
+        if (count > 1) throw ambiguousException(fr.fileName(), count, find, "line-ending normalization");
+
+        // Step 3: normalize + trim trailing whitespace per line
+        String trimCode = trimLines(normCode);
+        String trimFind = trimLines(normFind);
+        count = countOccurrences(trimCode, trimFind);
+        if (count == 1) return trimCode.replace(trimFind, trimLines(normalize(fr.replace())));
+        if (count > 1) throw ambiguousException(fr.fileName(), count, find, "trailing-whitespace normalization");
+
+        // Step 4: strip all indentation (fuzzy) — last resort
+        String fuzzyCode = stripIndent(normCode);
+        String fuzzyFind = stripIndent(normFind);
+        count = countOccurrences(fuzzyCode, fuzzyFind);
+        if (count == 1) return fuzzyCode.replace(fuzzyFind, stripIndent(normalize(fr.replace())));
+        if (count > 1) throw new PatchException(
+                "@@FIND block is ambiguous in " + fr.fileName() +
+                " — matched " + count + " locations even after indent-stripping." +
+                " Add more surrounding lines to make it unique.\n\nSearched for:\n" + find,
+                fr.fileName());
+
+        throw new PatchException(
+                "@@FIND block not found in " + fr.fileName() +
+                " (tried exact, line-ending, trailing-whitespace, and indent-stripped matching).\n\n" +
+                "Searched for:\n" + find,
+                fr.fileName());
+    }
+
+    private PatchException ambiguousException(String fileName, int count, String find, String stage) {
+        return new PatchException(
+                "@@FIND block matches " + count + " locations in " + fileName +
+                " at stage: " + stage + " — must match exactly once.\n\nSearched for:\n" + find,
+                fileName);
     }
 
     private int countOccurrences(String text, String find) {
+        if (find.isEmpty()) return 0;
         int count = 0;
         int idx = 0;
         while ((idx = text.indexOf(find, idx)) != -1) {
@@ -106,6 +127,26 @@ private String applyFindReplace(PatchChange.FindReplace fr, String code)
             idx += find.length();
         }
         return count;
+    }
+
+    private String normalize(String code) {
+        return code.replace("\r\n", "\n").replace("\r", "\n");
+    }
+
+    private String trimLines(String code) {
+        StringBuilder sb = new StringBuilder();
+        for (String line : code.split("\n", -1)) {
+            sb.append(line.stripTrailing()).append("\n");
+        }
+        return sb.toString();
+    }
+
+    private String stripIndent(String code) {
+        StringBuilder sb = new StringBuilder();
+        for (String line : code.split("\n", -1)) {
+            sb.append(line.stripLeading().stripTrailing()).append("\n");
+        }
+        return sb.toString();
     }
 
     private String applyMethodReplace(PatchChange.MethodReplace mr, String code)

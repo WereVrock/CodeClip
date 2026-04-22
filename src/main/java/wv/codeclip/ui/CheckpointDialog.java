@@ -1,12 +1,18 @@
 package wv.codeclip.ui;
 
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.Font;
 import wv.codeclip.model.ClassRepository;
 
 import javax.swing.*;
-import java.awt.*;
+import java.util.List;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -147,22 +153,23 @@ public class CheckpointDialog extends JDialog {
     // Actions
     // ------------------------------------------------------------------
 
-    private void onRestore() {
+private void onRestore() {
         pendingRestores.clear();
-        int count = 0;
+        List<String> restored = new ArrayList<>();
 
         for (Map.Entry<String, String> entry : repo.getCheckpointCodeMap().entrySet()) {
             String path = entry.getKey();
             String checkpoint = entry.getValue();
             String current = repo.getClassCodeMap().get(path);
             if (!checkpoint.equals(current)) {
-                pendingRestores.put(path, current); // remember what we're replacing
+                pendingRestores.put(path, current);
                 repo.getClassCodeMap().put(path, checkpoint);
-                count++;
+                File file = repo.getClassFileMap().get(path);
+                restored.add(file != null ? file.getName() : path);
             }
         }
 
-        if (count == 0) {
+        if (restored.isEmpty()) {
             JOptionPane.showMessageDialog(this,
                     "All files already match their checkpoints.",
                     "Nothing to Restore", JOptionPane.INFORMATION_MESSAGE);
@@ -172,76 +179,133 @@ public class CheckpointDialog extends JDialog {
         refreshCallback.run();
         refresh();
 
-        JOptionPane.showMessageDialog(this,
-                count + " file" + (count == 1 ? "" : "s") + " restored in memory.\n\n" +
-                "Disk has NOT been changed. Press \"Commit to Disk\" to write.",
-                "Restored", JOptionPane.INFORMATION_MESSAGE);
+        StringBuilder msg = new StringBuilder();
+        msg.append(restored.size()).append(" file")
+           .append(restored.size() == 1 ? "" : "s")
+           .append(" restored in memory:\n\n");
+        for (String name : restored) msg.append("  • ").append(name).append("\n");
+        msg.append("\nDisk has NOT been changed. Press \"Commit to Disk\" to write.");
+
+        JOptionPane.showMessageDialog(this, msg.toString(), "Restored", JOptionPane.INFORMATION_MESSAGE);
     }
 
-    private void onCommit() {
+private void onCommit() {
         if (pendingRestores.isEmpty()) {
-            // Commit current in-memory state (no prior restore)
             commitCurrentState();
             return;
         }
 
-        int errors = 0;
-        int written = 0;
+        List<String> written = new ArrayList<>();
+        List<String> failed  = new ArrayList<>();
 
         for (String path : new java.util.ArrayList<>(pendingRestores.keySet())) {
             File file = repo.getClassFileMap().get(path);
-            if (file == null) { errors++; continue; }
+            if (file == null) { failed.add(path); continue; }
             String code = repo.getClassCodeMap().get(path);
             try {
                 Files.writeString(file.toPath(), code);
                 repo.setCheckpoint(path, code);
                 pendingRestores.remove(path);
-                written++;
+                written.add(file.getName());
             } catch (IOException ex) {
-                errors++;
+                failed.add(file.getName());
             }
         }
 
         refresh();
-        String msg = written + " file" + (written == 1 ? "" : "s") + " written to disk.";
-        if (errors > 0) msg += "\n" + errors + " file(s) could not be written.";
-        JOptionPane.showMessageDialog(this, msg, "Committed", JOptionPane.INFORMATION_MESSAGE);
+
+        StringBuilder msg = new StringBuilder();
+        if (!written.isEmpty()) {
+            msg.append(written.size()).append(" file")
+               .append(written.size() == 1 ? "" : "s")
+               .append(" written to disk:\n\n");
+            for (String name : written) msg.append("  • ").append(name).append("\n");
+        }
+        if (!failed.isEmpty()) {
+            if (msg.length() > 0) msg.append("\n");
+            msg.append(failed.size()).append(" file")
+               .append(failed.size() == 1 ? "" : "s")
+               .append(" could not be written:\n\n");
+            for (String name : failed) msg.append("  • ").append(name).append("\n");
+        }
+
+        JOptionPane.showMessageDialog(this, msg.toString(), "Committed", JOptionPane.INFORMATION_MESSAGE);
     }
 
-    private void commitCurrentState() {
-        int written = 0, errors = 0;
+private void commitCurrentState() {
+        List<String> written = new ArrayList<>();
+        List<String> failed  = new ArrayList<>();
+
         for (Map.Entry<String, String> entry : repo.getClassCodeMap().entrySet()) {
             String path = entry.getKey();
             String code = entry.getValue();
             String checkpoint = repo.getCheckpointCodeMap().get(path);
             if (checkpoint == null || checkpoint.equals(code)) continue;
             File file = repo.getClassFileMap().get(path);
-            if (file == null) { errors++; continue; }
+            if (file == null) { failed.add(path); continue; }
             try {
                 Files.writeString(file.toPath(), code);
                 repo.setCheckpoint(path, code);
-                written++;
+                written.add(file.getName());
             } catch (IOException ex) {
-                errors++;
+                failed.add(file.getName());
             }
         }
+
         refresh();
-        if (written == 0 && errors == 0) {
-            JOptionPane.showMessageDialog(this, "All files already match their checkpoints.",
+
+        if (written.isEmpty() && failed.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "All files already match their checkpoints.",
                     "Nothing to Commit", JOptionPane.INFORMATION_MESSAGE);
-        } else {
-            String msg = written + " file" + (written == 1 ? "" : "s") + " written to disk.";
-            if (errors > 0) msg += "\n" + errors + " file(s) could not be written.";
-            JOptionPane.showMessageDialog(this, msg, "Committed", JOptionPane.INFORMATION_MESSAGE);
+            return;
         }
+
+        StringBuilder msg = new StringBuilder();
+        if (!written.isEmpty()) {
+            msg.append(written.size()).append(" file")
+               .append(written.size() == 1 ? "" : "s")
+               .append(" written to disk:\n\n");
+            for (String name : written) msg.append("  • ").append(name).append("\n");
+        }
+        if (!failed.isEmpty()) {
+            if (msg.length() > 0) msg.append("\n");
+            msg.append(failed.size()).append(" file")
+               .append(failed.size() == 1 ? "" : "s")
+               .append(" could not be written:\n\n");
+            for (String name : failed) msg.append("  • ").append(name).append("\n");
+        }
+
+        JOptionPane.showMessageDialog(this, msg.toString(), "Committed", JOptionPane.INFORMATION_MESSAGE);
     }
 
-    private void onSetCheckpoint() {
+private void onSetCheckpoint() {
+        List<String> updated = new ArrayList<>();
+
+        for (Map.Entry<String, String> entry : repo.getClassCodeMap().entrySet()) {
+            String path = entry.getKey();
+            String current = entry.getValue();
+            String checkpoint = repo.getCheckpointCodeMap().get(path);
+            if (!current.equals(checkpoint)) {
+                File file = repo.getClassFileMap().get(path);
+                updated.add(file != null ? file.getName() : path);
+            }
+        }
+
         repo.setAllCheckpoints();
         pendingRestores.clear();
         refresh();
-        JOptionPane.showMessageDialog(this,
-                "Checkpoint updated. Current in-memory state is now the checkpoint.",
-                "Checkpoint Set", JOptionPane.INFORMATION_MESSAGE);
+
+        StringBuilder msg = new StringBuilder();
+        if (updated.isEmpty()) {
+            msg.append("Checkpoint is already up to date. No changes detected.");
+        } else {
+            msg.append("Checkpoint updated for ").append(updated.size()).append(" file")
+               .append(updated.size() == 1 ? "" : "s").append(":\n\n");
+            for (String name : updated) msg.append("  • ").append(name).append("\n");
+        }
+
+        JOptionPane.showMessageDialog(this, msg.toString(), "Checkpoint Set", JOptionPane.INFORMATION_MESSAGE);
     }
+
 }
