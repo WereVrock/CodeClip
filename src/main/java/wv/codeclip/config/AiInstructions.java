@@ -65,6 +65,7 @@ public final class AiInstructions {
           Put commentary before @@PATCH or after @@END.
         - Never use placeholders like // ... or // existing code.
         - Every @@PATCH block must end with @@END.
+        
 
         ================================================================
         """;

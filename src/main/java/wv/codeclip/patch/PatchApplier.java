@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -19,33 +20,57 @@ public class PatchApplier {
         this.repo = repo;
     }
 
-    public List<String> apply(List<PatchChange> changes) throws PatchException {
-        List<ResolvedChange> resolved = new ArrayList<>();
+public PatchResult apply(List<PatchChange> changes) {
         Map<String, String> workingCode = new HashMap<>();
+        Map<String, List<String>> fileSuccesses = new LinkedHashMap<>();
+        Map<String, List<FailedChange>> fileFailures = new LinkedHashMap<>();
 
         for (PatchChange change : changes) {
             String path = resolveFilePath(change.fileName());
             if (path == null) {
-                throw new PatchException(
-                        "File not found in loaded classes: " + change.fileName(),
-                        change.fileName());
+                fileFailures
+                    .computeIfAbsent(change.fileName(), k -> new ArrayList<>())
+                    .add(new FailedChange(change.fileName(),
+                            "File not found in loaded classes: " + change.fileName()));
+                continue;
             }
+
             String code = workingCode.getOrDefault(path, repo.getClassCodeMap().get(path));
 
-            switch (change) {
-                case PatchChange.FindReplace fr -> {
-                    String newCode = applyFindReplace(fr, code);
-                    workingCode.put(path, newCode);
-                    resolved.add(new ResolvedChange(path, newCode, "FindReplace in " + fr.fileName()));
+            try {
+                switch (change) {
+                    case PatchChange.FindReplace fr -> {
+                        String newCode = applyFindReplace(fr, code);
+                        workingCode.put(path, newCode);
+                        fileSuccesses
+                            .computeIfAbsent(path, k -> new ArrayList<>())
+                            .add("FindReplace in " + fr.fileName());
+                    }
+                    case PatchChange.MethodReplace mr -> {
+                        String newCode = applyMethodReplace(mr, code);
+                        workingCode.put(path, newCode);
+                        fileSuccesses
+                            .computeIfAbsent(path, k -> new ArrayList<>())
+                            .add("MethodReplace '" + mr.methodName() + "' in " + mr.fileName());
+                    }
                 }
-                case PatchChange.MethodReplace mr -> {
-                    String newCode = applyMethodReplace(mr, code);
-                    workingCode.put(path, newCode);
-                    resolved.add(new ResolvedChange(path, newCode,
-                            "MethodReplace '" + mr.methodName() + "' in " + mr.fileName()));
-                }
+            } catch (PatchException e) {
+                fileFailures
+                    .computeIfAbsent(change.fileName(), k -> new ArrayList<>())
+                    .add(new FailedChange(change.fileName(), e.getMessage()));
             }
         }
+
+        for (String failedFileName : fileFailures.keySet()) {
+            String path = resolveFilePath(failedFileName);
+            if (path != null) {
+                workingCode.remove(path);
+                fileSuccesses.remove(path);
+            }
+        }
+
+        List<String> applied = new ArrayList<>();
+        List<String> writeErrors = new ArrayList<>();
 
         for (Map.Entry<String, String> entry : workingCode.entrySet()) {
             String path = entry.getKey();
@@ -53,24 +78,33 @@ public class PatchApplier {
             File file = repo.getClassFileMap().get(path);
             try {
                 Files.writeString(file.toPath(), finalCode);
+                repo.getClassCodeMap().put(path, finalCode);
+                repo.getDisabledClasses().remove(path);
+                applied.add(file.getName());
             } catch (IOException e) {
-                throw new PatchException(
-                        "Failed to write file: " + path + "\n" + e.getMessage(),
-                        file.getName());
+                writeErrors.add(file.getName() + ": " + e.getMessage());
             }
-            repo.getClassCodeMap().put(path, finalCode);
-            repo.getDisabledClasses().remove(path);
+        }
+
+        List<FailedChange> allFailures = new ArrayList<>();
+        for (List<FailedChange> failures : fileFailures.values()) {
+            allFailures.addAll(failures);
+        }
+        for (String writeError : writeErrors) {
+            allFailures.add(new FailedChange(writeError, "Failed to write to disk: " + writeError));
         }
 
         List<String> summary = new ArrayList<>();
-        for (ResolvedChange rc : resolved) {
-            summary.add("✓ " + rc.description());
+        for (Map.Entry<String, List<String>> entry : fileSuccesses.entrySet()) {
+            for (String desc : entry.getValue()) {
+                summary.add("✓ " + desc);
+            }
         }
 
-        return summary;
+        return new PatchResult(summary, allFailures, applied);
     }
 
-    private String applyFindReplace(PatchChange.FindReplace fr, String code)
+private String applyFindReplace(PatchChange.FindReplace fr, String code)
             throws PatchException {
         String find = fr.find();
 
@@ -262,4 +296,61 @@ public class PatchApplier {
     }
 
     private record ResolvedChange(String path, String newCode, String description) {}
+
+    public record FailedChange(String fileName, String message) {}
+
+    public record PatchResult(
+            List<String> successSummary,
+            List<FailedChange> failures,
+            List<String> appliedFiles) {
+
+        public boolean hasFailures() {
+            return !failures.isEmpty();
+        }
+
+        public boolean hasSuccesses() {
+            return !appliedFiles.isEmpty();
+        }
+
+        public String buildErrorReport() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("PATCH FAILURES\n");
+            sb.append("==============\n\n");
+            Map<String, List<String>> byFile = new LinkedHashMap<>();
+            for (FailedChange fc : failures) {
+                byFile.computeIfAbsent(fc.fileName(), k -> new ArrayList<>()).add(fc.message());
+            }
+            for (Map.Entry<String, List<String>> entry : byFile.entrySet()) {
+                sb.append("File: ").append(entry.getKey()).append("\n");
+                for (String msg : entry.getValue()) {
+                    sb.append("  ✗ ").append(msg).append("\n");
+                }
+                sb.append("\n");
+            }
+            if (!appliedFiles.isEmpty()) {
+                sb.append("──────────────────────────────\n");
+                sb.append("Successfully applied to:\n");
+                for (String name : appliedFiles) {
+                    sb.append("  ✓ ").append(name).append("\n");
+                }
+            }
+            return sb.toString();
+        }
+
+        public Map<String, String> errorsByFile() {
+            Map<String, List<String>> byFile = new LinkedHashMap<>();
+            for (FailedChange fc : failures) {
+                byFile.computeIfAbsent(fc.fileName(), k -> new ArrayList<>()).add(fc.message());
+            }
+            Map<String, String> result = new LinkedHashMap<>();
+            for (Map.Entry<String, List<String>> entry : byFile.entrySet()) {
+                StringBuilder sb = new StringBuilder();
+                for (String msg : entry.getValue()) {
+                    sb.append(msg).append("\n");
+                }
+                result.put(entry.getKey(), sb.toString().stripTrailing());
+            }
+            return result;
+        }
+    }
 }

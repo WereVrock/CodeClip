@@ -9,7 +9,6 @@ import wv.codeclip.io.ClassFileWriter;
 import wv.codeclip.patch.PatchErrorDialog;
 import wv.codeclip.patch.PatchApplier;
 import wv.codeclip.patch.PatchParser;
-import wv.codeclip.model.PatchException;
 import wv.codeclip.model.PatchChange;
 import wv.codeclip.model.ClassRepository;
 import javax.swing.*;
@@ -108,48 +107,37 @@ public class PasteClassHandler {
     // Patch handling
     // ------------------------------------------------------------------
 
-    private void handlePatch(String text) {
-        PatchParser parser = new PatchParser();
+private void handlePatch(String text) {
+        PatchParser patchParser = new PatchParser();
         List<PatchChange> changes;
 
         try {
-            changes = parser.parse(text);
+            changes = patchParser.parse(text);
         } catch (IllegalArgumentException e) {
-            PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage());
+            PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
             return;
         }
 
         PatchApplier applier = new PatchApplier(repo);
-        List<String> summary;
+        PatchApplier.PatchResult result = applier.apply(changes);
 
-        try {
-            summary = applier.apply(changes);
-        } catch (PatchException e) {
-            String classCode = null;
-            if (e.getFileName() != null) {
-                for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
-                    if (entry.getValue().getName().equalsIgnoreCase(e.getFileName())) {
-                        classCode = repo.getClassCodeMap().get(entry.getKey());
-                        break;
-                    }
-                }
-            }
-            PatchErrorDialog.show(parent, e.getMessage(), classCode);
-            return;
+        if (result.hasFailures()) {
+            PatchErrorDialog.show(parent, result, repo);
         }
 
-        refreshCallback.run();
-        notifyCodeChangedForPatch(changes);
-
-        // Log each summary line as a temp log entry (newest at top via appendTempLog)
-        if (statusLogger != null) {
-            for (int i = summary.size() - 1; i >= 0; i--) {
-                statusLogger.accept(summary.get(i));
+        if (result.hasSuccesses()) {
+            refreshCallback.run();
+            notifyCodeChangedForPatch(changes);
+            if (statusLogger != null) {
+                List<String> summary = result.successSummary();
+                for (int i = summary.size() - 1; i >= 0; i--) {
+                    statusLogger.accept(summary.get(i));
+                }
             }
         }
     }
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // Class paste handling (unchanged)
     // ------------------------------------------------------------------
 

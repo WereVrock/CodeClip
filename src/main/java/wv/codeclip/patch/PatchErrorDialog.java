@@ -1,20 +1,24 @@
 package wv.codeclip.patch;
 
+import wv.codeclip.io.ClipboardService;
+import wv.codeclip.model.ClassRepository;
+
 import javax.swing.*;
 import java.awt.*;
-import wv.codeclip.io.ClipboardService;
+import java.util.Map;
 
-/**
- * Modal dialog shown when a patch fails.
- * Displays the error message and offers a "Copy Error" button.
- */
 public class PatchErrorDialog extends JDialog {
 
-    public PatchErrorDialog(JFrame parent, String errorMessage, String classCode) {
+    public PatchErrorDialog(JFrame parent, String errorMessage,
+                             Map<String, String> errorsByFile,
+                             ClassRepository repo) {
         super(parent, "Patch Failed", true);
-
         setLayout(new BorderLayout(10, 10));
+        getRootPane().setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
+        ClipboardService clipboard = new ClipboardService();
+
+        // --- Top: error report text ---
         JTextArea text = new JTextArea(errorMessage);
         text.setEditable(false);
         text.setLineWrap(true);
@@ -23,44 +27,106 @@ public class PatchErrorDialog extends JDialog {
         text.setBackground(UIManager.getColor("Panel.background"));
         text.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 
-        JScrollPane scroll = new JScrollPane(text);
-        scroll.setPreferredSize(new Dimension(500, 220));
-        add(scroll, BorderLayout.CENTER);
+        JScrollPane errorScroll = new JScrollPane(text);
+        errorScroll.setPreferredSize(new Dimension(580, 220));
 
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        // --- Middle: scrollable vertical list of per-class copy buttons ---
+        JPanel classButtonsPanel = new JPanel();
+        classButtonsPanel.setLayout(new BoxLayout(classButtonsPanel, BoxLayout.Y_AXIS));
+        classButtonsPanel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
 
-        JButton copyBtn = new JButton("Copy Error");
-        copyBtn.addActionListener(e -> {
-            new ClipboardService().write(errorMessage);
-            copyBtn.setText("Copied!");
-        });
+        boolean hasClasses = errorsByFile != null && repo != null && !errorsByFile.isEmpty();
 
-        if (classCode != null) {
-            final String code = classCode;
-            JButton copyClassBtn = new JButton("Copy Class");
-            copyClassBtn.addActionListener(e -> {
-                new ClipboardService().write(code);
-                copyClassBtn.setText("Copied!");
-            });
-            buttons.add(copyClassBtn);
+        if (hasClasses) {
+            for (String fileName : errorsByFile.keySet()) {
+                String classCode = findClassCode(repo, fileName);
+                JButton btn = new JButton("Copy Class: " + fileName);
+                btn.setAlignmentX(Component.LEFT_ALIGNMENT);
+                btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, btn.getPreferredSize().height));
+                btn.setToolTipText("Copy source code of " + fileName);
+                btn.addActionListener(e -> {
+                    if (classCode != null) {
+                        clipboard.write(classCode);
+                        btn.setText("Copied: " + fileName);
+                    } else {
+                        btn.setText("Source not available: " + fileName);
+                    }
+                });
+                classButtonsPanel.add(btn);
+                classButtonsPanel.add(Box.createVerticalStrut(4));
+            }
         }
+
+        JScrollPane classScroll = new JScrollPane(classButtonsPanel);
+        classScroll.setPreferredSize(new Dimension(580, 120));
+        classScroll.getVerticalScrollBar().setUnitIncrement(16);
+        classScroll.setBorder(BorderFactory.createTitledBorder("Failed Classes — Click to Copy Source"));
+
+        // --- Center split: error report on top, class buttons below ---
+        JPanel centerPanel = new JPanel(new BorderLayout(0, 8));
+        centerPanel.add(errorScroll, BorderLayout.CENTER);
+        if (hasClasses) {
+            centerPanel.add(classScroll, BorderLayout.SOUTH);
+        }
+        add(centerPanel, BorderLayout.CENTER);
+
+        // --- Bottom: copy all classes, copy error report, close ---
+        JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+
+        if (hasClasses && errorsByFile.size() > 1) {
+            JButton copyAllClasses = new JButton("Copy All Failed Classes");
+            copyAllClasses.addActionListener(e -> {
+                StringBuilder sb = new StringBuilder();
+                for (String fileName : errorsByFile.keySet()) {
+                    String classCode = findClassCode(repo, fileName);
+                    if (classCode != null) {
+                        sb.append("// ===== ").append(fileName).append(" =====\n");
+                        sb.append(classCode).append("\n\n");
+                    }
+                }
+                clipboard.write(sb.toString().stripTrailing());
+                copyAllClasses.setText("Copied!");
+            });
+            bottomPanel.add(copyAllClasses);
+        }
+
+        JButton copyErrorBtn = new JButton("Copy Error Report");
+        copyErrorBtn.addActionListener(e -> {
+            clipboard.write(errorMessage);
+            copyErrorBtn.setText("Copied!");
+        });
 
         JButton closeBtn = new JButton("Close");
         closeBtn.addActionListener(e -> dispose());
 
-        buttons.add(copyBtn);
-        buttons.add(closeBtn);
-        add(buttons, BorderLayout.SOUTH);
+        bottomPanel.add(copyErrorBtn);
+        bottomPanel.add(closeBtn);
+        add(bottomPanel, BorderLayout.SOUTH);
 
         pack();
         setLocationRelativeTo(parent);
     }
 
-    public static void show(JFrame parent, String errorMessage, String classCode) {
-        new PatchErrorDialog(parent, errorMessage, classCode).setVisible(true);
+    private String findClassCode(ClassRepository repo, String fileName) {
+        for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+            if (entry.getValue().getName().equalsIgnoreCase(fileName)) {
+                return repo.getClassCodeMap().get(entry.getKey());
+            }
+        }
+        return null;
     }
 
     public static void show(JFrame parent, String errorMessage) {
-        new PatchErrorDialog(parent, errorMessage, null).setVisible(true);
+        new PatchErrorDialog(parent, errorMessage, null, null).setVisible(true);
+    }
+
+    public static void show(JFrame parent, String errorMessage,
+                             Map<String, String> errorsByFile, ClassRepository repo) {
+        new PatchErrorDialog(parent, errorMessage, errorsByFile, repo).setVisible(true);
+    }
+
+    public static void show(JFrame parent, PatchApplier.PatchResult result, ClassRepository repo) {
+        new PatchErrorDialog(parent, result.buildErrorReport(), result.errorsByFile(), repo)
+                .setVisible(true);
     }
 }
