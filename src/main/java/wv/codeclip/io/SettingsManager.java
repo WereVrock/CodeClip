@@ -72,6 +72,14 @@ public class SettingsManager {
         return files.isEmpty() ? new String[0] : files.split("\\|");
     }
 
+    public void saveDividerPosition(int position) {
+        props.setProperty("divider.position", String.valueOf(position));
+    }
+
+    public int loadDividerPosition() {
+        return Integer.parseInt(props.getProperty("divider.position", "0"));
+    }
+
     public static void main(String[] args) {
         SettingsManager settings = new SettingsManager();
         Rectangle defaultBounds = new Rectangle(100, 100, 475, 300);

@@ -42,6 +42,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private boolean internalUpdate = false;
 
     private final JPanel classPanel = new JPanel();
+    private JSplitPane split;
 
     private final JCheckBox showMissingFileMessages =
             new JCheckBox("Show missing file messages", true);
@@ -109,6 +110,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             public void windowClosing(java.awt.event.WindowEvent e) {
                 clearTempLogs();
                 settings.saveFrameBounds(getBounds());
+                settings.saveDividerPosition(split.getDividerLocation());
                 settings.saveNotes(notesBuffer);
                 settings.saveIncludeInstructions(includeInstructionsCheck.isSelected());
                 settings.saveClassPaths(
@@ -159,9 +161,15 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         JScrollPane classScroll = new JScrollPane(classPanel);
         classScroll.getVerticalScrollBar().setUnitIncrement(16);
 
-        JSplitPane split =
+         split =
                 new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classScroll);
         split.setResizeWeight(0.7);
+
+        // Restore saved divider position after UI is realized
+        SwingUtilities.invokeLater(() -> {
+            int divider = settings.loadDividerPosition();
+            if (divider > 0) split.setDividerLocation(divider);
+        });
 
         add(split, BorderLayout.CENTER);
 
