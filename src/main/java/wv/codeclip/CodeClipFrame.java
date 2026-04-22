@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import wv.codeclip.config.AiInstructions;
+import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.ui.PasteClassHandler;
 import wv.codeclip.ui.ClassActions;
 import wv.codeclip.ui.SimpleDocumentListener;
@@ -55,6 +56,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private final ClassRepository repo    = new ClassRepository();
     private final ClassActions actions;
     private final SettingsManager settings = new SettingsManager();
+    private CheckpointDialog checkpointDialog = null;
 
     private static final Color ENABLED_COLOR  = new Color(240, 240, 240);
     private static final Color DISABLED_COLOR = new Color(210, 210, 210);
@@ -174,6 +176,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         JButton copyInstructions = new JButton("Copy Instructions");
         JButton copyArch         = new JButton("Copy Architecture");
         JButton sortOrder        = new JButton(SORT_LABELS[sortMode]);
+        JButton checkpoint       = new JButton("Checkpoint");
 
         reset.addActionListener(e -> actions.resetAll(classPanel));
 
@@ -208,7 +211,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                     this,
                     this::refreshText,
                     this::appendTempLog,
-                    this::addClassPanel
+                    this::addClassPanel,
+                    this::onCodeChanged
             ).handlePasteFromClipboard();
         });
 
@@ -236,7 +240,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         buttons.add(alwaysOnTopCheck);
         buttons.add(includeInstructionsCheck);
         buttons.add(sortOrder);
+        checkpoint.addActionListener(e -> openCheckpointDialog());
+
         buttons.add(copyArch);
+        buttons.add(checkpoint);
 
         add(buttons, BorderLayout.SOUTH);
     }
@@ -366,8 +373,10 @@ public void clearTempLogs() {
             @Override
             protected void done() {
                 try {
-                    repo.getClassCodeMap().put(path, get());
+                    String code = get();
+                    repo.getClassCodeMap().put(path, code);
                     repo.getClassFileMap().put(path, file);
+                    repo.setCheckpoint(path, code);
                     addClassPanel(path, file.getName());
                     refreshText();
                 } catch (Exception ignored) {}
@@ -518,4 +527,21 @@ public void clearTempLogs() {
 
     private record PanelEntry(JPanel panel, String path, String name,
                                boolean disabled, int insertionIdx) {}
+
+    private void openCheckpointDialog() {
+        if (checkpointDialog == null || !checkpointDialog.isDisplayable()) {
+            checkpointDialog = new CheckpointDialog(this, repo, this::refreshText);
+        }
+        checkpointDialog.refresh();
+        checkpointDialog.setVisible(true);
+    }
+
+    public void onCodeChanged(String path, String code) {
+        if (!repo.getCheckpointCodeMap().containsKey(path)) {
+            repo.setCheckpoint(path, code);
+        }
+        if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
+            checkpointDialog.refresh();
+        }
+    }
 }

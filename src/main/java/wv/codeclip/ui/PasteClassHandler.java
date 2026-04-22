@@ -33,6 +33,7 @@ public class PasteClassHandler {
     private final JavaSourceParser parser;
     private final SourceRootDetector rootDetector;
     private final ClassFileWriter fileWriter;
+    private final BiConsumer<String, String> codeChangedCallback;
 
     private static final int CLASS_NAME_WRAP_LENGTH = 40;
 
@@ -43,11 +44,23 @@ public class PasteClassHandler {
             java.util.function.Consumer<String> statusLogger,
             BiConsumer<String, String> addPanelCallback
     ) {
+        this(repo, parent, refreshCallback, statusLogger, addPanelCallback, null);
+    }
+
+    public PasteClassHandler(
+            ClassRepository repo,
+            JFrame parent,
+            Runnable refreshCallback,
+            java.util.function.Consumer<String> statusLogger,
+            BiConsumer<String, String> addPanelCallback,
+            BiConsumer<String, String> codeChangedCallback
+    ) {
         this.repo = repo;
         this.parent = parent;
         this.refreshCallback = refreshCallback;
         this.statusLogger = statusLogger;
         this.addPanelCallback = addPanelCallback;
+        this.codeChangedCallback = codeChangedCallback;
 
         this.clipboard = new ClipboardService();
         this.parser = new JavaSourceParser();
@@ -126,6 +139,7 @@ public class PasteClassHandler {
         }
 
         refreshCallback.run();
+        notifyCodeChangedForPatch(changes);
 
         // Log each summary line as a temp log entry (newest at top via appendTempLog)
         if (statusLogger != null) {
@@ -196,6 +210,9 @@ public class PasteClassHandler {
                         (isNewFile ? "Class Created: " : "Class Updated: ")
                                 + className + " (" + file.getAbsolutePath() + ")"
                 );
+            }
+            if (!isNewFile) {
+                notifyCodeChanged(file.getAbsolutePath(), repo.getClassCodeMap().get(file.getAbsolutePath()));
             }
 
         } catch (IOException e) {
@@ -318,6 +335,23 @@ public class PasteClassHandler {
             return "Class: " + className + "\n\n";
         }
         return "Class:\n" + className + "\n\n";
+    }
+
+    private void notifyCodeChangedForPatch(List<PatchChange> changes) {
+        for (PatchChange change : changes) {
+            for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
+                if (entry.getValue().getName().equalsIgnoreCase(change.fileName())) {
+                    notifyCodeChanged(entry.getKey(), repo.getClassCodeMap().get(entry.getKey()));
+                    break;
+                }
+            }
+        }
+    }
+
+    private void notifyCodeChanged(String path, String code) {
+        if (codeChangedCallback != null) {
+            codeChangedCallback.accept(path, code);
+        }
     }
 
     private static String escapeHtml(String text) {
