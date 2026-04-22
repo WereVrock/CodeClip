@@ -236,6 +236,16 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             sortOrder.setText(SORT_LABELS[sortMode]);
             refreshPanels();
         });
+        sortOrder.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getButton() == java.awt.event.MouseEvent.BUTTON3) {
+                    sortMode = (sortMode - 1 + SORT_LABELS.length) % SORT_LABELS.length;
+                    sortOrder.setText(SORT_LABELS[sortMode]);
+                    refreshPanels();
+                }
+            }
+        });
 
         buttons.add(reset);
         buttons.add(update);
