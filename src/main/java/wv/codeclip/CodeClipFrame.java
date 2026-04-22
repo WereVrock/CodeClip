@@ -58,9 +58,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private final SettingsManager settings = new SettingsManager();
     private CheckpointDialog checkpointDialog = null;
 
-    private static final Color ENABLED_COLOR  = new Color(240, 240, 240);
-    private static final Color DISABLED_COLOR = new Color(210, 210, 210);
+    private static final Color ENABLED_COLOR   = new Color(240, 240, 240);
+    private static final Color DISABLED_COLOR  = new Color(210, 210, 210);
     private static final Color LOG_CLASS_COLOR = new Color(30, 120, 220);
+    private static final Color UNSYNCED_COLOR  = new Color(30, 100, 210);
 
     public CodeClipFrame() {
 
@@ -396,9 +397,11 @@ public void clearTempLogs() {
         panel.putClientProperty("path", path);
 
         JLabel label   = new JLabel(name);
+        label.setToolTipText("In sync with checkpoint");
         JButton toggle = new JButton("Disable");
         JButton copy   = new JButton("Copy");
         JButton delete = new JButton("Delete");
+        panel.putClientProperty("label", label);
 
         toggle.addActionListener(e -> {
             if (repo.getDisabledClasses().remove(path)) {
@@ -494,6 +497,12 @@ public void clearTempLogs() {
                     entries.add(new PanelEntry(panel, path, name, disabled, insertionIdx));
 
                     panel.setBackground(disabled ? DISABLED_COLOR : ENABLED_COLOR);
+                    boolean unsynced = isUnsynced(path);
+                    Object labelObj = panel.getClientProperty("label");
+                    if (labelObj instanceof JLabel lbl) {
+                        lbl.setForeground(unsynced ? UNSYNCED_COLOR : UIManager.getColor("Label.foreground"));
+                        lbl.setToolTipText(unsynced ? "Modified since last checkpoint" : "In sync with checkpoint");
+                    }
                     for (Component child : panel.getComponents()) {
                         if (child instanceof JButton btn
                                 && (btn.getText().equals("Enable") || btn.getText().equals("Disable"))) {
@@ -528,20 +537,36 @@ public void clearTempLogs() {
     private record PanelEntry(JPanel panel, String path, String name,
                                boolean disabled, int insertionIdx) {}
 
-    private void openCheckpointDialog() {
+    private boolean isUnsynced(String path) {
+        String current    = repo.getClassCodeMap().get(path);
+        String checkpoint = repo.getCheckpointCodeMap().get(path);
+        if (current == null || checkpoint == null) return false;
+        return !current.equals(checkpoint);
+    }
+
+private void openCheckpointDialog() {
         if (checkpointDialog == null || !checkpointDialog.isDisplayable()) {
-            checkpointDialog = new CheckpointDialog(this, repo, this::refreshText);
+            checkpointDialog = new CheckpointDialog(this, repo, () -> {
+                refreshText();
+                refreshPanels();
+            });
+        } else {
+            checkpointDialog.setRefreshCallback(() -> {
+                refreshText();
+                refreshPanels();
+            });
         }
         checkpointDialog.refresh();
         checkpointDialog.setVisible(true);
     }
 
-    public void onCodeChanged(String path, String code) {
+public void onCodeChanged(String path, String code) {
         if (!repo.getCheckpointCodeMap().containsKey(path)) {
             repo.setCheckpoint(path, code);
         }
         if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
             checkpointDialog.refresh();
         }
+        refreshPanels();
     }
 }

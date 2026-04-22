@@ -31,8 +31,9 @@ public class CheckpointDialog extends JDialog {
     private static final Color OK_BG     = new Color(220, 242, 220);
     private static final Color OK_FG     = new Color(30, 100, 30);
 
+    private Runnable refreshCallback;
+
     private final ClassRepository repo;
-    private final Runnable refreshCallback;
 
     private final JLabel statusLabel    = new JLabel();
     private final JLabel detailLabel    = new JLabel();
@@ -116,6 +117,10 @@ public class CheckpointDialog extends JDialog {
     // ------------------------------------------------------------------
     // State
     // ------------------------------------------------------------------
+
+    public void setRefreshCallback(Runnable refreshCallback) {
+        this.refreshCallback = refreshCallback;
+    }
 
     /** Called by CodeClipFrame whenever something may have changed. */
     public void refresh() {
@@ -252,6 +257,7 @@ private void commitCurrentState() {
             }
         }
 
+        refreshCallback.run();
         refresh();
 
         if (written.isEmpty() && failed.isEmpty()) {
@@ -294,6 +300,7 @@ private void onSetCheckpoint() {
 
         repo.setAllCheckpoints();
         pendingRestores.clear();
+        refreshCallback.run();
         refresh();
 
         StringBuilder msg = new StringBuilder();
