@@ -240,10 +240,16 @@ private String applyFindReplace(PatchChange.FindReplace fr, String code)
 
     private boolean isMethodSignatureLine(String trimmed, String methodName) {
         if (trimmed.startsWith("//") || trimmed.startsWith("*")) return false;
-        int idx = trimmed.indexOf(methodName + "(");
-        if (idx < 0) return false;
-        if (idx > 0 && Character.isLetterOrDigit(trimmed.charAt(idx - 1))) return false;
-        return true;
+        String token = methodName + "(";
+        int idx = 0;
+        while ((idx = trimmed.indexOf(token, idx)) >= 0) {
+            char before = idx > 0 ? trimmed.charAt(idx - 1) : ' ';
+            if (!Character.isLetterOrDigit(before) && before != '_') {
+                return true;
+            }
+            idx += token.length();
+        }
+        return false;
     }
 
     private int findOpeningBrace(String[] lines, int sigLine, int[] lineStart) {
