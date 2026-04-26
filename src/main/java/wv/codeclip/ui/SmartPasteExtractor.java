@@ -26,6 +26,13 @@ public class SmartPasteExtractor {
         return text != null && text.contains(CLASS_START);
     }
 
+    private boolean isInsideAnyBlock(int idx, List<int[]> blocks) {
+        for (int[] block : blocks) {
+            if (idx >= block[0] && idx < block[1]) return true;
+        }
+        return false;
+    }
+
     private String stripCodeFences(String text) {
         StringBuilder sb = new StringBuilder();
         for (String line : text.split("\n", -1)) {
@@ -38,7 +45,8 @@ public class SmartPasteExtractor {
 
 public List<Entry> extract(boolean includeClasses) {
         List<Entry> entries = new ArrayList<>();
-        List<int[]> positions = new ArrayList<>();
+        List<int[]> patchPositions = new ArrayList<>();
+        List<int[]> classPositions = new ArrayList<>();
 
         String patchMarker = PatchParser.PATCH_MARKER();
         String endMarker   = PatchParser.END_MARKER();
@@ -49,7 +57,7 @@ public List<Entry> extract(boolean includeClasses) {
             int endIdx = text.indexOf(endMarker, patchIdx);
             if (endIdx < 0) break;
             int blockEnd = endIdx + endMarker.length();
-            positions.add(new int[]{patchIdx, blockEnd, 0});
+            patchPositions.add(new int[]{patchIdx, blockEnd});
             searchFrom = blockEnd;
         }
 
@@ -61,14 +69,20 @@ public List<Entry> extract(boolean includeClasses) {
                 int classEnd = text.indexOf(CLASS_END, classIdx);
                 if (classEnd < 0) break;
                 int blockEnd = classEnd + CLASS_END.length();
-                positions.add(new int[]{classIdx, blockEnd, 1});
+
+                if (!isInsideAnyBlock(classIdx, patchPositions)) {
+                    classPositions.add(new int[]{classIdx, blockEnd});
+                }
                 searchFrom = blockEnd;
             }
         }
 
-        positions.sort((a, b) -> Integer.compare(a[0], b[0]));
+        List<int[]> all = new ArrayList<>();
+        for (int[] p : patchPositions) all.add(new int[]{p[0], p[1], 0});
+        for (int[] c : classPositions) all.add(new int[]{c[0], c[1], 1});
+        all.sort((a, b) -> Integer.compare(a[0], b[0]));
 
-        for (int[] pos : positions) {
+        for (int[] pos : all) {
             String block = text.substring(pos[0], pos[1]);
             if (pos[2] == 0) {
                 entries.add(new PatchEntry(block));
