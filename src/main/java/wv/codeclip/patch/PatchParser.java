@@ -37,6 +37,13 @@ public class PatchParser {
         return text != null && text.stripLeading().startsWith(MARKER_PATCH);
     }
 
+    public static boolean containsPatch(String text) {
+        return text != null && text.contains(MARKER_PATCH);
+    }
+
+    public static String PATCH_MARKER() { return MARKER_PATCH; }
+    public static String END_MARKER()   { return MARKER_END; }
+
     /**
      * Parses the patch block. Throws IllegalArgumentException with a descriptive
      * message if the format is invalid.

@@ -80,6 +80,14 @@ public class SettingsManager {
         return Integer.parseInt(props.getProperty("divider.position", "0"));
     }
 
+    public void saveSmartPaste(boolean value) {
+        props.setProperty("smart.paste", String.valueOf(value));
+    }
+
+    public boolean loadSmartPaste() {
+        return Boolean.parseBoolean(props.getProperty("smart.paste", "false"));
+    }
+
     public static void main(String[] args) {
         SettingsManager settings = new SettingsManager();
         Rectangle defaultBounds = new Rectangle(100, 100, 475, 300);

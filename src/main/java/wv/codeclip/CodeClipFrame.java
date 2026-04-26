@@ -50,6 +50,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             new JCheckBox("Always on Top", true);
     private final JCheckBox includeInstructionsCheck =
             new JCheckBox("Include Instructions", false);
+    private final JCheckBox smartPasteCheck =
+            new JCheckBox("Smart Paste", false);
 
     private final JLabel enabledCountLabel = new JLabel("Enabled Classes: 0");
     private final JLabel charCountLabel    = new JLabel("Code Characters: 0");
@@ -88,6 +90,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         // Load persisted state
         notesBuffer = settings.loadNotes();
         includeInstructionsCheck.setSelected(settings.loadIncludeInstructions());
+        smartPasteCheck.setSelected(settings.loadSmartPaste());
         renderNotes();
 
         for (String path : settings.loadClassPaths()) {
@@ -113,6 +116,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 settings.saveDividerPosition(split.getDividerLocation());
                 settings.saveNotes(notesBuffer);
                 settings.saveIncludeInstructions(includeInstructionsCheck.isSelected());
+                settings.saveSmartPaste(smartPasteCheck.isSelected());
                 settings.saveClassPaths(
                         repo.getClassCodeMap().keySet().toArray(new String[0])
                 );
@@ -221,7 +225,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                     this::refreshText,
                     this::appendTempLog,
                     this::addClassPanel,
-                    this::onCodeChanged
+                    this::onCodeChanged,
+                    smartPasteCheck::isSelected
             ).handlePasteFromClipboard();
         });
 
@@ -263,6 +268,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
         buttons.add(copyArch);
         buttons.add(checkpoint);
+        buttons.add(smartPasteCheck);
 
         add(buttons, BorderLayout.SOUTH);
     }
