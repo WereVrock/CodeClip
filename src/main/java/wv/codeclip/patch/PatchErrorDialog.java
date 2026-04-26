@@ -90,6 +90,23 @@ public class PatchErrorDialog extends JDialog {
             bottomPanel.add(copyAllClasses);
         }
 
+        JButton copyBothBtn = new JButton("Copy All + Error");
+        copyBothBtn.addActionListener(e -> {
+            StringBuilder sb = new StringBuilder();
+            if (hasClasses) {
+                for (String fileName : errorsByFile.keySet()) {
+                    String classCode = findClassCode(repo, fileName);
+                    if (classCode != null) {
+                        sb.append("// ===== ").append(fileName).append(" =====\n");
+                        sb.append(classCode).append("\n\n");
+                    }
+                }
+            }
+            sb.append(errorMessage);
+            clipboard.write(sb.toString().stripTrailing());
+            copyBothBtn.setText("Copied!");
+        });
+
         JButton copyErrorBtn = new JButton("Copy Error Report");
         copyErrorBtn.addActionListener(e -> {
             clipboard.write(errorMessage);
@@ -99,6 +116,7 @@ public class PatchErrorDialog extends JDialog {
         JButton closeBtn = new JButton("Close");
         closeBtn.addActionListener(e -> dispose());
 
+        if (hasClasses) bottomPanel.add(copyBothBtn);
         bottomPanel.add(copyErrorBtn);
         bottomPanel.add(closeBtn);
         add(bottomPanel, BorderLayout.SOUTH);

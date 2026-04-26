@@ -17,6 +17,8 @@ import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.ui.PasteClassHandler;
 import wv.codeclip.ui.ClassActions;
 import wv.codeclip.ui.SimpleDocumentListener;
+import wv.codeclip.patch.PatchApplier;
+import wv.codeclip.patch.PatchErrorDialog;
 
 public class CodeClipFrame extends JFrame implements java.awt.event.FocusListener {
 
@@ -60,6 +62,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private final ClassActions actions;
     private final SettingsManager settings = new SettingsManager();
     private CheckpointDialog checkpointDialog = null;
+    private PatchApplier.PatchResult lastPatchError = null;
+    private JButton lastErrorBtn;
 
     private static final Color ENABLED_COLOR   = new Color(240, 240, 240);
     private static final Color DISABLED_COLOR  = new Color(210, 210, 210);
@@ -190,6 +194,13 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         JButton copyArch         = new JButton("Copy Architecture");
         JButton sortOrder        = new JButton(SORT_LABELS[sortMode]);
         JButton checkpoint       = new JButton("Checkpoint");
+        lastErrorBtn             = new JButton("Last Error");
+        lastErrorBtn.setEnabled(false);
+        lastErrorBtn.addActionListener(e -> {
+            if (lastPatchError != null) {
+                PatchErrorDialog.show(this, lastPatchError, repo);
+            }
+        });
 
         reset.addActionListener(e -> actions.resetAll(classPanel));
 
@@ -219,7 +230,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         });
 
         pasteClass.addActionListener(e -> {
-            new PasteClassHandler(
+            PasteClassHandler handler = new PasteClassHandler(
                     repo,
                     this,
                     this::refreshText,
@@ -227,7 +238,9 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                     this::addClassPanel,
                     this::onCodeChanged,
                     smartPasteCheck::isSelected
-            ).handlePasteFromClipboard();
+            );
+            handler.setErrorCallback(this::setLastPatchError);
+            handler.handlePasteFromClipboard();
         });
 
         copyInstructions.addActionListener(e ->
@@ -269,6 +282,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         buttons.add(copyArch);
         buttons.add(checkpoint);
         buttons.add(smartPasteCheck);
+        buttons.add(lastErrorBtn);
 
         add(buttons, BorderLayout.SOUTH);
     }
@@ -582,6 +596,11 @@ private void openCheckpointDialog() {
         }
         checkpointDialog.refresh();
         checkpointDialog.setVisible(true);
+    }
+
+public void setLastPatchError(PatchApplier.PatchResult result) {
+        lastPatchError = result;
+        lastErrorBtn.setEnabled(result != null);
     }
 
 public void onCodeChanged(String path, String code) {

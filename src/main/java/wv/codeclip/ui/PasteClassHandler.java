@@ -26,6 +26,7 @@ public class PasteClassHandler {
 
 private final ClassRepository repo;
 private final JFrame parent;
+private java.util.function.Consumer<PatchApplier.PatchResult> errorCallback;
 private final Runnable refreshCallback;
 private final java.util.function.Consumer<String> statusLogger;
 private final BiConsumer<String, String> addPanelCallback;
@@ -76,6 +77,7 @@ this.statusLogger = statusLogger;
 this.addPanelCallback = addPanelCallback;
 this.codeChangedCallback = codeChangedCallback;
 this.multiPatchMode = multiPatchMode;
+this.errorCallback = null;
 
 this.clipboard = new ClipboardService();
 this.parser = new JavaSourceParser();
@@ -126,6 +128,15 @@ handlePaste(text);
 // Patch handling
 // ------------------------------------------------------------------
 
+public void setErrorCallback(java.util.function.Consumer<PatchApplier.PatchResult> errorCallback) {
+this.errorCallback = errorCallback;
+}
+
+private void reportError(PatchApplier.PatchResult result) {
+if (errorCallback != null) errorCallback.accept(result);
+PatchErrorDialog.show((JFrame) parent, result, repo);
+}
+
 private void handleMultiPatch(String text) {
 MultiPatchExtractor extractor = new MultiPatchExtractor();
 List<PatchChange> changes;
@@ -142,7 +153,7 @@ PatchApplier applier = new PatchApplier(repo);
 PatchApplier.PatchResult result = applier.apply(changes);
 
 if (result.hasFailures()) {
-PatchErrorDialog.show(parent, result, repo);
+reportError(result);
 }
 
 if (result.hasSuccesses()) {
@@ -177,7 +188,7 @@ PatchApplier applier = new PatchApplier(repo);
 PatchApplier.PatchResult result = applier.apply(changes);
 
 if (result.hasFailures()) {
-PatchErrorDialog.show(parent, result, repo);
+reportError(result);
 }
 
 if (result.hasSuccesses()) {
@@ -412,5 +423,9 @@ return text.replace("&", "&amp;")
 .replace(">", "&gt;");
 }
 }
+
+
+
+
 
 
