@@ -17,6 +17,7 @@ import javax.swing.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
@@ -101,8 +102,9 @@ JOptionPane.ERROR_MESSAGE
 return;
 }
 
-if (Boolean.TRUE.equals(multiPatchMode.get()) && PatchParser.containsPatch(text)) {
-handleMultiPatch(text);
+if (Boolean.TRUE.equals(multiPatchMode.get()) &&
+(PatchParser.containsPatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
+handleSmartPaste(text);
 return;
 }
 
@@ -135,6 +137,65 @@ this.errorCallback = errorCallback;
 private void reportError(PatchApplier.PatchResult result) {
 if (errorCallback != null) errorCallback.accept(result);
 PatchErrorDialog.show((JFrame) parent, result, repo);
+}
+
+private void handleSmartPaste(String text) {
+SmartPasteExtractor extractor = new SmartPasteExtractor(text);
+List<SmartPasteExtractor.Entry> entries = extractor.extract(
+SmartPasteSettings.isAllowClasses()
+);
+
+if (entries.isEmpty()) {
+JOptionPane.showMessageDialog(parent,
+"Smart Paste: no patches or class blocks found.",
+"Nothing Found", JOptionPane.INFORMATION_MESSAGE);
+return;
+}
+
+List<String> logLines = new ArrayList<>();
+
+for (SmartPasteExtractor.Entry entry : entries) {
+switch (entry) {
+case SmartPasteExtractor.PatchEntry pe -> {
+List<PatchChange> changes;
+try {
+changes = new PatchParser().parse(pe.text());
+} catch (IllegalArgumentException e) {
+PatchErrorDialog.show(parent,
+"Patch format error:\n\n" + e.getMessage(), null, null);
+continue;
+}
+PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
+if (result.hasFailures()) reportError(result);
+if (result.hasSuccesses()) {
+refreshCallback.run();
+notifyCodeChangedForPatch(changes);
+for (String s : result.successSummary()) logLines.add(s);
+}
+}
+case SmartPasteExtractor.ClassEntry ce -> {
+handlePasteInternal(ce.text(), logLines);
+}
+}
+}
+
+if (!logLines.isEmpty() && statusLogger != null) {
+int patchCount = (int) entries.stream()
+.filter(e -> e instanceof SmartPasteExtractor.PatchEntry).count();
+int classCount = (int) entries.stream()
+.filter(e -> e instanceof SmartPasteExtractor.ClassEntry).count();
+String footer = "─".repeat(32);
+String header = "── Smart Paste: "
++ (patchCount > 0 ? patchCount + " patch block" + (patchCount > 1 ? "s" : "") : "")
++ (patchCount > 0 && classCount > 0 ? ", " : "")
++ (classCount > 0 ? classCount + " class" + (classCount > 1 ? "es" : "") : "")
++ ", " + logLines.size() + " change" + (logLines.size() > 1 ? "s" : "") + " ──";
+statusLogger.accept(footer);
+for (int i = logLines.size() - 1; i >= 0; i--) {
+statusLogger.accept(logLines.get(i));
+}
+statusLogger.accept(header);
+}
 }
 
 private void handleMultiPatch(String text) {
@@ -217,6 +278,10 @@ statusLogger.accept(header);
 // ------------------------------------------------------------------
 
 private void handlePaste(String classCode) {
+handlePasteInternal(classCode, null);
+}
+
+private void handlePasteInternal(String classCode, List<String> logCollector) {
 String packageName = parser.parsePackage(classCode);
 String className = parser.parseClassName(classCode);
 
@@ -243,18 +308,21 @@ JOptionPane.WARNING_MESSAGE
 if (choice != JOptionPane.OK_OPTION) return;
 }
 
+boolean smartSkipCreate    = logCollector != null && SmartPasteSettings.isSkipCreateConfirm();
+boolean smartSkipOverwrite = logCollector != null && SmartPasteSettings.isSkipOverwriteConfirm();
+
 File sourceRoot = rootDetector.detect(packageName);
 File existingFile = fileWriter.findExistingFile(packageName, className, sourceRoot);
 boolean isNewFile = existingFile == null;
 
-if (!isNewFile && !confirmOverwrite(className, existingFile, classCode)) {
+if (!isNewFile && !smartSkipOverwrite && !confirmOverwrite(className, existingFile, classCode)) {
 return;
 }
 
 try {
 File file;
 if (isNewFile) {
-if (!confirmCreate(className, packageName, sourceRoot)) return;
+if (!smartSkipCreate && !confirmCreate(className, packageName, sourceRoot)) return;
 file = fileWriter.createFile(packageName, className, classCode, sourceRoot);
 } else {
 fileWriter.updateFile(existingFile, classCode);
@@ -268,12 +336,15 @@ if (isNewFile) {
 addPanelCallback.accept(file.getAbsolutePath(), file.getName());
 }
 
-if (statusLogger != null) {
-statusLogger.accept(
-(isNewFile ? "Class Created: " : "Class Updated: ")
-+ className + " (" + file.getAbsolutePath() + ")"
-);
+String logMsg = (isNewFile ? "Class Created: " : "Class Updated: ")
++ className + " (" + file.getAbsolutePath() + ")";
+
+if (logCollector != null) {
+logCollector.add(logMsg);
+} else if (statusLogger != null) {
+statusLogger.accept(logMsg);
 }
+
 if (!isNewFile) {
 notifyCodeChanged(file.getAbsolutePath(), repo.getClassCodeMap().get(file.getAbsolutePath()));
 }
@@ -423,6 +494,9 @@ return text.replace("&", "&amp;")
 .replace(">", "&gt;");
 }
 }
+
+
+
 
 
 

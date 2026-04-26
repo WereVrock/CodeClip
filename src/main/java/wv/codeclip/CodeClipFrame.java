@@ -17,6 +17,8 @@ import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.ui.PasteClassHandler;
 import wv.codeclip.ui.ClassActions;
 import wv.codeclip.ui.SimpleDocumentListener;
+import wv.codeclip.ui.SmartPasteSettings;
+import wv.codeclip.ui.SmartPasteSettingsDialog;
 import wv.codeclip.patch.PatchApplier;
 import wv.codeclip.patch.PatchErrorDialog;
 
@@ -95,6 +97,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         notesBuffer = settings.loadNotes();
         includeInstructionsCheck.setSelected(settings.loadIncludeInstructions());
         smartPasteCheck.setSelected(settings.loadSmartPaste());
+        SmartPasteSettings.load(settings);
         renderNotes();
 
         for (String path : settings.loadClassPaths()) {
@@ -121,6 +124,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 settings.saveNotes(notesBuffer);
                 settings.saveIncludeInstructions(includeInstructionsCheck.isSelected());
                 settings.saveSmartPaste(smartPasteCheck.isSelected());
+                SmartPasteSettings.save(settings);
                 settings.saveClassPaths(
                         repo.getClassCodeMap().keySet().toArray(new String[0])
                 );
@@ -283,6 +287,15 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         buttons.add(checkpoint);
         buttons.add(smartPasteCheck);
         buttons.add(lastErrorBtn);
+
+        smartPasteCheck.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    new SmartPasteSettingsDialog(CodeClipFrame.this, settings).setVisible(true);
+                }
+            }
+        });
 
         add(buttons, BorderLayout.SOUTH);
     }

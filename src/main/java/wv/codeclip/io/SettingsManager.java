@@ -88,6 +88,30 @@ public class SettingsManager {
         return Boolean.parseBoolean(props.getProperty("smart.paste", "false"));
     }
 
+    public void saveSmartPasteAllowClasses(boolean value) {
+        props.setProperty("smart.paste.allow.classes", String.valueOf(value));
+    }
+
+    public boolean loadSmartPasteAllowClasses() {
+        return Boolean.parseBoolean(props.getProperty("smart.paste.allow.classes", "true"));
+    }
+
+    public void saveSmartPasteSkipCreateConfirm(boolean value) {
+        props.setProperty("smart.paste.skip.create", String.valueOf(value));
+    }
+
+    public boolean loadSmartPasteSkipCreateConfirm() {
+        return Boolean.parseBoolean(props.getProperty("smart.paste.skip.create", "false"));
+    }
+
+    public void saveSmartPasteSkipOverwriteConfirm(boolean value) {
+        props.setProperty("smart.paste.skip.overwrite", String.valueOf(value));
+    }
+
+    public boolean loadSmartPasteSkipOverwriteConfirm() {
+        return Boolean.parseBoolean(props.getProperty("smart.paste.skip.overwrite", "false"));
+    }
+
     public static void main(String[] args) {
         SettingsManager settings = new SettingsManager();
         Rectangle defaultBounds = new Rectangle(100, 100, 475, 300);

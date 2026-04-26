@@ -66,7 +66,22 @@ public final class AiInstructions {
           Put commentary before @@PATCH or after @@END.
         - Never use placeholders like // ... or // existing code.
         - Every @@PATCH block must end with @@END.
-        
+
+        ----------------------------------------------------------------
+        WHOLE CLASS FORMAT
+        ----------------------------------------------------------------
+
+        When sending a complete class (new or updated), wrap it like this:
+//@@CLASS
+    package com.example;
+    public class MyClass {
+        ...
+    }
+    //@@CLASSEND
+
+        Use this when sending full class replacements alongside patches
+        in the same message. Smart Paste will extract and apply them
+        in document order together with any @@PATCH blocks.
 
         ================================================================
         """;
