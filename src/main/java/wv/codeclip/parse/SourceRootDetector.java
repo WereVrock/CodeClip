@@ -37,12 +37,18 @@ public class SourceRootDetector {
         Map<String, File> mainClasses = collectMainClasses();
 
         if (mainClasses.containsKey(PREFERRED_MAIN_CLASS_NAME)) {
-            return mainClasses.get(PREFERRED_MAIN_CLASS_NAME).getParentFile();
+            File mainFile = mainClasses.get(PREFERRED_MAIN_CLASS_NAME);
+            return resolveSourceRoot(mainFile.getParentFile(), getPackageOf(PREFERRED_MAIN_CLASS_NAME));
         }
 
         if (!mainClasses.isEmpty()) {
             File chosen = promptUserToPickMainClass(mainClasses);
-            if (chosen != null) return chosen;
+            if (chosen != null) {
+                try {
+                    String code = Files.readString(chosen.toPath());
+                    return resolveSourceRoot(chosen.getParentFile(), parser.parsePackage(code));
+                } catch (IOException ignored) {}
+            }
         }
 
         if (!repo.getClassFileMap().isEmpty()) {
@@ -62,7 +68,7 @@ public class SourceRootDetector {
             File dir = file.getParentFile();
             if (dir == null) continue;
             String abs = dir.getAbsolutePath();
-            if (abs.endsWith(pkgPath)) {
+            if (abs.endsWith(File.separator + pkgPath)) {
                 return new File(abs.substring(0, abs.length() - pkgPath.length() - 1));
             }
         }
@@ -95,7 +101,30 @@ public class SourceRootDetector {
                 options[0]
         );
         if (choice != null && mainClasses.containsKey(choice)) {
-            return mainClasses.get(choice).getParentFile();
+            return mainClasses.get(choice);
+        }
+        return null;
+    }
+
+    private File resolveSourceRoot(File packageDir, String packageName) {
+        if (packageName == null || packageName.isEmpty()) return packageDir;
+        int depth = packageName.split("\\.").length;
+        File root = packageDir;
+        for (int i = 0; i < depth; i++) {
+            if (root == null) return packageDir;
+            root = root.getParentFile();
+        }
+        return root != null ? root : packageDir;
+    }
+
+    private String getPackageOf(String className) {
+        for (File file : repo.getClassFileMap().values()) {
+            try {
+                String code = Files.readString(file.toPath());
+                if (className.equals(parser.parseClassName(code))) {
+                    return parser.parsePackage(code);
+                }
+            } catch (IOException ignored) {}
         }
         return null;
     }
@@ -119,9 +148,18 @@ public class SourceRootDetector {
                     break;
                 }
             }
-            if (allMatch) return common;
+            if (allMatch) break;
             common = common.getParentFile();
         }
-        return null;
+        if (common == null) return null;
+
+        File firstFile = repo.getClassFileMap().values().iterator().next();
+        try {
+            String code = Files.readString(firstFile.toPath());
+            String pkg = parser.parsePackage(code);
+            return resolveSourceRoot(common, pkg);
+        } catch (IOException ignored) {}
+
+        return common;
     }
 }
