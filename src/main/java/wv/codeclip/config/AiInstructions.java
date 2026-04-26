@@ -13,7 +13,7 @@ public final class AiInstructions {
         When making surgical changes to existing code, produce a @@PATCH block. This should be in a code block.
         This is the preferred method for targeted changes. As an
         alternative, you can send the entire updated class as plain code. All the patching should be in a single block unless it is necessary
-        to do otherwise
+        to do otherwise. Use method replacement if it you are gonna change more than half of it.
 
         ----------------------------------------------------------------
         PATCH FORMAT

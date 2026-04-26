@@ -108,34 +108,43 @@ public class PasteClassHandler {
     // ------------------------------------------------------------------
 
 private void handlePatch(String text) {
-        PatchParser patchParser = new PatchParser();
-        List<PatchChange> changes;
+    PatchParser patchParser = new PatchParser();
+    List<PatchChange> changes;
 
-        try {
-            changes = patchParser.parse(text);
-        } catch (IllegalArgumentException e) {
-            PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
-            return;
-        }
+    try {
+        changes = patchParser.parse(text);
+    } catch (IllegalArgumentException e) {
+        PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
+        return;
+    }
 
-        PatchApplier applier = new PatchApplier(repo);
-        PatchApplier.PatchResult result = applier.apply(changes);
+    PatchApplier applier = new PatchApplier(repo);
+    PatchApplier.PatchResult result = applier.apply(changes);
 
-        if (result.hasFailures()) {
-            PatchErrorDialog.show(parent, result, repo);
-        }
+    if (result.hasFailures()) {
+        PatchErrorDialog.show(parent, result, repo);
+    }
 
-        if (result.hasSuccesses()) {
-            refreshCallback.run();
-            notifyCodeChangedForPatch(changes);
-            if (statusLogger != null) {
-                List<String> summary = result.successSummary();
+    if (result.hasSuccesses()) {
+        refreshCallback.run();
+        notifyCodeChangedForPatch(changes);
+        if (statusLogger != null) {
+            List<String> summary = result.successSummary();
+            if (summary.size() == 1) {
+                statusLogger.accept(summary.get(0));
+            } else {
+                String footer = "─".repeat(32);
+                String header = "── Patch (" + summary.size() + " changes) " +
+                                "─".repeat(Math.max(0, 32 - 10 - String.valueOf(summary.size()).length()));
+                statusLogger.accept(footer);
                 for (int i = summary.size() - 1; i >= 0; i--) {
                     statusLogger.accept(summary.get(i));
                 }
+                statusLogger.accept(header);
             }
         }
     }
+}
 
 // ------------------------------------------------------------------
     // Class paste handling (unchanged)

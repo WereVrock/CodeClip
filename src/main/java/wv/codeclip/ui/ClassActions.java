@@ -57,7 +57,7 @@ public class ClassActions {
      * Copies code + (optionally) instructions + notes to clipboard.
      * Order: code → instructions (if ticked) → notes
      */
-    public void copyAll(Runnable clearLogsCallback) {
+    public void copyAll(Runnable clearLogsCallback, String cleanNotes) {
         StringBuilder sb = new StringBuilder();
         sb.append(classTextArea.getText());
 
@@ -66,7 +66,7 @@ public class ClassActions {
         }
 
         sb.append("\n\n// === Notes ===\n")
-          .append(notesComponent.getText())
+          .append(cleanNotes)
           .append(NOTES_END_MARK);
 
         Toolkit.getDefaultToolkit()

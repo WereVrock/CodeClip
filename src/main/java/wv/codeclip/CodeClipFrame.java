@@ -194,7 +194,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         );
 
         copy.addActionListener(e ->
-                actions.copyAll(this::clearTempLogs)
+                actions.copyAll(this::clearTempLogs, notesBuffer)
         );
 
         copyCode.addActionListener(e -> actions.copyCodeOnly());
