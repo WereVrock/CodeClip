@@ -399,9 +399,16 @@ public void clearTempLogs() {
         new FileDropHandler(this::addClass).install(this);
     }
 
-    private void addClass(File file) {
+private void addClass(File file) {
         String path = file.getAbsolutePath();
-        if (repo.getClassCodeMap().containsKey(path)) return;
+
+        if (repo.getClassCodeMap().containsKey(path)) {
+            if (repo.getDisabledClasses().remove(path)) {
+                refreshText();
+                refreshPanels();
+            }
+            return;
+        }
 
         SwingWorker<String, Void> worker = new SwingWorker<>() {
             @Override
@@ -418,13 +425,14 @@ public void clearTempLogs() {
                     repo.setCheckpoint(path, code);
                     addClassPanel(path, file.getName());
                     refreshText();
+                    refreshPanels();
                 } catch (Exception ignored) {}
             }
         };
         worker.execute();
     }
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // Class panels
     // ------------------------------------------------------------------
 
