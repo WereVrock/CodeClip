@@ -44,6 +44,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
     // Prevent programmatic UI updates from triggering the notes document listener
     private boolean internalUpdate = false;
+    private boolean logClearLocked = false;
 
     private final JPanel classPanel = new JPanel();
     private JSplitPane split;
@@ -107,6 +108,23 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
         notesTextPane.addFocusListener(this);
 
+        notesTextPane.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                if (e.getButton() == java.awt.event.MouseEvent.BUTTON3) {
+                    logClearLocked = true;
+                }
+            }
+
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 2 && e.getButton() == java.awt.event.MouseEvent.BUTTON1) {
+                    logClearLocked = false;
+                    clearTempLogs();
+                }
+            }
+        });
+
         notesTextPane.getDocument().addDocumentListener(
                 new SimpleDocumentListener(() -> {
                     if (!internalUpdate) {
@@ -139,12 +157,16 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     // FocusListener
     // ------------------------------------------------------------------
 
-    @Override
-    public void focusGained(java.awt.event.FocusEvent e) {
+    
+
+@Override
+public void focusGained(java.awt.event.FocusEvent e) {
+    if (!logClearLocked) {
         clearTempLogs();
     }
+}
 
-    @Override
+@Override
     public void focusLost(java.awt.event.FocusEvent e) {}
 
     // ------------------------------------------------------------------
@@ -198,6 +220,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         JButton copyArch         = new JButton("Copy Architecture");
         JButton sortOrder        = new JButton(SORT_LABELS[sortMode]);
         JButton checkpoint       = new JButton("Checkpoint");
+        updateCheckpointButtonColor(checkpoint);
         lastErrorBtn             = new JButton("Last Error");
         lastErrorBtn.setEnabled(false);
         lastErrorBtn.addActionListener(e -> {
@@ -596,7 +619,22 @@ private void addClass(File file) {
     private record PanelEntry(JPanel panel, String path, String name,
                                boolean disabled, int insertionIdx) {}
 
-    private boolean isUnsynced(String path) {
+private void updateCheckpointButtonColor(JButton btn) {
+    if (btn == null) {
+        for (Component c : ((JPanel) getContentPane().getComponent(2)).getComponents()) {
+            if (c instanceof JButton b && (b.getText().equals("Checkpoint") || b.getText().equals("Checkpoint ✓"))) {
+                btn = b;
+                break;
+            }
+        }
+    }
+    if (btn == null) return;
+    boolean allInSync = !repo.hasPendingRestores();
+    btn.setText(allInSync ? "Checkpoint ✓" : "Checkpoint");
+    btn.setForeground(UIManager.getColor("Button.foreground"));
+}
+
+private boolean isUnsynced(String path) {
         String current    = repo.getClassCodeMap().get(path);
         String checkpoint = repo.getCheckpointCodeMap().get(path);
         if (current == null || checkpoint == null) return false;
@@ -625,12 +663,14 @@ public void setLastPatchError(PatchApplier.PatchResult result) {
     }
 
 public void onCodeChanged(String path, String code) {
-        if (!repo.getCheckpointCodeMap().containsKey(path)) {
-            repo.setCheckpoint(path, code);
-        }
-        if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
-            checkpointDialog.refresh();
-        }
-        refreshPanels();
+    if (!repo.getCheckpointCodeMap().containsKey(path)) {
+        repo.setCheckpoint(path, code);
     }
+    if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
+        checkpointDialog.refresh();
+    }
+    refreshPanels();
+    updateCheckpointButtonColor(null);
+}
+
 }

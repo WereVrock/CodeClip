@@ -211,48 +211,67 @@ private String applyFindReplace(PatchChange.FindReplace fr, String code)
         return before + "\n\n" + replacement + "\n\n" + after;
     }
 
-    private List<int[]> findMethodExtents(String code, String methodName) {
-        List<int[]> results = new ArrayList<>();
-        String[] lines = code.split("\n", -1);
+private List<int[]> findMethodExtents(String code, String methodName) {
+    List<int[]> results = new ArrayList<>();
+    String[] lines = code.split("\n", -1);
 
-        int[] lineStart = new int[lines.length + 1];
-        lineStart[0] = 0;
-        for (int i = 0; i < lines.length; i++) {
-            lineStart[i + 1] = lineStart[i] + lines[i].length() + 1;
-        }
-
-        for (int i = 0; i < lines.length; i++) {
-            String trimmed = lines[i].trim();
-            if (!isMethodSignatureLine(trimmed, methodName)) continue;
-
-            int braceStart = findOpeningBrace(lines, i, lineStart);
-            if (braceStart < 0) continue;
-
-            int methodStart = lineStart[i];
-            int end = traceToClosingBrace(code, braceStart);
-            if (end < 0) continue;
-
-            results.add(new int[]{methodStart, end});
-        }
-
-        return results;
+    int[] lineStart = new int[lines.length + 1];
+    lineStart[0] = 0;
+    for (int i = 0; i < lines.length; i++) {
+        lineStart[i + 1] = lineStart[i] + lines[i].length() + 1;
     }
 
-    private boolean isMethodSignatureLine(String trimmed, String methodName) {
-        if (trimmed.startsWith("//") || trimmed.startsWith("*")) return false;
-        String token = methodName + "(";
-        int idx = 0;
-        while ((idx = trimmed.indexOf(token, idx)) >= 0) {
-            char before = idx > 0 ? trimmed.charAt(idx - 1) : ' ';
-            if (!Character.isLetterOrDigit(before) && before != '_') {
-                return true;
+    for (int i = 0; i < lines.length; i++) {
+        String trimmed = lines[i].trim();
+        if (!isMethodSignatureLine(trimmed, methodName)) continue;
+
+        // Walk back over @Override and blank lines to include them in the extent
+        int startLine = i;
+        for (int j = i - 1; j >= 0; j--) {
+            String prev = lines[j].trim();
+            if (prev.equals("@Override") || prev.isEmpty()) {
+                startLine = j;
+            } else {
+                break;
             }
-            idx += token.length();
         }
-        return false;
+
+        int braceStart = findOpeningBrace(lines, i, lineStart);
+        if (braceStart < 0) continue;
+
+        int methodStart = lineStart[startLine];
+        int end = traceToClosingBrace(code, braceStart);
+        if (end < 0) continue;
+
+        results.add(new int[]{methodStart, end});
     }
 
-    private int findOpeningBrace(String[] lines, int sigLine, int[] lineStart) {
+    return results;
+}
+
+private boolean isMethodSignatureLine(String trimmed, String methodName) {
+    if (trimmed.startsWith("//") || trimmed.startsWith("*")) return false;
+
+    // Must contain at least one declaration keyword to be a method signature
+    boolean hasDeclarationKeyword =
+            trimmed.contains("public ") || trimmed.contains("private ") ||
+            trimmed.contains("protected ") || trimmed.contains("static ") ||
+            trimmed.contains("void ") || trimmed.contains("@Override");
+    if (!hasDeclarationKeyword) return false;
+
+    String token = methodName + "(";
+    int idx = 0;
+    while ((idx = trimmed.indexOf(token, idx)) >= 0) {
+        char before = idx > 0 ? trimmed.charAt(idx - 1) : ' ';
+        if (!Character.isLetterOrDigit(before) && before != '_') {
+            return true;
+        }
+        idx += token.length();
+    }
+    return false;
+}
+
+private int findOpeningBrace(String[] lines, int sigLine, int[] lineStart) {
         for (int i = sigLine; i < Math.min(sigLine + 5, lines.length); i++) {
             int idx = lines[i].indexOf('{');
             if (idx >= 0) {

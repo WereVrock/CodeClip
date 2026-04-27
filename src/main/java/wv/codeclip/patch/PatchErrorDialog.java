@@ -48,8 +48,10 @@ public class PatchErrorDialog extends JDialog {
                     if (classCode != null) {
                         clipboard.write(classCode);
                         btn.setText("Copied: " + fileName);
+                        btn.setForeground(new Color(30, 120, 30));
                     } else {
                         btn.setText("Source not available: " + fileName);
+                        btn.setForeground(Color.RED);
                     }
                 });
                 classButtonsPanel.add(btn);
@@ -85,7 +87,8 @@ public class PatchErrorDialog extends JDialog {
                     }
                 }
                 clipboard.write(sb.toString().stripTrailing());
-                copyAllClasses.setText("Copied!");
+                copyAllClasses.setText("Copied All Failed Classes!");
+                copyAllClasses.setForeground(new Color(30, 120, 30));
             });
             bottomPanel.add(copyAllClasses);
         }
@@ -104,13 +107,15 @@ public class PatchErrorDialog extends JDialog {
             }
             sb.append(errorMessage);
             clipboard.write(sb.toString().stripTrailing());
-            copyBothBtn.setText("Copied!");
+            copyBothBtn.setText("Copied All + Error!");
+            copyBothBtn.setForeground(new Color(30, 120, 30));
         });
 
         JButton copyErrorBtn = new JButton("Copy Error Report");
         copyErrorBtn.addActionListener(e -> {
             clipboard.write(errorMessage);
-            copyErrorBtn.setText("Copied!");
+            copyErrorBtn.setText("Copied Error Report!");
+            copyErrorBtn.setForeground(new Color(30, 120, 30));
         });
 
         JButton closeBtn = new JButton("Close");

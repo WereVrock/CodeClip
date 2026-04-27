@@ -43,6 +43,8 @@ public class CheckpointDialog extends JDialog {
     private final JButton commitBtn     = new JButton("Commit to Disk");
     private final JButton setCheckBtn   = new JButton("Set New Checkpoint");
 
+    private static final Color BTN_OK_FG = new Color(30, 120, 30);
+
     /** Tracks which paths are currently restored (diverge from checkpoint). */
     private final Map<String, String> pendingRestores = new HashMap<>();
 
@@ -150,8 +152,11 @@ public class CheckpointDialog extends JDialog {
             detailLabel.setText("No pending restores. Disk and memory are in sync.");
         }
 
+        boolean allInSync = !hasPending && !hasCheckpointDiff;
         restoreBtn.setEnabled(hasCheckpointDiff || hasPending);
         commitBtn.setEnabled(hasPending);
+        setCheckBtn.setEnabled(!allInSync);
+        setCheckBtn.setForeground(allInSync ? BTN_OK_FG : UIManager.getColor("Button.foreground"));
     }
 
     // ------------------------------------------------------------------
