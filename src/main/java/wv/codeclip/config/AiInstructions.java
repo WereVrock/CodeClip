@@ -71,13 +71,15 @@ public final class AiInstructions {
         WHOLE CLASS FORMAT
         ----------------------------------------------------------------
 
-        When sending a complete class (new or updated), wrap it like this:
-//@@CLASS
-    package com.example;
-    public class MyClass {
-        ...
-    }
-    //@@CLASSEND
+        When sending a complete class (new or updated), wrap it in a
+        java code fence:
+
+        ```java
+        package com.example;
+        public class MyClass {
+            ...
+        }
+        ```
 
         Use this when sending full class replacements alongside patches
         in the same message. Smart Paste will extract and apply them
