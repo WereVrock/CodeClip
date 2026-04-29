@@ -109,8 +109,11 @@ public class PatchParser {
                 // expect @@REPLACE: next
                 while (i < lines.length && lines[i].isBlank()) i++;
                 if (i >= lines.length || !lines[i].trim().equals(MARKER_REPLACE)) {
+                    String found = i < lines.length ? lines[i].trim() : "<end of input>";
                     throw new IllegalArgumentException(
-                            "Expected @@REPLACE: after @@METHOD at line " + (i + 1));
+                            "Expected @@REPLACE: after @@METHOD at line " + (i + 1) +
+                            "\nFound instead: \"" + found + "\"" +
+                            "\nMake sure @@REPLACE: appears on its own line after @@METHOD:");
                 }
                 i++;
                 String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_METHOD + "|" + MARKER_FIND;
