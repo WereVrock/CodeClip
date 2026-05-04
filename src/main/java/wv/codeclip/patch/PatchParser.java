@@ -43,6 +43,7 @@ public class PatchParser {
 
     public static String PATCH_MARKER() { return MARKER_PATCH; }
     public static String END_MARKER()   { return MARKER_END; }
+    
 
     /**
      * Parses the patch block. Throws IllegalArgumentException with a descriptive

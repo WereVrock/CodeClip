@@ -140,137 +140,143 @@ PatchErrorDialog.show((JFrame) parent, result, repo);
 }
 
 private void handleSmartPaste(String text) {
-SmartPasteExtractor extractor = new SmartPasteExtractor(text);
-List<SmartPasteExtractor.Entry> entries = extractor.extract(
-SmartPasteSettings.isAllowClasses()
-);
+    SmartPasteExtractor extractor = new SmartPasteExtractor(text);
+    List<SmartPasteExtractor.Entry> entries = extractor.extract(
+        SmartPasteSettings.isAllowClasses()
+    );
 
-if (entries.isEmpty()) {
-JOptionPane.showMessageDialog(parent,
-"Smart Paste: no patches or class blocks found.",
-"Nothing Found", JOptionPane.INFORMATION_MESSAGE);
-return;
-}
+    if (entries.isEmpty()) {
+        JOptionPane.showMessageDialog(parent,
+            "Smart Paste: no patches or class blocks found.",
+            "Nothing Found", JOptionPane.INFORMATION_MESSAGE);
+        return;
+    }
 
-List<String> logLines = new ArrayList<>();
+    List<String> logLines = new ArrayList<>();
 
-for (SmartPasteExtractor.Entry entry : entries) {
-switch (entry) {
-case SmartPasteExtractor.PatchEntry pe -> {
-List<PatchChange> changes;
-try {
-changes = new PatchParser().parse(pe.text());
-} catch (IllegalArgumentException e) {
-PatchErrorDialog.show(parent,
-"Patch format error:\n\n" + e.getMessage(), null, null);
-continue;
-}
-PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
-if (result.hasFailures()) reportError(result);
-if (result.hasSuccesses()) {
-refreshCallback.run();
-notifyCodeChangedForPatch(changes);
-for (String s : result.successSummary()) logLines.add(s);
-}
-}
-case SmartPasteExtractor.ClassEntry ce -> {
-handlePasteInternal(ce.text(), logLines);
-}
-}
-}
+    for (SmartPasteExtractor.Entry entry : entries) {
+        switch (entry) {
+            case SmartPasteExtractor.PatchEntry pe -> {
+                List<PatchChange> changes;
+                try {
+                    changes = new PatchParser().parse(pe.text());
+                } catch (IllegalArgumentException e) {
+                    PatchErrorDialog.show(parent,
+                        "Patch format error:\n\n" + e.getMessage(), null, null);
+                    continue;
+                }
+                PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
+                if (result.hasFailures()) reportError(result);
+                if (result.hasSuccesses()) {
+                    refreshCallback.run();
+                    notifyCodeChangedForPatch(changes);
+                    for (String s : result.successSummary()) logLines.add(s);
+                }
+            }
+            case SmartPasteExtractor.ClassEntry ce -> {
+                handlePasteInternal(ce.text(), logLines);
+            }
+        }
+    }
 
-if (!logLines.isEmpty() && statusLogger != null) {
-int patchCount = (int) entries.stream()
-.filter(e -> e instanceof SmartPasteExtractor.PatchEntry).count();
-int classCount = (int) entries.stream()
-.filter(e -> e instanceof SmartPasteExtractor.ClassEntry).count();
-String footer = "─".repeat(32);
-String header = "── Smart Paste: "
-+ (patchCount > 0 ? patchCount + " patch block" + (patchCount > 1 ? "s" : "") : "")
-+ (patchCount > 0 && classCount > 0 ? ", " : "")
-+ (classCount > 0 ? classCount + " class" + (classCount > 1 ? "es" : "") : "")
-+ ", " + logLines.size() + " change" + (logLines.size() > 1 ? "s" : "") + " ──";
-statusLogger.accept(footer);
-for (int i = logLines.size() - 1; i >= 0; i--) {
-statusLogger.accept(logLines.get(i));
-}
-statusLogger.accept(header);
-}
+    if (!logLines.isEmpty() && statusLogger != null) {
+        int patchCount = (int) entries.stream()
+            .filter(e -> e instanceof SmartPasteExtractor.PatchEntry).count();
+        int classCount = (int) entries.stream()
+            .filter(e -> e instanceof SmartPasteExtractor.ClassEntry).count();
+        String footer = "─".repeat(32);
+        String time = java.time.LocalTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+        String header = "── Smart Paste [" + time + "]: "
+            + (patchCount > 0 ? patchCount + " patch block" + (patchCount > 1 ? "s" : "") : "")
+            + (patchCount > 0 && classCount > 0 ? ", " : "")
+            + (classCount > 0 ? classCount + " class" + (classCount > 1 ? "es" : "") : "")
+            + ", " + logLines.size() + " change" + (logLines.size() > 1 ? "s" : "") + " ──";
+        statusLogger.accept(footer);
+        for (int i = logLines.size() - 1; i >= 0; i--) {
+            statusLogger.accept(logLines.get(i));
+        }
+        statusLogger.accept(header);
+    }
 }
 
 private void handleMultiPatch(String text) {
-MultiPatchExtractor extractor = new MultiPatchExtractor();
-List<PatchChange> changes;
-int blockCount = extractor.countBlocks(text);
+    MultiPatchExtractor extractor = new MultiPatchExtractor();
+    List<PatchChange> changes;
+    int blockCount = extractor.countBlocks(text);
 
-try {
-changes = extractor.extractAll(text);
-} catch (IllegalArgumentException e) {
-PatchErrorDialog.show(parent, "Multi-patch format error:\n\n" + e.getMessage(), null, null);
-return;
-}
+    try {
+        changes = extractor.extractAll(text);
+    } catch (IllegalArgumentException e) {
+        PatchErrorDialog.show(parent, "Multi-patch format error:\n\n" + e.getMessage(), null, null);
+        return;
+    }
 
-PatchApplier applier = new PatchApplier(repo);
-PatchApplier.PatchResult result = applier.apply(changes);
+    PatchApplier applier = new PatchApplier(repo);
+    PatchApplier.PatchResult result = applier.apply(changes);
 
-if (result.hasFailures()) {
-reportError(result);
-}
+    if (result.hasFailures()) {
+        reportError(result);
+    }
 
-if (result.hasSuccesses()) {
-refreshCallback.run();
-notifyCodeChangedForPatch(changes);
-if (statusLogger != null) {
-List<String> summary = result.successSummary();
-String footer = "─".repeat(32);
-String header = "── Smart Paste: " + blockCount + " block" + (blockCount > 1 ? "s" : "") +
-", " + summary.size() + " change" + (summary.size() > 1 ? "s" : "") + " ──";
-statusLogger.accept(footer);
-for (int i = summary.size() - 1; i >= 0; i--) {
-statusLogger.accept(summary.get(i));
-}
-statusLogger.accept(header);
-}
-}
+    if (result.hasSuccesses()) {
+        refreshCallback.run();
+        notifyCodeChangedForPatch(changes);
+        if (statusLogger != null) {
+            List<String> summary = result.successSummary();
+            String footer = "─".repeat(32);
+            String time = java.time.LocalTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+            String header = "── Smart Paste [" + time + "]: " + blockCount + " block" + (blockCount > 1 ? "s" : "") +
+                ", " + summary.size() + " change" + (summary.size() > 1 ? "s" : "") + " ──";
+            statusLogger.accept(footer);
+            for (int i = summary.size() - 1; i >= 0; i--) {
+                statusLogger.accept(summary.get(i));
+            }
+            statusLogger.accept(header);
+        }
+    }
 }
 
 private void handlePatch(String text) {
-PatchParser patchParser = new PatchParser();
-List<PatchChange> changes;
+    PatchParser patchParser = new PatchParser();
+    List<PatchChange> changes;
 
-try {
-changes = patchParser.parse(text);
-} catch (IllegalArgumentException e) {
-PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
-return;
-}
+    try {
+        changes = patchParser.parse(text);
+    } catch (IllegalArgumentException e) {
+        PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
+        return;
+    }
 
-PatchApplier applier = new PatchApplier(repo);
-PatchApplier.PatchResult result = applier.apply(changes);
+    PatchApplier applier = new PatchApplier(repo);
+    PatchApplier.PatchResult result = applier.apply(changes);
 
-if (result.hasFailures()) {
-reportError(result);
-}
+    if (result.hasFailures()) {
+        reportError(result);
+    }
 
-if (result.hasSuccesses()) {
-refreshCallback.run();
-notifyCodeChangedForPatch(changes);
-if (statusLogger != null) {
-List<String> summary = result.successSummary();
-if (summary.size() == 1) {
-statusLogger.accept(summary.get(0));
-} else {
-String footer = "─".repeat(32);
-String header = "── Patch (" + summary.size() + " changes) " +
-"─".repeat(Math.max(0, 32 - 10 - String.valueOf(summary.size()).length()));
-statusLogger.accept(footer);
-for (int i = summary.size() - 1; i >= 0; i--) {
-statusLogger.accept(summary.get(i));
-}
-statusLogger.accept(header);
-}
-}
-}
+    if (result.hasSuccesses()) {
+        refreshCallback.run();
+        notifyCodeChangedForPatch(changes);
+        if (statusLogger != null) {
+            List<String> summary = result.successSummary();
+            String time = java.time.LocalTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+            if (summary.size() == 1) {
+                statusLogger.accept(summary.get(0) + " [" + time + "]");
+            } else {
+                String footer = "─".repeat(32);
+                String header = "── Patch [" + time + "] (" + summary.size() + " changes) " +
+                    "─".repeat(Math.max(0, 32 - 10 - String.valueOf(summary.size()).length()));
+                statusLogger.accept(footer);
+                for (int i = summary.size() - 1; i >= 0; i--) {
+                    statusLogger.accept(summary.get(i));
+                }
+                statusLogger.accept(header);
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------
