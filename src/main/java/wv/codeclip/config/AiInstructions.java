@@ -1,20 +1,17 @@
 package wv.codeclip.config;
 
 public final class AiInstructions {
-
     private AiInstructions() {}
-
     public static final String TEXT =
         """
         ================================================================
         CODECLIP PATCH INSTRUCTIONS
         ================================================================
-
         When making surgical changes to existing code, produce a @@PATCH block. This should be in a code block.
         This is the preferred method for targeted changes. As an
         alternative, you can send the entire updated class as plain code. All the patching should be in a single block unless it is necessary
-        to do otherwise. Use method replacement if it you are gonna change more than half of it.
-        
+        to do otherwise. Use method replacement if you are gonna change more than half of it.
+
         prefer method replacement over exact code replacement unless you are doing small changes
 
         ----------------------------------------------------------------
@@ -22,6 +19,8 @@ public final class AiInstructions {
         ----------------------------------------------------------------
 
         @@PATCH
+        @@TITLE: Short summary of what this patch does
+        @@DESC: Optional one-line detail or reason
 
         @@FILE: ExactFileName.java
         @@FIND:
@@ -39,6 +38,15 @@ public final class AiInstructions {
         ----------------------------------------------------------------
         DIRECTIVES
         ----------------------------------------------------------------
+
+        @@TITLE: (optional)
+          A short human-readable label for this patch.
+          Appears as a heading in the paste log.
+          Place immediately after @@PATCH, before any @@FILE:.
+
+        @@DESC: (optional)
+          A single line of extra context or reasoning.
+          Place after @@TITLE: (or after @@PATCH if no title).
 
         @@FILE:
           The exact filename including .java extension.
@@ -64,6 +72,7 @@ public final class AiInstructions {
         ----------------------------------------------------------------
 
         - One @@PATCH block per response. All changes go inside it.
+        - @@TITLE: and @@DESC: are optional but encouraged for clarity.
         - Do not put explanations or prose inside the @@PATCH block.
           Put commentary before @@PATCH or after @@END.
         - Never use placeholders like // ... or // existing code.
@@ -76,17 +85,16 @@ public final class AiInstructions {
         When sending a complete class (new or updated), wrap it in a
         java code fence:
 
-        ```java
+```java
         package com.example;
         public class MyClass {
             ...
         }
-        ```
+```
 
         Use this when sending full class replacements alongside patches
         in the same message. Smart Paste will extract and apply them
         in document order together with any @@PATCH blocks.
-
         ================================================================
         """;
 }

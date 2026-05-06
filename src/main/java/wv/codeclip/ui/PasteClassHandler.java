@@ -157,6 +157,8 @@ private void handleSmartPaste(String text) {
     for (SmartPasteExtractor.Entry entry : entries) {
         switch (entry) {
             case SmartPasteExtractor.PatchEntry pe -> {
+                String title = PatchParser.extractTitle(pe.text());
+                String desc  = PatchParser.extractDesc(pe.text());
                 List<PatchChange> changes;
                 try {
                     changes = new PatchParser().parse(pe.text());
@@ -170,6 +172,7 @@ private void handleSmartPaste(String text) {
                 if (result.hasSuccesses()) {
                     refreshCallback.run();
                     notifyCodeChangedForPatch(changes);
+                    if (title != null) logLines.add("── " + title + " ──" + (desc != null ? " " + desc : ""));
                     for (String s : result.successSummary()) logLines.add(s);
                 }
             }
@@ -184,9 +187,9 @@ private void handleSmartPaste(String text) {
             .filter(e -> e instanceof SmartPasteExtractor.PatchEntry).count();
         int classCount = (int) entries.stream()
             .filter(e -> e instanceof SmartPasteExtractor.ClassEntry).count();
-        String footer = "─".repeat(32);
         String time = java.time.LocalTime.now()
             .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+        String footer = "─".repeat(32);
         String header = "── Smart Paste [" + time + "]: "
             + (patchCount > 0 ? patchCount + " patch block" + (patchCount > 1 ? "s" : "") : "")
             + (patchCount > 0 && classCount > 0 ? ", " : "")
@@ -239,6 +242,9 @@ private void handleMultiPatch(String text) {
 }
 
 private void handlePatch(String text) {
+    String title = PatchParser.extractTitle(text);
+    String desc  = PatchParser.extractDesc(text);
+
     PatchParser patchParser = new PatchParser();
     List<PatchChange> changes;
 
@@ -263,7 +269,7 @@ private void handlePatch(String text) {
             List<String> summary = result.successSummary();
             String time = java.time.LocalTime.now()
                 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
-            if (summary.size() == 1) {
+            if (summary.size() == 1 && title == null) {
                 statusLogger.accept(summary.get(0) + " [" + time + "]");
             } else {
                 String footer = "─".repeat(32);
@@ -273,6 +279,8 @@ private void handlePatch(String text) {
                 for (int i = summary.size() - 1; i >= 0; i--) {
                     statusLogger.accept(summary.get(i));
                 }
+                if (desc != null) statusLogger.accept("  " + desc);
+                if (title != null) statusLogger.accept("── " + title + " ──");
                 statusLogger.accept(header);
             }
         }

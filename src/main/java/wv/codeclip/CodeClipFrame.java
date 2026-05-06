@@ -384,36 +384,45 @@ public void clearTempLogs() {
      *   "Class Created: Foo (path)"   → prefix | Foo | path
      *   "✓ FindReplace in Foo.java"   → prefix | Foo.java
      */
-    private void appendLogLine(StyledDocument doc, String line,
-                                Style base, Style highlight)
-            throws BadLocationException {
 
-        int colonSpace = line.indexOf(": ");
-        if (colonSpace < 0) {
-            doc.insertString(doc.getLength(), line, base);
-            return;
-        }
+private void appendLogLine(StyledDocument doc, String line,
+                            Style base, Style highlight)
+        throws BadLocationException {
 
-        String prefix = line.substring(0, colonSpace + 2);
-        String rest   = line.substring(colonSpace + 2);
-
-        int parenIdx = rest.indexOf(" (");
-        if (parenIdx < 0) {
-            // No path suffix — highlight the whole remainder
-            doc.insertString(doc.getLength(), prefix, base);
-            doc.insertString(doc.getLength(), rest, highlight);
-            return;
-        }
-
-        String name     = rest.substring(0, parenIdx);
-        String pathPart = rest.substring(parenIdx);
-
-        doc.insertString(doc.getLength(), prefix, base);
-        doc.insertString(doc.getLength(), name, highlight);
-        doc.insertString(doc.getLength(), pathPart, base);
+    if (line.startsWith("──") && !line.contains("Smart Paste") && !line.contains("Patch [")) {
+        SimpleAttributeSet title = new SimpleAttributeSet();
+        StyleConstants.setFontFamily(title, Font.MONOSPACED);
+        StyleConstants.setFontSize(title, 12);
+        StyleConstants.setForeground(title, new Color(180, 30, 30));
+        doc.insertString(doc.getLength(), line, title);
+        return;
     }
 
-    private String extractNotesFromPane() {
+    int colonSpace = line.indexOf(": ");
+    if (colonSpace < 0) {
+        doc.insertString(doc.getLength(), line, base);
+        return;
+    }
+
+    String prefix = line.substring(0, colonSpace + 2);
+    String rest   = line.substring(colonSpace + 2);
+
+    int parenIdx = rest.indexOf(" (");
+    if (parenIdx < 0) {
+        doc.insertString(doc.getLength(), prefix, base);
+        doc.insertString(doc.getLength(), rest, highlight);
+        return;
+    }
+
+    String name     = rest.substring(0, parenIdx);
+    String pathPart = rest.substring(parenIdx);
+
+    doc.insertString(doc.getLength(), prefix, base);
+    doc.insertString(doc.getLength(), name, highlight);
+    doc.insertString(doc.getLength(), pathPart, base);
+}
+
+private String extractNotesFromPane() {
         try {
             String full = notesTextPane.getDocument()
                     .getText(0, notesTextPane.getDocument().getLength());
