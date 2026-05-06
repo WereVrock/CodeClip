@@ -12,8 +12,12 @@ public class PatchUndoManager {
     private final Deque<Entry> undoStack = new ArrayDeque<>();
     private final Deque<Entry> redoStack = new ArrayDeque<>();
     private java.util.function.Consumer<String> panelRemovalCallback;
+    private java.util.function.BiConsumer<String, String> panelAddCallback;
     public void setPanelRemovalCallback(java.util.function.Consumer<String> callback) {
         this.panelRemovalCallback = callback;
+    }
+    public void setPanelAddCallback(java.util.function.BiConsumer<String, String> callback) {
+        this.panelAddCallback = callback;
     }
     public void pushUndo(Map<String, String> snapshot, String title) {
         undoStack.addFirst(new Entry(snapshot, title));
@@ -69,8 +73,13 @@ public class PatchUndoManager {
             } else {
                 File target = (file != null) ? file : new File(path);
                 Files.writeString(target.toPath(), code);
+                boolean wasAbsent = !repo.getClassCodeMap().containsKey(path);
                 repo.getClassCodeMap().put(path, code);
                 repo.getClassFileMap().put(path, target);
+                repo.getDisabledClasses().remove(path);
+                if (wasAbsent && panelAddCallback != null) {
+                    panelAddCallback.accept(path, target.getName());
+                }
             }
         }
     }

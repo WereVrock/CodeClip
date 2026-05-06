@@ -91,6 +91,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         );
         pasteHandler.setErrorCallback(this::setLastPatchError);
         undoManager.setPanelRemovalCallback(this::removeClassPanel);
+        undoManager.setPanelAddCallback(this::addClassPanel);
 
         actions = new ClassActions(
                 this,
