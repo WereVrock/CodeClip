@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
+import wv.codeclip.patch.PatchDuplicateDetector;
 
 public class PasteClassHandler {
 
@@ -38,6 +39,7 @@ private final SourceRootDetector rootDetector;
 private final ClassFileWriter fileWriter;
 private final BiConsumer<String, String> codeChangedCallback;
 private final Supplier<Boolean> multiPatchMode;
+private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
 
 private static final int CLASS_NAME_WRAP_LENGTH = 40;
 
@@ -155,30 +157,10 @@ private void handleSmartPaste(String text) {
     List<String> logLines = new ArrayList<>();
 
     for (SmartPasteExtractor.Entry entry : entries) {
-        switch (entry) {
-            case SmartPasteExtractor.PatchEntry pe -> {
-                String title = PatchParser.extractTitle(pe.text());
-                String desc  = PatchParser.extractDesc(pe.text());
-                List<PatchChange> changes;
-                try {
-                    changes = new PatchParser().parse(pe.text());
-                } catch (IllegalArgumentException e) {
-                    PatchErrorDialog.show(parent,
-                        "Patch format error:\n\n" + e.getMessage(), null, null);
-                    continue;
-                }
-                PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
-                if (result.hasFailures()) reportError(result);
-                if (result.hasSuccesses()) {
-                    refreshCallback.run();
-                    notifyCodeChangedForPatch(changes);
-                    if (title != null) logLines.add("── " + title + " ──" + (desc != null ? " " + desc : ""));
-                    for (String s : result.successSummary()) logLines.add(s);
-                }
-            }
-            case SmartPasteExtractor.ClassEntry ce -> {
-                handlePasteInternal(ce.text(), logLines);
-            }
+        if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
+            handleSmartPatchEntry(pe.text(), logLines);
+        } else if (entry instanceof SmartPasteExtractor.ClassEntry ce) {
+            handlePasteInternal(ce.text(), logLines);
         }
     }
 
@@ -200,6 +182,44 @@ private void handleSmartPaste(String text) {
             statusLogger.accept(logLines.get(i));
         }
         statusLogger.accept(header);
+    }
+}
+
+private void handleSmartPatchEntry(String patchText, List<String> logLines) {
+    if (duplicateDetector.check(patchText) == PatchDuplicateDetector.Result.DUPLICATE) {
+        String t = PatchParser.extractTitle(patchText);
+        String d = PatchParser.extractDesc(patchText);
+        int choice = JOptionPane.showConfirmDialog(
+            parent,
+            "This patch looks identical to a recently applied one:\n\n" +
+            (t != null ? "Title: " + t + "\n" : "") +
+            (d != null ? "Desc:  " + d + "\n" : "") +
+            "\nApply it again?",
+            "Duplicate Patch Detected",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        );
+        if (choice != JOptionPane.YES_OPTION) return;
+    }
+
+    String title = PatchParser.extractTitle(patchText);
+    String desc  = PatchParser.extractDesc(patchText);
+    List<PatchChange> changes;
+    try {
+        changes = new PatchParser().parse(patchText);
+    } catch (IllegalArgumentException e) {
+        PatchErrorDialog.show(parent,
+            "Patch format error:\n\n" + e.getMessage(), null, null);
+        return;
+    }
+    PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
+    if (result.hasFailures()) reportError(result);
+    if (result.hasSuccesses()) {
+        duplicateDetector.record(patchText);
+        refreshCallback.run();
+        notifyCodeChangedForPatch(changes);
+        if (title != null) logLines.add("── " + title + " ──" + (desc != null ? " " + desc : ""));
+        for (String s : result.successSummary()) logLines.add(s);
     }
 }
 
@@ -245,6 +265,20 @@ private void handlePatch(String text) {
     String title = PatchParser.extractTitle(text);
     String desc  = PatchParser.extractDesc(text);
 
+    if (duplicateDetector.check(text) == PatchDuplicateDetector.Result.DUPLICATE) {
+        int choice = JOptionPane.showConfirmDialog(
+            parent,
+            "This patch looks identical to a recently applied one:\n\n" +
+            (title != null ? "Title: " + title + "\n" : "") +
+            (desc  != null ? "Desc:  " + desc  + "\n" : "") +
+            "\nApply it again?",
+            "Duplicate Patch Detected",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        );
+        if (choice != JOptionPane.YES_OPTION) return;
+    }
+
     PatchParser patchParser = new PatchParser();
     List<PatchChange> changes;
 
@@ -263,6 +297,7 @@ private void handlePatch(String text) {
     }
 
     if (result.hasSuccesses()) {
+        duplicateDetector.record(text);
         refreshCallback.run();
         notifyCodeChangedForPatch(changes);
         if (statusLogger != null) {

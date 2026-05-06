@@ -63,6 +63,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
     private final ClassRepository repo    = new ClassRepository();
     private final ClassActions actions;
+    private final PasteClassHandler pasteHandler;
     private final SettingsManager settings = new SettingsManager();
     private CheckpointDialog checkpointDialog = null;
     private PatchApplier.PatchResult lastPatchError = null;
@@ -74,6 +75,17 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private static final Color UNSYNCED_COLOR  = new Color(30, 100, 210);
 
     public CodeClipFrame() {
+
+        pasteHandler = new PasteClassHandler(
+                repo,
+                this,
+                this::refreshText,
+                this::appendTempLog,
+                this::addClassPanel,
+                this::onCodeChanged,
+                smartPasteCheck::isSelected
+        );
+        pasteHandler.setErrorCallback(this::setLastPatchError);
 
         actions = new ClassActions(
                 this,
@@ -256,19 +268,7 @@ public void focusGained(java.awt.event.FocusEvent e) {
             refreshPanels();
         });
 
-        pasteClass.addActionListener(e -> {
-            PasteClassHandler handler = new PasteClassHandler(
-                    repo,
-                    this,
-                    this::refreshText,
-                    this::appendTempLog,
-                    this::addClassPanel,
-                    this::onCodeChanged,
-                    smartPasteCheck::isSelected
-            );
-            handler.setErrorCallback(this::setLastPatchError);
-            handler.handlePasteFromClipboard();
-        });
+        pasteClass.addActionListener(e -> pasteHandler.handlePasteFromClipboard());
 
         copyInstructions.addActionListener(e ->
                 new ClipboardService().write(AiInstructions.TEXT)
