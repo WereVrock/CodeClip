@@ -69,6 +69,12 @@ fileSuccesses.remove(path);
 }
 }
 
+Map<String, String> undoSnapshot = new LinkedHashMap<>();
+for (String path : workingCode.keySet()) {
+String previous = repo.getClassCodeMap().get(path);
+if (previous != null) undoSnapshot.put(path, previous);
+}
+
 List<String> applied = new ArrayList<>();
 List<String> writeErrors = new ArrayList<>();
 
@@ -101,7 +107,7 @@ summary.add("✓ " + desc);
 }
 }
 
-return new PatchResult(summary, allFailures, applied);
+return new PatchResult(summary, allFailures, applied, undoSnapshot);
 }
 
 private String applyFindReplace(PatchChange.FindReplace fr, String code)
@@ -365,7 +371,8 @@ public record FailedChange(String fileName, String message) {}
 public record PatchResult(
 List<String> successSummary,
 List<FailedChange> failures,
-List<String> appliedFiles) {
+List<String> appliedFiles,
+Map<String, String> undoSnapshot) {
 
 public boolean hasFailures() {
 return !failures.isEmpty();
@@ -417,5 +424,7 @@ return result;
 }
 }
 }
+
+
 
 

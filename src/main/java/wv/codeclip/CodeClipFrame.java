@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import wv.codeclip.config.AiInstructions;
 import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.ui.PasteClassHandler;
@@ -63,7 +64,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
     private final ClassRepository repo    = new ClassRepository();
     private final ClassActions actions;
-    private final PasteClassHandler pasteHandler;
+    private PasteClassHandler pasteHandler;
+    private wv.codeclip.patch.PatchUndoManager undoManager;
     private final SettingsManager settings = new SettingsManager();
     private CheckpointDialog checkpointDialog = null;
     private PatchApplier.PatchResult lastPatchError = null;
@@ -76,6 +78,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
     public CodeClipFrame() {
 
+        undoManager = new wv.codeclip.patch.PatchUndoManager();
         pasteHandler = new PasteClassHandler(
                 repo,
                 this,
@@ -83,9 +86,11 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 this::appendTempLog,
                 this::addClassPanel,
                 this::onCodeChanged,
-                smartPasteCheck::isSelected
+                smartPasteCheck::isSelected,
+                undoManager
         );
         pasteHandler.setErrorCallback(this::setLastPatchError);
+        undoManager.setPanelRemovalCallback(this::removeClassPanel);
 
         actions = new ClassActions(
                 this,
@@ -185,145 +190,195 @@ public void focusGained(java.awt.event.FocusEvent e) {
     // UI
     // ------------------------------------------------------------------
 
-    private void buildUI() {
+private void buildUI() {
 
-        classTextArea.setEditable(false);
-        classTextArea.setLineWrap(true);
+    classTextArea.setEditable(false);
+    classTextArea.setLineWrap(true);
 
-        JPanel codePanel = new JPanel(new BorderLayout());
-        codePanel.add(new JScrollPane(classTextArea), BorderLayout.CENTER);
+    // --- Undo / Redo buttons (top-left corner) ---
+    JButton undoBtn = new JButton("↩ Undo");
+    JButton redoBtn = new JButton("↪ Redo");
+    undoBtn.setEnabled(false);
+    redoBtn.setEnabled(false);
 
-        JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        statsPanel.add(enabledCountLabel);
-        statsPanel.add(charCountLabel);
-        codePanel.add(statsPanel, BorderLayout.SOUTH);
+    Runnable syncUndoRedo = () -> {
+        undoBtn.setEnabled(undoManager.canUndo());
+        redoBtn.setEnabled(undoManager.canRedo());
+    };
 
-        add(codePanel, BorderLayout.NORTH);
-
-        notesTextPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        JScrollPane notesScroll = new JScrollPane(notesTextPane);
-
-        classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
-        JScrollPane classScroll = new JScrollPane(classPanel);
-        classScroll.getVerticalScrollBar().setUnitIncrement(16);
-
-         split =
-                new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classScroll);
-        split.setResizeWeight(0.7);
-
-        // Restore saved divider position after UI is realized
-        SwingUtilities.invokeLater(() -> {
-            int divider = settings.loadDividerPosition();
-            if (divider > 0) split.setDividerLocation(divider);
-        });
-
-        add(split, BorderLayout.CENTER);
-
-        JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
-
-        JButton reset            = new JButton("Reset");
-        JButton update           = new JButton("Update All");
-        JButton copy             = new JButton("Copy All");
-        JButton copyCode         = new JButton("Copy Code Only");
-        JButton enableAll        = new JButton("Enable All");
-        JButton disableAll       = new JButton("Disable All");
-        JButton pasteClass       = new JButton("Paste Class");
-        JButton copyInstructions = new JButton("Copy Instructions");
-        JButton copyArch         = new JButton("Copy Architecture");
-        JButton sortOrder        = new JButton(SORT_LABELS[sortMode]);
-        JButton checkpoint       = new JButton("Checkpoint");
-        updateCheckpointButtonColor(checkpoint);
-        lastErrorBtn             = new JButton("Last Error");
-        lastErrorBtn.setEnabled(false);
-        lastErrorBtn.addActionListener(e -> {
-            if (lastPatchError != null) {
-                PatchErrorDialog.show(this, lastPatchError, repo);
+    undoBtn.addActionListener(e -> {
+        try {
+            wv.codeclip.patch.PatchUndoManager.Entry entry = undoManager.undo(repo);
+            if (entry != null) {
+                refreshText();
+                refreshPanels();
+                appendTempLog("↩ Undo: " + describeEntry(entry));
             }
-        });
+        } catch (java.io.IOException ex) {
+            JOptionPane.showMessageDialog(this, "Undo failed:\n" + ex.getMessage(),
+                    "Error", JOptionPane.ERROR_MESSAGE);
+        }
+        syncUndoRedo.run();
+    });
 
-        reset.addActionListener(e -> actions.resetAll(classPanel));
-
-        update.addActionListener(e ->
-                actions.updateAll(this::refreshText, this::removeClassPanel)
-        );
-
-        copy.addActionListener(e ->
-                actions.copyAll(this::clearTempLogs, notesBuffer)
-        );
-
-        copyCode.addActionListener(e -> actions.copyCodeOnly());
-
-        alwaysOnTopCheck.addActionListener(e ->
-                setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
-
-        enableAll.addActionListener(e -> {
-            repo.getDisabledClasses().clear();
-            refreshText();
-            refreshPanels();
-        });
-
-        disableAll.addActionListener(e -> {
-            repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
-            refreshText();
-            refreshPanels();
-        });
-
-        pasteClass.addActionListener(e -> pasteHandler.handlePasteFromClipboard());
-
-        copyInstructions.addActionListener(e ->
-                new ClipboardService().write(AiInstructions.TEXT)
-        );
-
-        copyArch.addActionListener(e -> actions.copyArchitecture());
-
-        sortOrder.addActionListener(e -> {
-            sortMode = (sortMode + 1) % SORT_LABELS.length;
-            sortOrder.setText(SORT_LABELS[sortMode]);
-            refreshPanels();
-        });
-        sortOrder.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseClicked(java.awt.event.MouseEvent e) {
-                if (e.getButton() == java.awt.event.MouseEvent.BUTTON3) {
-                    sortMode = (sortMode - 1 + SORT_LABELS.length) % SORT_LABELS.length;
-                    sortOrder.setText(SORT_LABELS[sortMode]);
-                    refreshPanels();
-                }
+    redoBtn.addActionListener(e -> {
+        try {
+            wv.codeclip.patch.PatchUndoManager.Entry entry = undoManager.redo(repo);
+            if (entry != null) {
+                refreshText();
+                refreshPanels();
+                appendTempLog("↪ Redo: " + describeEntry(entry));
             }
-        });
+        } catch (java.io.IOException ex) {
+            JOptionPane.showMessageDialog(this, "Redo failed:\n" + ex.getMessage(),
+                    "Error", JOptionPane.ERROR_MESSAGE);
+        }
+        syncUndoRedo.run();
+    });
 
-        buttons.add(reset);
-        buttons.add(update);
-        buttons.add(copy);
-        buttons.add(copyCode);
-        buttons.add(enableAll);
-        buttons.add(disableAll);
-        buttons.add(pasteClass);
-        buttons.add(copyInstructions);
-        buttons.add(showMissingFileMessages);
-        buttons.add(alwaysOnTopCheck);
-        buttons.add(includeInstructionsCheck);
-        buttons.add(sortOrder);
-        checkpoint.addActionListener(e -> openCheckpointDialog());
+    // Sync undo/redo state after every paste (covers first paste)
+    pasteHandler.setPostPasteCallback(syncUndoRedo);
 
-        buttons.add(copyArch);
-        buttons.add(checkpoint);
-        buttons.add(smartPasteCheck);
-        buttons.add(lastErrorBtn);
+    JPanel undoPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
+    undoPanel.add(undoBtn);
+    undoPanel.add(redoBtn);
 
-        smartPasteCheck.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseClicked(java.awt.event.MouseEvent e) {
-                if (e.getClickCount() == 2) {
-                    new SmartPasteSettingsDialog(CodeClipFrame.this, settings).setVisible(true);
-                }
+    JPanel codePanel = new JPanel(new BorderLayout());
+    codePanel.add(undoPanel, BorderLayout.NORTH);
+    codePanel.add(new JScrollPane(classTextArea), BorderLayout.CENTER);
+
+    JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+    statsPanel.add(enabledCountLabel);
+    statsPanel.add(charCountLabel);
+    codePanel.add(statsPanel, BorderLayout.SOUTH);
+
+    add(codePanel, BorderLayout.NORTH);
+
+    notesTextPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+    JScrollPane notesScroll = new JScrollPane(notesTextPane);
+
+    classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
+    JScrollPane classScroll = new JScrollPane(classPanel);
+    classScroll.getVerticalScrollBar().setUnitIncrement(16);
+
+    split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classScroll);
+    split.setResizeWeight(0.7);
+
+    SwingUtilities.invokeLater(() -> {
+        int divider = settings.loadDividerPosition();
+        if (divider > 0) split.setDividerLocation(divider);
+    });
+
+    add(split, BorderLayout.CENTER);
+
+    JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
+
+    JButton reset            = new JButton("Reset");
+    JButton update           = new JButton("Update All");
+    JButton copy             = new JButton("Copy All");
+    JButton copyCode         = new JButton("Copy Code Only");
+    JButton enableAll        = new JButton("Enable All");
+    JButton disableAll       = new JButton("Disable All");
+    JButton pasteClass       = new JButton("Paste Class");
+    JButton copyInstructions = new JButton("Copy Instructions");
+    JButton copyArch         = new JButton("Copy Architecture");
+    JButton sortOrder        = new JButton(SORT_LABELS[sortMode]);
+    JButton checkpoint       = new JButton("Checkpoint");
+    updateCheckpointButtonColor(checkpoint);
+    lastErrorBtn = new JButton("Last Error");
+    lastErrorBtn.setEnabled(false);
+    lastErrorBtn.addActionListener(e -> {
+        if (lastPatchError != null) {
+            PatchErrorDialog.show(this, lastPatchError, repo);
+        }
+    });
+
+    reset.addActionListener(e -> actions.resetAll(classPanel));
+
+    update.addActionListener(e ->
+            actions.updateAll(this::refreshText, this::removeClassPanel)
+    );
+
+    copy.addActionListener(e ->
+            actions.copyAll(this::clearTempLogs, notesBuffer)
+    );
+
+    copyCode.addActionListener(e -> actions.copyCodeOnly());
+
+    alwaysOnTopCheck.addActionListener(e ->
+            setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
+
+    enableAll.addActionListener(e -> {
+        repo.getDisabledClasses().clear();
+        refreshText();
+        refreshPanels();
+    });
+
+    disableAll.addActionListener(e -> {
+        repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
+        refreshText();
+        refreshPanels();
+    });
+
+    pasteClass.addActionListener(e -> {
+        pasteHandler.handlePasteFromClipboard();
+        syncUndoRedo.run();
+    });
+
+    copyInstructions.addActionListener(e ->
+            new ClipboardService().write(AiInstructions.TEXT)
+    );
+
+    copyArch.addActionListener(e -> actions.copyArchitecture());
+
+    sortOrder.addActionListener(e -> {
+        sortMode = (sortMode + 1) % SORT_LABELS.length;
+        sortOrder.setText(SORT_LABELS[sortMode]);
+        refreshPanels();
+    });
+    sortOrder.addMouseListener(new java.awt.event.MouseAdapter() {
+        @Override
+        public void mouseClicked(java.awt.event.MouseEvent e) {
+            if (e.getButton() == java.awt.event.MouseEvent.BUTTON3) {
+                sortMode = (sortMode - 1 + SORT_LABELS.length) % SORT_LABELS.length;
+                sortOrder.setText(SORT_LABELS[sortMode]);
+                refreshPanels();
             }
-        });
+        }
+    });
 
-        add(buttons, BorderLayout.SOUTH);
-    }
+    buttons.add(reset);
+    buttons.add(update);
+    buttons.add(copy);
+    buttons.add(copyCode);
+    buttons.add(enableAll);
+    buttons.add(disableAll);
+    buttons.add(pasteClass);
+    buttons.add(copyInstructions);
+    buttons.add(showMissingFileMessages);
+    buttons.add(alwaysOnTopCheck);
+    buttons.add(includeInstructionsCheck);
+    buttons.add(sortOrder);
 
-    // ------------------------------------------------------------------
+    checkpoint.addActionListener(e -> openCheckpointDialog());
+    buttons.add(copyArch);
+    buttons.add(checkpoint);
+    buttons.add(smartPasteCheck);
+    buttons.add(lastErrorBtn);
+
+    smartPasteCheck.addMouseListener(new java.awt.event.MouseAdapter() {
+        @Override
+        public void mouseClicked(java.awt.event.MouseEvent e) {
+            if (e.getClickCount() == 2) {
+                new SmartPasteSettingsDialog(CodeClipFrame.this, settings).setVisible(true);
+            }
+        }
+    });
+
+    add(buttons, BorderLayout.SOUTH);
+}
+
+// ------------------------------------------------------------------
     // Logs & Notes
     // ------------------------------------------------------------------
 
@@ -627,6 +682,16 @@ private void addClass(File file) {
 
     private record PanelEntry(JPanel panel, String path, String name,
                                boolean disabled, int insertionIdx) {}
+
+private String describeEntry(wv.codeclip.patch.PatchUndoManager.Entry entry) {
+    List<String> names = new ArrayList<>();
+    for (String path : entry.snapshot().keySet()) {
+        File f = repo.getClassFileMap().get(path);
+        names.add(f != null ? f.getName() : new File(path).getName());
+    }
+    String files = String.join(", ", names);
+    return entry.title() != null ? entry.title() + " (" + files + ")" : files;
+}
 
 private void updateCheckpointButtonColor(JButton btn) {
     if (btn == null) {

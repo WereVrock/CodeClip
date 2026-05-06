@@ -40,6 +40,8 @@ private final ClassFileWriter fileWriter;
 private final BiConsumer<String, String> codeChangedCallback;
 private final Supplier<Boolean> multiPatchMode;
 private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
+private final wv.codeclip.patch.PatchUndoManager undoManager;
+private Runnable postPasteCallback;
 
 private static final int CLASS_NAME_WRAP_LENGTH = 40;
 
@@ -50,7 +52,7 @@ Runnable refreshCallback,
 java.util.function.Consumer<String> statusLogger,
 BiConsumer<String, String> addPanelCallback
 ) {
-this(repo, parent, refreshCallback, statusLogger, addPanelCallback, null, () -> false);
+this(repo, parent, refreshCallback, statusLogger, addPanelCallback, null, () -> false, new wv.codeclip.patch.PatchUndoManager());
 }
 
 public PasteClassHandler(
@@ -61,7 +63,7 @@ java.util.function.Consumer<String> statusLogger,
 BiConsumer<String, String> addPanelCallback,
 BiConsumer<String, String> codeChangedCallback
 ) {
-this(repo, parent, refreshCallback, statusLogger, addPanelCallback, codeChangedCallback, () -> false);
+this(repo, parent, refreshCallback, statusLogger, addPanelCallback, codeChangedCallback, () -> false, new wv.codeclip.patch.PatchUndoManager());
 }
 
 public PasteClassHandler(
@@ -71,7 +73,8 @@ Runnable refreshCallback,
 java.util.function.Consumer<String> statusLogger,
 BiConsumer<String, String> addPanelCallback,
 BiConsumer<String, String> codeChangedCallback,
-Supplier<Boolean> multiPatchMode
+Supplier<Boolean> multiPatchMode,
+wv.codeclip.patch.PatchUndoManager undoManager
 ) {
 this.repo = repo;
 this.parent = parent;
@@ -81,6 +84,7 @@ this.addPanelCallback = addPanelCallback;
 this.codeChangedCallback = codeChangedCallback;
 this.multiPatchMode = multiPatchMode;
 this.errorCallback = null;
+this.undoManager = undoManager;
 
 this.clipboard = new ClipboardService();
 this.parser = new JavaSourceParser();
@@ -107,11 +111,13 @@ return;
 if (Boolean.TRUE.equals(multiPatchMode.get()) &&
 (PatchParser.containsPatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
 handleSmartPaste(text);
+firePostPaste();
 return;
 }
 
 if (PatchParser.isPatch(text)) {
 handlePatch(text);
+firePostPaste();
 return;
 }
 
@@ -126,6 +132,7 @@ return;
 }
 
 handlePaste(text);
+firePostPaste();
 }
 
 // ------------------------------------------------------------------
@@ -136,190 +143,218 @@ public void setErrorCallback(java.util.function.Consumer<PatchApplier.PatchResul
 this.errorCallback = errorCallback;
 }
 
+public void setPostPasteCallback(Runnable callback) {
+this.postPasteCallback = callback;
+}
+
+private void firePostPaste() {
+if (postPasteCallback != null) postPasteCallback.run();
+}
+
 private void reportError(PatchApplier.PatchResult result) {
 if (errorCallback != null) errorCallback.accept(result);
 PatchErrorDialog.show((JFrame) parent, result, repo);
 }
 
 private void handleSmartPaste(String text) {
-    SmartPasteExtractor extractor = new SmartPasteExtractor(text);
-    List<SmartPasteExtractor.Entry> entries = extractor.extract(
-        SmartPasteSettings.isAllowClasses()
-    );
+SmartPasteExtractor extractor = new SmartPasteExtractor(text);
+List<SmartPasteExtractor.Entry> entries = extractor.extract(
+SmartPasteSettings.isAllowClasses()
+);
 
-    if (entries.isEmpty()) {
-        JOptionPane.showMessageDialog(parent,
-            "Smart Paste: no patches or class blocks found.",
-            "Nothing Found", JOptionPane.INFORMATION_MESSAGE);
-        return;
-    }
+if (entries.isEmpty()) {
+JOptionPane.showMessageDialog(parent,
+"Smart Paste: no patches or class blocks found.",
+"Nothing Found", JOptionPane.INFORMATION_MESSAGE);
+return;
+}
 
-    List<String> logLines = new ArrayList<>();
+List<String> logLines = new ArrayList<>();
 
-    for (SmartPasteExtractor.Entry entry : entries) {
-        if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
-            handleSmartPatchEntry(pe.text(), logLines);
-        } else if (entry instanceof SmartPasteExtractor.ClassEntry ce) {
-            handlePasteInternal(ce.text(), logLines);
-        }
-    }
+for (SmartPasteExtractor.Entry entry : entries) {
+if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
+handleSmartPatchEntry(pe.text(), logLines);
+} else if (entry instanceof SmartPasteExtractor.ClassEntry ce) {
+handlePasteInternal(ce.text(), logLines);
+}
+}
 
-    if (!logLines.isEmpty() && statusLogger != null) {
-        int patchCount = (int) entries.stream()
-            .filter(e -> e instanceof SmartPasteExtractor.PatchEntry).count();
-        int classCount = (int) entries.stream()
-            .filter(e -> e instanceof SmartPasteExtractor.ClassEntry).count();
-        String time = java.time.LocalTime.now()
-            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
-        String footer = "─".repeat(32);
-        String header = "── Smart Paste [" + time + "]: "
-            + (patchCount > 0 ? patchCount + " patch block" + (patchCount > 1 ? "s" : "") : "")
-            + (patchCount > 0 && classCount > 0 ? ", " : "")
-            + (classCount > 0 ? classCount + " class" + (classCount > 1 ? "es" : "") : "")
-            + ", " + logLines.size() + " change" + (logLines.size() > 1 ? "s" : "") + " ──";
-        statusLogger.accept(footer);
-        for (int i = logLines.size() - 1; i >= 0; i--) {
-            statusLogger.accept(logLines.get(i));
-        }
-        statusLogger.accept(header);
-    }
+if (!logLines.isEmpty() && statusLogger != null) {
+int patchCount = (int) entries.stream()
+.filter(e -> e instanceof SmartPasteExtractor.PatchEntry).count();
+int classCount = (int) entries.stream()
+.filter(e -> e instanceof SmartPasteExtractor.ClassEntry).count();
+String time = java.time.LocalTime.now()
+.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+String footer = "─".repeat(32);
+String header = "── Smart Paste [" + time + "]: "
++ (patchCount > 0 ? patchCount + " patch block" + (patchCount > 1 ? "s" : "") : "")
++ (patchCount > 0 && classCount > 0 ? ", " : "")
++ (classCount > 0 ? classCount + " class" + (classCount > 1 ? "es" : "") : "")
++ ", " + logLines.size() + " change" + (logLines.size() > 1 ? "s" : "") + " ──";
+statusLogger.accept(footer);
+for (int i = logLines.size() - 1; i >= 0; i--) {
+statusLogger.accept(logLines.get(i));
+}
+statusLogger.accept(header);
+}
 }
 
 private void handleSmartPatchEntry(String patchText, List<String> logLines) {
-    if (duplicateDetector.check(patchText) == PatchDuplicateDetector.Result.DUPLICATE) {
-        String t = PatchParser.extractTitle(patchText);
-        String d = PatchParser.extractDesc(patchText);
-        int choice = JOptionPane.showConfirmDialog(
-            parent,
-            "This patch looks identical to a recently applied one:\n\n" +
-            (t != null ? "Title: " + t + "\n" : "") +
-            (d != null ? "Desc:  " + d + "\n" : "") +
-            "\nApply it again?",
-            "Duplicate Patch Detected",
-            JOptionPane.YES_NO_OPTION,
-            JOptionPane.WARNING_MESSAGE
-        );
-        if (choice != JOptionPane.YES_OPTION) return;
-    }
+if (duplicateDetector.check(patchText) == PatchDuplicateDetector.Result.DUPLICATE) {
+String t = PatchParser.extractTitle(patchText);
+String d = PatchParser.extractDesc(patchText);
+int choice = JOptionPane.showConfirmDialog(
+parent,
+"This patch looks identical to a recently applied one:\n\n" +
+(t != null ? "Title: " + t + "\n" : "") +
+(d != null ? "Desc:  " + d + "\n" : "") +
+"\nApply it again?",
+"Duplicate Patch Detected",
+JOptionPane.YES_NO_OPTION,
+JOptionPane.WARNING_MESSAGE
+);
+if (choice != JOptionPane.YES_OPTION) return;
+}
 
-    String title = PatchParser.extractTitle(patchText);
-    String desc  = PatchParser.extractDesc(patchText);
-    List<PatchChange> changes;
-    try {
-        changes = new PatchParser().parse(patchText);
-    } catch (IllegalArgumentException e) {
-        PatchErrorDialog.show(parent,
-            "Patch format error:\n\n" + e.getMessage(), null, null);
-        return;
-    }
-    PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
-    if (result.hasFailures()) reportError(result);
-    if (result.hasSuccesses()) {
-        duplicateDetector.record(patchText);
-        refreshCallback.run();
-        notifyCodeChangedForPatch(changes);
-        if (title != null) logLines.add("── " + title + " ──" + (desc != null ? " " + desc : ""));
-        for (String s : result.successSummary()) logLines.add(s);
-    }
+String title = PatchParser.extractTitle(patchText);
+String desc  = PatchParser.extractDesc(patchText);
+List<PatchChange> changes;
+try {
+changes = new PatchParser().parse(patchText);
+} catch (IllegalArgumentException e) {
+PatchErrorDialog.show(parent,
+"Patch format error:\n\n" + e.getMessage(), null, null);
+return;
+}
+
+PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
+if (result.hasFailures()) reportError(result);
+if (result.hasSuccesses()) {
+duplicateDetector.record(patchText);
+undoManager.pushUndo(result.undoSnapshot(), title);
+refreshCallback.run();
+notifyCodeChangedForPatch(changes);
+
+// Collect unique file names
+List<String> files = changes.stream()
+.map(PatchChange::fileName)
+.distinct()
+.toList();
+
+String titleLine = (title != null ? "── " + title + " ──" : "── patch ──")
++ (desc != null ? " " + desc : "");
+logLines.add(titleLine);
+logLines.add("  Files: " + String.join(", ", files));
+for (String s : result.successSummary()) logLines.add(s);
+}
 }
 
 private void handleMultiPatch(String text) {
-    MultiPatchExtractor extractor = new MultiPatchExtractor();
-    List<PatchChange> changes;
-    int blockCount = extractor.countBlocks(text);
+MultiPatchExtractor extractor = new MultiPatchExtractor();
+List<PatchChange> changes;
+int blockCount = extractor.countBlocks(text);
 
-    try {
-        changes = extractor.extractAll(text);
-    } catch (IllegalArgumentException e) {
-        PatchErrorDialog.show(parent, "Multi-patch format error:\n\n" + e.getMessage(), null, null);
-        return;
-    }
+try {
+changes = extractor.extractAll(text);
+} catch (IllegalArgumentException e) {
+PatchErrorDialog.show(parent, "Multi-patch format error:\n\n" + e.getMessage(), null, null);
+return;
+}
 
-    PatchApplier applier = new PatchApplier(repo);
-    PatchApplier.PatchResult result = applier.apply(changes);
+PatchApplier applier = new PatchApplier(repo);
+PatchApplier.PatchResult result = applier.apply(changes);
 
-    if (result.hasFailures()) {
-        reportError(result);
-    }
+if (result.hasFailures()) {
+reportError(result);
+}
 
-    if (result.hasSuccesses()) {
-        refreshCallback.run();
-        notifyCodeChangedForPatch(changes);
-        if (statusLogger != null) {
-            List<String> summary = result.successSummary();
-            String footer = "─".repeat(32);
-            String time = java.time.LocalTime.now()
-                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
-            String header = "── Smart Paste [" + time + "]: " + blockCount + " block" + (blockCount > 1 ? "s" : "") +
-                ", " + summary.size() + " change" + (summary.size() > 1 ? "s" : "") + " ──";
-            statusLogger.accept(footer);
-            for (int i = summary.size() - 1; i >= 0; i--) {
-                statusLogger.accept(summary.get(i));
-            }
-            statusLogger.accept(header);
-        }
-    }
+if (result.hasSuccesses()) {
+refreshCallback.run();
+notifyCodeChangedForPatch(changes);
+if (statusLogger != null) {
+List<String> summary = result.successSummary();
+String footer = "─".repeat(32);
+String time = java.time.LocalTime.now()
+.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+String header = "── Smart Paste [" + time + "]: " + blockCount + " block" + (blockCount > 1 ? "s" : "") +
+", " + summary.size() + " change" + (summary.size() > 1 ? "s" : "") + " ──";
+statusLogger.accept(footer);
+for (int i = summary.size() - 1; i >= 0; i--) {
+statusLogger.accept(summary.get(i));
+}
+statusLogger.accept(header);
+}
+}
 }
 
 private void handlePatch(String text) {
-    String title = PatchParser.extractTitle(text);
-    String desc  = PatchParser.extractDesc(text);
+String title = PatchParser.extractTitle(text);
+String desc  = PatchParser.extractDesc(text);
 
-    if (duplicateDetector.check(text) == PatchDuplicateDetector.Result.DUPLICATE) {
-        int choice = JOptionPane.showConfirmDialog(
-            parent,
-            "This patch looks identical to a recently applied one:\n\n" +
-            (title != null ? "Title: " + title + "\n" : "") +
-            (desc  != null ? "Desc:  " + desc  + "\n" : "") +
-            "\nApply it again?",
-            "Duplicate Patch Detected",
-            JOptionPane.YES_NO_OPTION,
-            JOptionPane.WARNING_MESSAGE
-        );
-        if (choice != JOptionPane.YES_OPTION) return;
-    }
+if (duplicateDetector.check(text) == PatchDuplicateDetector.Result.DUPLICATE) {
+int choice = JOptionPane.showConfirmDialog(
+parent,
+"This patch looks identical to a recently applied one:\n\n" +
+(title != null ? "Title: " + title + "\n" : "") +
+(desc  != null ? "Desc:  " + desc  + "\n" : "") +
+"\nApply it again?",
+"Duplicate Patch Detected",
+JOptionPane.YES_NO_OPTION,
+JOptionPane.WARNING_MESSAGE
+);
+if (choice != JOptionPane.YES_OPTION) return;
+}
 
-    PatchParser patchParser = new PatchParser();
-    List<PatchChange> changes;
+PatchParser patchParser = new PatchParser();
+List<PatchChange> changes;
 
-    try {
-        changes = patchParser.parse(text);
-    } catch (IllegalArgumentException e) {
-        PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
-        return;
-    }
+try {
+changes = patchParser.parse(text);
+} catch (IllegalArgumentException e) {
+PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
+return;
+}
 
-    PatchApplier applier = new PatchApplier(repo);
-    PatchApplier.PatchResult result = applier.apply(changes);
+PatchApplier applier = new PatchApplier(repo);
+PatchApplier.PatchResult result = applier.apply(changes);
 
-    if (result.hasFailures()) {
-        reportError(result);
-    }
+if (result.hasFailures()) {
+reportError(result);
+}
 
-    if (result.hasSuccesses()) {
-        duplicateDetector.record(text);
-        refreshCallback.run();
-        notifyCodeChangedForPatch(changes);
-        if (statusLogger != null) {
-            List<String> summary = result.successSummary();
-            String time = java.time.LocalTime.now()
-                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
-            if (summary.size() == 1 && title == null) {
-                statusLogger.accept(summary.get(0) + " [" + time + "]");
-            } else {
-                String footer = "─".repeat(32);
-                String header = "── Patch [" + time + "] (" + summary.size() + " changes) " +
-                    "─".repeat(Math.max(0, 32 - 10 - String.valueOf(summary.size()).length()));
-                statusLogger.accept(footer);
-                for (int i = summary.size() - 1; i >= 0; i--) {
-                    statusLogger.accept(summary.get(i));
-                }
-                if (desc != null) statusLogger.accept("  " + desc);
-                if (title != null) statusLogger.accept("── " + title + " ──");
-                statusLogger.accept(header);
-            }
-        }
-    }
+if (result.hasSuccesses()) {
+duplicateDetector.record(text);
+undoManager.pushUndo(result.undoSnapshot(), title);
+refreshCallback.run();
+notifyCodeChangedForPatch(changes);
+
+if (statusLogger != null) {
+List<String> summary = result.successSummary();
+String time = java.time.LocalTime.now()
+.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+String footer = "─".repeat(32);
+
+// Collect unique file names touched
+List<String> files = changes.stream()
+.map(PatchChange::fileName)
+.distinct()
+.toList();
+String filesLine = "  Files: " + String.join(", ", files);
+
+String header = "── Patch [" + time + "] (" + summary.size()
++ " change" + (summary.size() > 1 ? "s" : "") + ")"
++ (title != null ? ": " + title : "") + " ──";
+
+statusLogger.accept(footer);
+for (int i = summary.size() - 1; i >= 0; i--) {
+statusLogger.accept(summary.get(i));
+}
+statusLogger.accept(filesLine);
+if (desc != null) statusLogger.accept("  " + desc);
+statusLogger.accept(header);
+}
+}
 }
 
 // ------------------------------------------------------------------
@@ -331,82 +366,93 @@ handlePasteInternal(classCode, null);
 }
 
 private void handlePasteInternal(String classCode, List<String> logCollector) {
-String packageName = parser.parsePackage(classCode);
-String className = parser.parseClassName(classCode);
+    String packageName = parser.parsePackage(classCode);
+    String className = parser.parseClassName(classCode);
 
-if (className == null) {
-JOptionPane.showMessageDialog(
-parent,
-"Could not determine the class/interface/enum name from the pasted code.",
-"Invalid Source",
-JOptionPane.ERROR_MESSAGE
-);
-return;
-}
+    if (className == null) {
+        JOptionPane.showMessageDialog(
+                parent,
+                "Could not determine the class/interface/enum name from the pasted code.",
+                "Invalid Source",
+                JOptionPane.ERROR_MESSAGE
+        );
+        return;
+    }
 
-if (!JavaBraceEndChecker.hasCompleteEnd(classCode)) {
-int choice = JOptionPane.showConfirmDialog(
-parent,
-classLabel(className) +
-"The pasted source appears to have incomplete or unbalanced braces.\n\n" +
-"Do you want to continue anyway?",
-"Brace Validation Failed",
-JOptionPane.OK_CANCEL_OPTION,
-JOptionPane.WARNING_MESSAGE
-);
-if (choice != JOptionPane.OK_OPTION) return;
-}
+    if (!JavaBraceEndChecker.hasCompleteEnd(classCode)) {
+        int choice = JOptionPane.showConfirmDialog(
+                parent,
+                classLabel(className) +
+                "The pasted source appears to have incomplete or unbalanced braces.\n\n" +
+                "Do you want to continue anyway?",
+                "Brace Validation Failed",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE
+        );
+        if (choice != JOptionPane.OK_OPTION) return;
+    }
 
-boolean smartSkipCreate    = logCollector != null && SmartPasteSettings.isSkipCreateConfirm();
-boolean smartSkipOverwrite = logCollector != null && SmartPasteSettings.isSkipOverwriteConfirm();
+    boolean smartSkipCreate    = logCollector != null && SmartPasteSettings.isSkipCreateConfirm();
+    boolean smartSkipOverwrite = logCollector != null && SmartPasteSettings.isSkipOverwriteConfirm();
 
-File sourceRoot = rootDetector.detect(packageName);
-File existingFile = fileWriter.findExistingFile(packageName, className, sourceRoot);
-boolean isNewFile = existingFile == null;
+    File sourceRoot = rootDetector.detect(packageName);
+    File existingFile = fileWriter.findExistingFile(packageName, className, sourceRoot);
+    boolean isNewFile = existingFile == null;
 
-if (!isNewFile && !smartSkipOverwrite && !confirmOverwrite(className, existingFile, classCode)) {
-return;
-}
+    if (!isNewFile && !smartSkipOverwrite && !confirmOverwrite(className, existingFile, classCode)) {
+        return;
+    }
 
-try {
-File file;
-if (isNewFile) {
-if (!smartSkipCreate && !confirmCreate(className, packageName, sourceRoot)) return;
-file = fileWriter.createFile(packageName, className, classCode, sourceRoot);
-} else {
-fileWriter.updateFile(existingFile, classCode);
-file = existingFile;
-}
+    try {
+        File file;
+        if (isNewFile) {
+            if (!smartSkipCreate && !confirmCreate(className, packageName, sourceRoot)) return;
+            file = fileWriter.createFile(packageName, className, classCode, sourceRoot);
+            // Register first so classFileMap has the File reference for undo
+            fileWriter.registerInRepo(file, classCode);
+            // null sentinel = this file didn't exist, undo should delete it
+            Map<String, String> snapshot = new java.util.LinkedHashMap<>();
+            snapshot.put(file.getAbsolutePath(), null);
+            undoManager.pushUndo(snapshot, "Class Created: " + className);
+        } else {
+            // Capture old code before overwriting
+            String oldCode = repo.getClassCodeMap().get(existingFile.getAbsolutePath());
+            Map<String, String> snapshot = new java.util.LinkedHashMap<>();
+            snapshot.put(existingFile.getAbsolutePath(), oldCode != null ? oldCode : "");
+            undoManager.pushUndo(snapshot, "Class: " + className);
+            fileWriter.updateFile(existingFile, classCode);
+            fileWriter.registerInRepo(existingFile, classCode);
+            file = existingFile;
+        }
 
-fileWriter.registerInRepo(file, classCode);
-refreshCallback.run();
+        refreshCallback.run();
 
-if (isNewFile) {
-addPanelCallback.accept(file.getAbsolutePath(), file.getName());
-}
+        if (isNewFile) {
+            addPanelCallback.accept(file.getAbsolutePath(), file.getName());
+        }
 
-String logMsg = (isNewFile ? "Class Created: " : "Class Updated: ")
-+ className + " (" + file.getAbsolutePath() + ")";
+        String logMsg = (isNewFile ? "Class Created: " : "Class Updated: ")
+                + className + " (" + file.getAbsolutePath() + ")";
 
-if (logCollector != null) {
-logCollector.add(logMsg);
-} else if (statusLogger != null) {
-statusLogger.accept(logMsg);
-}
+        if (logCollector != null) {
+            logCollector.add(logMsg);
+        } else if (statusLogger != null) {
+            statusLogger.accept(logMsg);
+        }
 
-if (!isNewFile) {
-notifyCodeChanged(file.getAbsolutePath(), repo.getClassCodeMap().get(file.getAbsolutePath()));
-}
+        if (!isNewFile) {
+            notifyCodeChanged(file.getAbsolutePath(), repo.getClassCodeMap().get(file.getAbsolutePath()));
+        }
 
-} catch (IOException e) {
-JOptionPane.showMessageDialog(
-parent,
-classLabel(className) +
-"Failed to create/update file:\n" + e.getMessage(),
-"Error",
-JOptionPane.ERROR_MESSAGE
-);
-}
+    } catch (IOException e) {
+        JOptionPane.showMessageDialog(
+                parent,
+                classLabel(className) +
+                "Failed to create/update file:\n" + e.getMessage(),
+                "Error",
+                JOptionPane.ERROR_MESSAGE
+        );
+    }
 }
 
 private boolean confirmOverwrite(String className, File existingFile, String newCode) {
@@ -543,6 +589,11 @@ return text.replace("&", "&amp;")
 .replace(">", "&gt;");
 }
 }
+
+
+
+
+
 
 
 
