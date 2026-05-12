@@ -49,8 +49,14 @@ public List<Entry> extract(boolean includeClasses) {
     while (true) {
         int patchIdx = text.indexOf(patchMarker, searchFrom);
         if (patchIdx < 0) break;
+        int lineStart = text.lastIndexOf('\n', patchIdx);
+        String before = text.substring(lineStart + 1, patchIdx);
+        if (!before.isBlank()) { searchFrom = patchIdx + 1; continue; }
         int endIdx = text.indexOf(endMarker, patchIdx);
         if (endIdx < 0) break;
+        int endLineStart = text.lastIndexOf('\n', endIdx);
+        String endBefore = text.substring(endLineStart + 1, endIdx);
+        if (!endBefore.isBlank()) { searchFrom = patchIdx + 1; continue; }
         int blockEnd = endIdx + endMarker.length();
         patchPositions.add(new int[]{patchIdx, blockEnd});
         searchFrom = blockEnd;

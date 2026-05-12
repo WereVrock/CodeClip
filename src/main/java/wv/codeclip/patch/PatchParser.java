@@ -102,7 +102,7 @@ String currentFile = null;
 while (i < lines.length) {
 String line = lines[i].trim();
 
-if (line.equals(MARKER_END)) break;
+if (line.equals(MARKER_END) && isAtLineStart(lines[i])) break;
 
 if (line.startsWith(MARKER_FILE)) {
 currentFile = stripMarkdownLink(line.substring(MARKER_FILE.length()).trim());
@@ -210,6 +210,10 @@ if (close > 0) return raw.substring(1, close).trim();
 return raw;
 }
 
+private static boolean isAtLineStart(String rawLine) {
+return rawLine.equals(rawLine.stripLeading());
+}
+
 private void requireFile(String currentFile, int lineIndex) {
 if (currentFile == null) {
 throw new IllegalArgumentException(
@@ -219,5 +223,7 @@ throw new IllegalArgumentException(
 
 private record ParsedBlock(String text, int nextIndex, boolean hitEndOfInput) {}
 }
+
+
 
 
