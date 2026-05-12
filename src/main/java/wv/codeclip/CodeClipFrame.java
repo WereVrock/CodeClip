@@ -69,11 +69,15 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private CheckpointDialog checkpointDialog = null;
     private PatchApplier.PatchResult lastPatchError = null;
     private JButton lastErrorBtn;
+    private JMenuItem lastErrorMenuItem;
 
     private static final Color ENABLED_COLOR   = new Color(240, 240, 240);
     private static final Color DISABLED_COLOR  = new Color(210, 210, 210);
     private static final Color LOG_CLASS_COLOR = new Color(30, 120, 220);
     private static final Color UNSYNCED_COLOR  = new Color(30, 100, 210);
+
+    private static final String BUILD_INFO_PACKAGE = "wv.codeclip";
+    private static final String BUILD_INFO_CLASS   = "BuildInfo";
 
     public CodeClipFrame() {
 
@@ -122,6 +126,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             File f = new File(path);
             if (f.exists()) addClass(f);
         }
+        // Restore title from existing BuildInfo if present
+        SwingUtilities.invokeLater(this::restoreBuildInfoTitle);
 
         notesTextPane.addFocusListener(this);
 
@@ -195,7 +201,54 @@ private void buildUI() {
     classTextArea.setEditable(false);
     classTextArea.setLineWrap(true);
 
-    // --- Undo / Redo buttons (top-left corner) ---
+    // --- Menu bar ---
+    JMenuBar menuBar = new JMenuBar();
+
+    // Settings menu
+    JMenu settingsMenu = new JMenu("Settings");
+    JCheckBoxMenuItem showMissingItem = new JCheckBoxMenuItem(
+            "Show missing file messages", showMissingFileMessages.isSelected());
+    showMissingItem.addActionListener(e ->
+            showMissingFileMessages.setSelected(showMissingItem.isSelected()));
+    settingsMenu.add(showMissingItem);
+    menuBar.add(settingsMenu);
+
+    // Extra menu
+    JMenu extraMenu = new JMenu("Extra");
+    JMenuItem copyArchItem = new JMenuItem("Copy Architecture");
+    copyArchItem.addActionListener(e -> actions.copyArchitecture());
+    extraMenu.add(copyArchItem);
+
+    JMenuItem timestampItem = new JMenuItem("Timestamp…");
+    timestampItem.addActionListener(e -> openTimestampDialog());
+    extraMenu.add(timestampItem);
+
+    menuBar.add(extraMenu);
+
+    // System menu
+    JMenu systemMenu = new JMenu("System");
+
+    JMenuItem checkpointItem = new JMenuItem("Checkpoint…");
+    checkpointItem.addActionListener(e -> openCheckpointDialog());
+    systemMenu.add(checkpointItem);
+
+    JMenuItem resetItem = new JMenuItem("Reset");
+    resetItem.addActionListener(e -> actions.resetAll(classPanel));
+    systemMenu.add(resetItem);
+
+    lastErrorMenuItem = new JMenuItem("Last Error");
+    lastErrorMenuItem.setEnabled(false);
+    lastErrorMenuItem.addActionListener(e -> {
+        if (lastPatchError != null) {
+            PatchErrorDialog.show(this, lastPatchError, repo);
+        }
+    });
+    systemMenu.add(lastErrorMenuItem);
+
+    menuBar.add(systemMenu);
+    setJMenuBar(menuBar);
+
+    // --- Undo / Redo ---
     JButton undoBtn = new JButton("↩ Undo");
     JButton redoBtn = new JButton("↪ Redo");
     undoBtn.setEnabled(false);
@@ -213,6 +266,7 @@ private void buildUI() {
                 refreshText();
                 refreshPanels();
                 appendTempLog("↩ Undo: " + describeEntry(entry));
+                stampBuildInfo();
             }
         } catch (java.io.IOException ex) {
             JOptionPane.showMessageDialog(this, "Undo failed:\n" + ex.getMessage(),
@@ -228,6 +282,7 @@ private void buildUI() {
                 refreshText();
                 refreshPanels();
                 appendTempLog("↪ Redo: " + describeEntry(entry));
+                stampBuildInfo();
             }
         } catch (java.io.IOException ex) {
             JOptionPane.showMessageDialog(this, "Redo failed:\n" + ex.getMessage(),
@@ -236,12 +291,10 @@ private void buildUI() {
         syncUndoRedo.run();
     });
 
-    // Sync undo/redo state after every paste (covers first paste)
-    pasteHandler.setPostPasteCallback(syncUndoRedo);
-
-    JPanel undoPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
-    undoPanel.add(undoBtn);
-    undoPanel.add(redoBtn);
+    pasteHandler.setPostPasteCallback(() -> {
+        syncUndoRedo.run();
+        stampBuildInfo();
+    });
 
     JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
     statsPanel.add(undoBtn);
@@ -250,6 +303,7 @@ private void buildUI() {
     statsPanel.add(charCountLabel);
     add(statsPanel, BorderLayout.NORTH);
 
+    // --- Notes + class list ---
     notesTextPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
     JScrollPane notesScroll = new JScrollPane(notesTextPane);
 
@@ -286,6 +340,7 @@ private void buildUI() {
 
     add(split, BorderLayout.CENTER);
 
+    // --- Bottom buttons ---
     JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
 
     JButton reset            = new JButton("Reset");
@@ -296,32 +351,16 @@ private void buildUI() {
     JButton disableAll       = new JButton("Disable All");
     JButton pasteClass       = new JButton("Paste Class");
     JButton copyInstructions = new JButton("Copy Instructions");
-    JButton copyArch         = new JButton("Copy Architecture");
     JButton sortOrder        = new JButton(SORT_LABELS[sortMode]);
-    JButton checkpoint       = new JButton("Checkpoint");
-    updateCheckpointButtonColor(checkpoint);
+
     lastErrorBtn = new JButton("Last Error");
     lastErrorBtn.setEnabled(false);
-    lastErrorBtn.addActionListener(e -> {
-        if (lastPatchError != null) {
-            PatchErrorDialog.show(this, lastPatchError, repo);
-        }
-    });
 
     reset.addActionListener(e -> actions.resetAll(classPanel));
-
-    update.addActionListener(e ->
-            actions.updateAll(this::refreshText, this::removeClassPanel)
-    );
-
-    copy.addActionListener(e ->
-            actions.copyAll(this::clearTempLogs, notesBuffer)
-    );
-
+    update.addActionListener(e -> actions.updateAll(this::refreshText, this::removeClassPanel));
+    copy.addActionListener(e -> actions.copyAll(this::clearTempLogs, notesBuffer));
     copyCode.addActionListener(e -> actions.copyCodeOnly());
-
-    alwaysOnTopCheck.addActionListener(e ->
-            setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
+    alwaysOnTopCheck.addActionListener(e -> setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
 
     enableAll.addActionListener(e -> {
         repo.getDisabledClasses().clear();
@@ -341,10 +380,7 @@ private void buildUI() {
     });
 
     copyInstructions.addActionListener(e ->
-            new ClipboardService().write(AiInstructions.TEXT)
-    );
-
-    copyArch.addActionListener(e -> actions.copyArchitecture());
+            new ClipboardService().write(AiInstructions.TEXT));
 
     sortOrder.addActionListener(e -> {
         sortMode = (sortMode + 1) % SORT_LABELS.length;
@@ -362,24 +398,7 @@ private void buildUI() {
         }
     });
 
-    buttons.add(reset);
-    buttons.add(update);
-    buttons.add(copy);
-    buttons.add(copyCode);
-    buttons.add(enableAll);
-    buttons.add(disableAll);
-    buttons.add(pasteClass);
-    buttons.add(copyInstructions);
-    buttons.add(showMissingFileMessages);
-    buttons.add(alwaysOnTopCheck);
-    buttons.add(includeInstructionsCheck);
-    buttons.add(sortOrder);
 
-    checkpoint.addActionListener(e -> openCheckpointDialog());
-    buttons.add(copyArch);
-    buttons.add(checkpoint);
-    buttons.add(smartPasteCheck);
-    buttons.add(lastErrorBtn);
 
     smartPasteCheck.addMouseListener(new java.awt.event.MouseAdapter() {
         @Override
@@ -389,6 +408,19 @@ private void buildUI() {
             }
         }
     });
+
+    buttons.add(reset);
+    buttons.add(update);
+    buttons.add(copy);
+    buttons.add(copyCode);
+    buttons.add(enableAll);
+    buttons.add(disableAll);
+    buttons.add(pasteClass);
+    buttons.add(copyInstructions);
+    buttons.add(alwaysOnTopCheck);
+    buttons.add(includeInstructionsCheck);
+    buttons.add(sortOrder);
+    buttons.add(smartPasteCheck);
 
     add(buttons, BorderLayout.SOUTH);
 }
@@ -515,37 +547,40 @@ private String extractNotesFromPane() {
     }
 
 private void addClass(File file) {
-        String path = file.getAbsolutePath();
+    String path = file.getAbsolutePath();
 
-        if (repo.getClassCodeMap().containsKey(path)) {
-            if (repo.getDisabledClasses().remove(path)) {
-                refreshText();
-                refreshPanels();
-            }
-            return;
+    if (repo.getClassCodeMap().containsKey(path)) {
+        if (repo.getDisabledClasses().remove(path)) {
+            refreshText();
+            refreshPanels();
+        }
+        return;
+    }
+
+    SwingWorker<String, Void> worker = new SwingWorker<>() {
+        @Override
+        protected String doInBackground() throws Exception {
+            return Files.readString(file.toPath());
         }
 
-        SwingWorker<String, Void> worker = new SwingWorker<>() {
-            @Override
-            protected String doInBackground() throws Exception {
-                return Files.readString(file.toPath());
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    String code = get();
-                    repo.getClassCodeMap().put(path, code);
-                    repo.getClassFileMap().put(path, file);
-                    repo.setCheckpoint(path, code);
-                    addClassPanel(path, file.getName());
-                    refreshText();
-                    refreshPanels();
-                } catch (Exception ignored) {}
-            }
-        };
-        worker.execute();
-    }
+        @Override
+        protected void done() {
+            try {
+                String code = get();
+                repo.getClassCodeMap().put(path, code);
+                repo.getClassFileMap().put(path, file);
+                repo.setCheckpoint(path, code);
+                addClassPanel(path, file.getName());
+                refreshText();
+                refreshPanels();
+                if (file.getName().equals(BUILD_INFO_CLASS + ".java")) {
+                    restoreBuildInfoTitle();
+                }
+            } catch (Exception ignored) {}
+        }
+    };
+    worker.execute();
+}
 
 // ------------------------------------------------------------------
     // Class panels
@@ -625,8 +660,15 @@ private void addClass(File file) {
     // ------------------------------------------------------------------
 
 private void refreshText() {
-        refreshStats();
-    }
+    StringBuilder sb = new StringBuilder();
+    repo.getClassCodeMap().forEach((path, code) -> {
+        if (!repo.getDisabledClasses().contains(path)) {
+            sb.append(code).append("\n\n");
+        }
+    });
+    classTextArea.setText(sb.toString());
+    refreshStats();
+}
 
 private void refreshStats() {
         long enabled = repo.getClassCodeMap().size() - repo.getDisabledClasses().size();
@@ -719,32 +761,245 @@ private void updateCheckpointButtonColor(JButton btn) {
 }
 
 private boolean isUnsynced(String path) {
-        String current    = repo.getClassCodeMap().get(path);
-        String checkpoint = repo.getCheckpointCodeMap().get(path);
-        if (current == null || checkpoint == null) return false;
-        return !current.equals(checkpoint);
+    String current    = repo.getClassCodeMap().get(path);
+    String checkpoint = repo.getCheckpointCodeMap().get(path);
+    if (current == null || checkpoint == null) return false;
+    return !current.equals(checkpoint);
+}
+
+private void openTimestampDialog() {
+    // Check if BuildInfo exists on disk
+    java.io.File sourceRoot = detectSourceRoot();
+    boolean hasTimestamp = false;
+    String timestampPath = "";
+    String foundTimestamp = "";
+
+    if (sourceRoot != null) {
+        String pkgPath = BUILD_INFO_PACKAGE.replace('.', java.io.File.separatorChar);
+        java.io.File file = new java.io.File(
+                new java.io.File(sourceRoot, pkgPath), BUILD_INFO_CLASS + ".java");
+        hasTimestamp = file.exists();
+        timestampPath = file.getAbsolutePath();
+        if (hasTimestamp) {
+            String code = repo.getClassCodeMap().get(timestampPath);
+            if (code == null) {
+                try { code = java.nio.file.Files.readString(file.toPath()); }
+                catch (java.io.IOException ignored) {}
+            }
+            if (code != null) {
+                for (String line : code.split("\n")) {
+                    String t = line.trim();
+                    if (t.startsWith("public static final String LAST_UPDATED")) {
+                        int q1 = t.indexOf('"');
+                        int q2 = t.lastIndexOf('"');
+                        if (q1 >= 0 && q2 > q1) foundTimestamp = t.substring(q1 + 1, q2);
+                    }
+                }
+            }
+        }
     }
+
+    final boolean tsExists = hasTimestamp;
+    final String tsPath    = timestampPath;
+    final String tsValue   = foundTimestamp;
+
+    String instructions =
+            "BuildInfo.java is auto-generated by CodeClip.\n" +
+            "It lives in the wv.codeclip package alongside your other classes.\n\n" +
+            "It exposes a single constant:\n" +
+            "  public static final String LAST_UPDATED = \"yyyy-MM-dd HH:mm:ss\";\n\n" +
+            "Use it in your program like:\n" +
+            "  System.out.println(BuildInfo.LAST_UPDATED);\n\n" +
+            "CodeClip updates this file automatically whenever it applies\n" +
+            "a patch, pastes a class, or performs an undo/redo.\n" +
+            "The timestamp uses the local system clock at time of change.";
+
+    JDialog dialog = new JDialog(this, "Timestamp Info", true);
+    dialog.setLayout(new BorderLayout(10, 10));
+    dialog.getRootPane().setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+
+    JTextArea info = new JTextArea(instructions);
+    info.setEditable(false);
+    info.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+    info.setBackground(UIManager.getColor("Panel.background"));
+    info.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
+    dialog.add(new JScrollPane(info), BorderLayout.CENTER);
+
+    if (tsExists && !tsValue.isEmpty()) {
+        JLabel tsLabel = new JLabel("Current timestamp: " + tsValue);
+        tsLabel.setFont(tsLabel.getFont().deriveFont(Font.ITALIC));
+        tsLabel.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 4));
+        dialog.add(tsLabel, BorderLayout.NORTH);
+    }
+
+    JButton copyInstrBtn  = new JButton("Copy Instructions");
+    JButton copyPathBtn   = new JButton("Copy File Path");
+    JButton copyBothBtn   = new JButton("Copy Both");
+    JButton closeBtn      = new JButton("Close");
+
+    copyPathBtn.setEnabled(tsExists);
+
+    ClipboardService cb = new ClipboardService();
+
+    copyInstrBtn.addActionListener(e -> {
+        cb.write(instructions);
+        copyInstrBtn.setText("✓ Copied Instructions");
+        copyInstrBtn.setForeground(new Color(30, 120, 30));
+    });
+
+    copyPathBtn.addActionListener(e -> {
+        cb.write("BuildInfo.java location:\n" + tsPath);
+        copyPathBtn.setText("✓ Copied File Location");
+        copyPathBtn.setForeground(new Color(30, 120, 30));
+    });
+
+    copyBothBtn.addActionListener(e -> {
+        cb.write(instructions + "\n\nBuildInfo.java location:\n" + tsPath);
+        copyBothBtn.setText("✓ Copied Both");
+        copyBothBtn.setForeground(new Color(30, 120, 30));
+    });
+
+    closeBtn.addActionListener(e -> dialog.dispose());
+
+    JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+    btnPanel.add(copyInstrBtn);
+    btnPanel.add(copyPathBtn);
+    btnPanel.add(copyBothBtn);
+    btnPanel.add(closeBtn);
+    dialog.add(btnPanel, BorderLayout.SOUTH);
+
+    dialog.pack();
+    dialog.setMinimumSize(new Dimension(520, 300));
+    dialog.setLocationRelativeTo(this);
+    dialog.setVisible(true);
+}
+
+private void restoreBuildInfoTitle() {
+    for (java.util.Map.Entry<String, String> entry : repo.getClassCodeMap().entrySet()) {
+        String code = entry.getValue();
+        if (code == null) continue;
+        if (!code.contains("class BuildInfo")) continue;
+        for (String line : code.split("\n")) {
+            String t = line.trim();
+            if (t.startsWith("public static final String LAST_UPDATED")) {
+                int q1 = t.indexOf('"');
+                int q2 = t.lastIndexOf('"');
+                if (q1 >= 0 && q2 > q1) {
+                    String timestamp = t.substring(q1 + 1, q2);
+                    setTitle("Code Clip — last updated: " + timestamp);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+private void stampBuildInfo() {
+    String timestamp = java.time.LocalDateTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+
+    String code = "package " + BUILD_INFO_PACKAGE + ";\n\n" +
+            "/**\n" +
+            " * Auto-generated by CodeClip. Do not edit manually.\n" +
+            " */\n" +
+            "public final class " + BUILD_INFO_CLASS + " {\n" +
+            "    private " + BUILD_INFO_CLASS + "() {}\n\n" +
+            "    public static final String LAST_UPDATED = \"" + timestamp + "\";\n" +
+            "}\n";
+
+    // Detect source root from loaded classes
+    java.io.File sourceRoot = detectSourceRoot();
+    if (sourceRoot == null) return;
+
+    String pkgPath = BUILD_INFO_PACKAGE.replace('.', java.io.File.separatorChar);
+    java.io.File dir  = new java.io.File(sourceRoot, pkgPath);
+    java.io.File file = new java.io.File(dir, BUILD_INFO_CLASS + ".java");
+
+    try {
+        if (!dir.exists()) dir.mkdirs();
+        java.nio.file.Files.writeString(file.toPath(), code);
+
+        // Register in repo so it's included in copies
+        String path = file.getAbsolutePath();
+        repo.getClassCodeMap().put(path, code);
+        repo.getClassFileMap().put(path, file);
+        repo.setCheckpoint(path, code);
+
+        // Add panel if not already present
+        boolean panelExists = false;
+        for (java.awt.Component c : classPanel.getComponents()) {
+            if (c instanceof JPanel p &&
+                    file.getAbsolutePath().equals(p.getClientProperty("path"))) {
+                panelExists = true;
+                break;
+            }
+        }
+        if (!panelExists) {
+            addClassPanel(path, file.getName());
+        }
+
+        setTitle("Code Clip — last updated: " + timestamp);
+        refreshText();
+
+    } catch (java.io.IOException ex) {
+        ex.printStackTrace();
+    }
+}
+
+private java.io.File detectSourceRoot() {
+    for (java.util.Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+        java.io.File file = entry.getValue();
+        if (file == null) continue;
+        // Skip BuildInfo itself — it may not exist on disk yet
+        if (file.getName().equals(BUILD_INFO_CLASS + ".java")) continue;
+        String code = repo.getClassCodeMap().get(entry.getKey());
+        if (code == null) continue;
+        wv.codeclip.parse.JavaSourceParser p = new wv.codeclip.parse.JavaSourceParser();
+        String pkg = p.parsePackage(code);
+        if (pkg == null || pkg.isEmpty()) continue;
+        String pkgPath = pkg.replace('.', java.io.File.separatorChar);
+        java.io.File dir = file.getParentFile();
+        if (dir == null) continue;
+        String abs = dir.getAbsolutePath();
+        System.out.println("[detectSourceRoot] file=" + file.getName()
+                + " pkg=" + pkg + " dir=" + abs
+                + " endsWith=" + abs.endsWith(java.io.File.separator + pkgPath));
+        if (abs.endsWith(java.io.File.separator + pkgPath)) {
+            java.io.File root = new java.io.File(
+                    abs.substring(0, abs.length() - pkgPath.length() - 1));
+            System.out.println("[detectSourceRoot] found root=" + root.getAbsolutePath());
+            return root;
+        }
+    }
+    System.out.println("[detectSourceRoot] no root found, classFileMap size=" + repo.getClassFileMap().size());
+    return null;
+}
 
 private void openCheckpointDialog() {
-        if (checkpointDialog == null || !checkpointDialog.isDisplayable()) {
-            checkpointDialog = new CheckpointDialog(this, repo, () -> {
-                refreshText();
-                refreshPanels();
-            });
-        } else {
-            checkpointDialog.setRefreshCallback(() -> {
-                refreshText();
-                refreshPanels();
-            });
-        }
-        checkpointDialog.refresh();
-        checkpointDialog.setVisible(true);
+    if (checkpointDialog == null || !checkpointDialog.isDisplayable()) {
+        checkpointDialog = new CheckpointDialog(this, repo, () -> {
+            refreshText();
+            refreshPanels();
+            stampBuildInfo();
+        });
+    } else {
+        checkpointDialog.setRefreshCallback(() -> {
+            refreshText();
+            refreshPanels();
+            stampBuildInfo();
+        });
     }
+    checkpointDialog.refresh();
+    checkpointDialog.setVisible(true);
+}
 
 public void setLastPatchError(PatchApplier.PatchResult result) {
-        lastPatchError = result;
-        lastErrorBtn.setEnabled(result != null);
+    lastPatchError = result;
+    lastErrorBtn.setEnabled(result != null);
+    if (lastErrorMenuItem != null) {
+        lastErrorMenuItem.setEnabled(result != null);
     }
+}
 
 public void onCodeChanged(String path, String code) {
     if (!repo.getCheckpointCodeMap().containsKey(path)) {
