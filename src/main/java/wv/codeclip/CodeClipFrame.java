@@ -204,7 +204,6 @@ private void buildUI() {
     // --- Menu bar ---
     JMenuBar menuBar = new JMenuBar();
 
-    // Settings menu
     JMenu settingsMenu = new JMenu("Settings");
     JCheckBoxMenuItem showMissingItem = new JCheckBoxMenuItem(
             "Show missing file messages", showMissingFileMessages.isSelected());
@@ -213,29 +212,22 @@ private void buildUI() {
     settingsMenu.add(showMissingItem);
     menuBar.add(settingsMenu);
 
-    // Extra menu
     JMenu extraMenu = new JMenu("Extra");
     JMenuItem copyArchItem = new JMenuItem("Copy Architecture");
     copyArchItem.addActionListener(e -> actions.copyArchitecture());
     extraMenu.add(copyArchItem);
-
     JMenuItem timestampItem = new JMenuItem("Timestamp…");
     timestampItem.addActionListener(e -> openTimestampDialog());
     extraMenu.add(timestampItem);
-
     menuBar.add(extraMenu);
 
-    // System menu
     JMenu systemMenu = new JMenu("System");
-
     JMenuItem checkpointItem = new JMenuItem("Checkpoint…");
     checkpointItem.addActionListener(e -> openCheckpointDialog());
     systemMenu.add(checkpointItem);
-
     JMenuItem resetItem = new JMenuItem("Reset");
     resetItem.addActionListener(e -> actions.resetAll(classPanel));
     systemMenu.add(resetItem);
-
     lastErrorMenuItem = new JMenuItem("Last Error");
     lastErrorMenuItem.setEnabled(false);
     lastErrorMenuItem.addActionListener(e -> {
@@ -244,11 +236,11 @@ private void buildUI() {
         }
     });
     systemMenu.add(lastErrorMenuItem);
-
     menuBar.add(systemMenu);
+
     setJMenuBar(menuBar);
 
-    // --- Undo / Redo ---
+    // --- Top bar: undo/redo + stats ---
     JButton undoBtn = new JButton("↩ Undo");
     JButton redoBtn = new JButton("↪ Redo");
     undoBtn.setEnabled(false);
@@ -303,7 +295,7 @@ private void buildUI() {
     statsPanel.add(charCountLabel);
     add(statsPanel, BorderLayout.NORTH);
 
-    // --- Notes + class list ---
+    // --- Center: notes + class list ---
     notesTextPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
     JScrollPane notesScroll = new JScrollPane(notesTextPane);
 
@@ -326,62 +318,19 @@ private void buildUI() {
     JScrollPane classScroll = new JScrollPane(classPanel);
     classScroll.getVerticalScrollBar().setUnitIncrement(16);
 
-    JPanel classListPanel = new JPanel(new BorderLayout(0, 2));
-    classListPanel.add(classSearch, BorderLayout.NORTH);
-    classListPanel.add(classScroll, BorderLayout.CENTER);
-
-    split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classListPanel);
-    split.setResizeWeight(0.7);
-
-    SwingUtilities.invokeLater(() -> {
-        int divider = settings.loadDividerPosition();
-        if (divider > 0) split.setDividerLocation(divider);
-    });
-
-    add(split, BorderLayout.CENTER);
-
-    // --- Bottom buttons ---
-    JPanel buttons = new JPanel(new GridLayout(0, 4, 5, 5));
-
-    JButton reset            = new JButton("Reset");
-    JButton update           = new JButton("Update All");
-    JButton copy             = new JButton("Copy All");
-    JButton copyCode         = new JButton("Copy Code Only");
-    JButton enableAll        = new JButton("Enable All");
-    JButton disableAll       = new JButton("Disable All");
-    JButton pasteClass       = new JButton("Paste Class");
-    JButton copyInstructions = new JButton("Copy Instructions");
-    JButton sortOrder        = new JButton(SORT_LABELS[sortMode]);
-
-    lastErrorBtn = new JButton("Last Error");
-    lastErrorBtn.setEnabled(false);
-
-    reset.addActionListener(e -> actions.resetAll(classPanel));
-    update.addActionListener(e -> actions.updateAll(this::refreshText, this::removeClassPanel));
-    copy.addActionListener(e -> actions.copyAll(this::clearTempLogs, notesBuffer));
-    copyCode.addActionListener(e -> actions.copyCodeOnly());
-    alwaysOnTopCheck.addActionListener(e -> setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
-
-    enableAll.addActionListener(e -> {
+    JButton enableAllBtn  = new JButton("Enable All");
+    JButton disableAllBtn = new JButton("Disable All");
+    enableAllBtn.addActionListener(e -> {
         repo.getDisabledClasses().clear();
         refreshText();
         refreshPanels();
     });
-
-    disableAll.addActionListener(e -> {
+    disableAllBtn.addActionListener(e -> {
         repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
         refreshText();
         refreshPanels();
     });
-
-    pasteClass.addActionListener(e -> {
-        pasteHandler.handlePasteFromClipboard();
-        syncUndoRedo.run();
-    });
-
-    copyInstructions.addActionListener(e ->
-            new ClipboardService().write(AiInstructions.TEXT));
-
+    JButton sortOrder = new JButton(SORT_LABELS[sortMode]);
     sortOrder.addActionListener(e -> {
         sortMode = (sortMode + 1) % SORT_LABELS.length;
         sortOrder.setText(SORT_LABELS[sortMode]);
@@ -398,7 +347,48 @@ private void buildUI() {
         }
     });
 
+    JPanel enableDisablePanel = new JPanel(new GridLayout(2, 1, 0, 2));
+    JPanel enableDisableRow = new JPanel(new GridLayout(1, 2, 4, 0));
+    enableDisableRow.add(enableAllBtn);
+    enableDisableRow.add(disableAllBtn);
+    enableDisablePanel.add(enableDisableRow);
+    enableDisablePanel.add(sortOrder);
 
+    JPanel classListPanel = new JPanel(new BorderLayout(0, 2));
+    classListPanel.add(classSearch, BorderLayout.NORTH);
+    classListPanel.add(classScroll, BorderLayout.CENTER);
+    classListPanel.add(enableDisablePanel, BorderLayout.SOUTH);
+
+    split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classListPanel);
+    split.setResizeWeight(0.7);
+
+    SwingUtilities.invokeLater(() -> {
+        int divider = settings.loadDividerPosition();
+        if (divider > 0) split.setDividerLocation(divider);
+    });
+
+    add(split, BorderLayout.CENTER);
+
+    // --- Bottom bar ---
+    JButton pasteClass       = new JButton("Paste Class");
+    JButton update           = new JButton("Update All");
+    JButton copy             = new JButton("Copy All");
+    JButton copyCode         = new JButton("Copy Code Only");
+    JButton copyInstructions = new JButton("Copy Instructions");
+    lastErrorBtn = new JButton("Last Error");
+    lastErrorBtn.setEnabled(false);
+
+    alwaysOnTopCheck.addActionListener(e -> setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
+
+    pasteClass.addActionListener(e -> {
+        pasteHandler.handlePasteFromClipboard();
+        syncUndoRedo.run();
+    });
+
+    update.addActionListener(e -> actions.updateAll(this::refreshText, this::removeClassPanel));
+    copy.addActionListener(e -> actions.copyAll(this::clearTempLogs, notesBuffer));
+    copyCode.addActionListener(e -> actions.copyCodeOnly());
+    copyInstructions.addActionListener(e -> new ClipboardService().write(AiInstructions.TEXT));
 
     smartPasteCheck.addMouseListener(new java.awt.event.MouseAdapter() {
         @Override
@@ -409,20 +399,25 @@ private void buildUI() {
         }
     });
 
-    buttons.add(reset);
-    buttons.add(update);
-    buttons.add(copy);
-    buttons.add(copyCode);
-    buttons.add(enableAll);
-    buttons.add(disableAll);
-    buttons.add(pasteClass);
-    buttons.add(copyInstructions);
-    buttons.add(alwaysOnTopCheck);
-    buttons.add(includeInstructionsCheck);
-    buttons.add(sortOrder);
-    buttons.add(smartPasteCheck);
+    // Paste + Smart Paste pinned to left
+    JPanel pasteGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
+    pasteGroup.add(pasteClass);
+    pasteGroup.add(smartPasteCheck);
 
-    add(buttons, BorderLayout.SOUTH);
+    // Right side grid
+    JPanel rightButtons = new JPanel(new GridLayout(0, 3, 5, 5));
+    rightButtons.add(update);
+    rightButtons.add(copy);
+    rightButtons.add(copyCode);
+    rightButtons.add(copyInstructions);
+    rightButtons.add(alwaysOnTopCheck);
+    rightButtons.add(includeInstructionsCheck);
+
+    JPanel bottomBar = new JPanel(new BorderLayout(4, 0));
+    bottomBar.add(pasteGroup, BorderLayout.WEST);
+    bottomBar.add(rightButtons, BorderLayout.CENTER);
+
+    add(bottomBar, BorderLayout.SOUTH);
 }
 
 // ------------------------------------------------------------------
@@ -768,7 +763,6 @@ private boolean isUnsynced(String path) {
 }
 
 private void openTimestampDialog() {
-    // Check if BuildInfo exists on disk
     java.io.File sourceRoot = detectSourceRoot();
     boolean hasTimestamp = false;
     String timestampPath = "";
@@ -807,12 +801,13 @@ private void openTimestampDialog() {
             "BuildInfo.java is auto-generated by CodeClip.\n" +
             "It lives in the wv.codeclip package alongside your other classes.\n\n" +
             "It exposes a single constant:\n" +
-            "  public static final String LAST_UPDATED = \"yyyy-MM-dd HH:mm:ss\";\n\n" +
-            "Use it in your program like:\n" +
-            "  System.out.println(BuildInfo.LAST_UPDATED);\n\n" +
-            "CodeClip updates this file automatically whenever it applies\n" +
-            "a patch, pastes a class, or performs an undo/redo.\n" +
-            "The timestamp uses the local system clock at time of change.";
+            "  public static final String LAST_UPDATED = \"EEE-HH:mm:ss\";\n\n" +
+            "The format is: day-of-week abbreviation, hour, minute, second.\n" +
+            "Example: \"Wed-14:32:05\"\n\n" +
+            "IMPORTANT: Read this value once at startup and store it.\n" +
+            "Do NOT update this at runtime!" +
+            "CodeClip updates BuildInfo.java automatically whenever it applies\n" +
+            "a patch, pastes a class, or performs an undo/redo.";
 
     JDialog dialog = new JDialog(this, "Timestamp Info", true);
     dialog.setLayout(new BorderLayout(10, 10));
@@ -826,16 +821,16 @@ private void openTimestampDialog() {
     dialog.add(new JScrollPane(info), BorderLayout.CENTER);
 
     if (tsExists && !tsValue.isEmpty()) {
-        JLabel tsLabel = new JLabel("Current timestamp: " + tsValue);
+        JLabel tsLabel = new JLabel("Last recorded timestamp: " + tsValue);
         tsLabel.setFont(tsLabel.getFont().deriveFont(Font.ITALIC));
         tsLabel.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 4));
         dialog.add(tsLabel, BorderLayout.NORTH);
     }
 
-    JButton copyInstrBtn  = new JButton("Copy Instructions");
-    JButton copyPathBtn   = new JButton("Copy File Path");
-    JButton copyBothBtn   = new JButton("Copy Both");
-    JButton closeBtn      = new JButton("Close");
+    JButton copyInstrBtn = new JButton("Copy Instructions");
+    JButton copyPathBtn  = new JButton("Copy File Path");
+    JButton copyBothBtn  = new JButton("Copy Both");
+    JButton closeBtn     = new JButton("Close");
 
     copyPathBtn.setEnabled(tsExists);
 
@@ -869,7 +864,7 @@ private void openTimestampDialog() {
     dialog.add(btnPanel, BorderLayout.SOUTH);
 
     dialog.pack();
-    dialog.setMinimumSize(new Dimension(520, 300));
+    dialog.setMinimumSize(new Dimension(520, 340));
     dialog.setLocationRelativeTo(this);
     dialog.setVisible(true);
 }
@@ -886,7 +881,7 @@ private void restoreBuildInfoTitle() {
                 int q2 = t.lastIndexOf('"');
                 if (q1 >= 0 && q2 > q1) {
                     String timestamp = t.substring(q1 + 1, q2);
-                    setTitle("Code Clip — last updated: " + timestamp);
+                    setTitle("Code Clip — " + timestamp);
                     return;
                 }
             }
@@ -896,7 +891,7 @@ private void restoreBuildInfoTitle() {
 
 private void stampBuildInfo() {
     String timestamp = java.time.LocalDateTime.now()
-            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            .format(java.time.format.DateTimeFormatter.ofPattern("EEE-HH:mm:ss"));
 
     String code = "package " + BUILD_INFO_PACKAGE + ";\n\n" +
             "/**\n" +
@@ -907,7 +902,6 @@ private void stampBuildInfo() {
             "    public static final String LAST_UPDATED = \"" + timestamp + "\";\n" +
             "}\n";
 
-    // Detect source root from loaded classes
     java.io.File sourceRoot = detectSourceRoot();
     if (sourceRoot == null) return;
 
@@ -919,13 +913,11 @@ private void stampBuildInfo() {
         if (!dir.exists()) dir.mkdirs();
         java.nio.file.Files.writeString(file.toPath(), code);
 
-        // Register in repo so it's included in copies
         String path = file.getAbsolutePath();
         repo.getClassCodeMap().put(path, code);
         repo.getClassFileMap().put(path, file);
         repo.setCheckpoint(path, code);
 
-        // Add panel if not already present
         boolean panelExists = false;
         for (java.awt.Component c : classPanel.getComponents()) {
             if (c instanceof JPanel p &&
@@ -938,7 +930,8 @@ private void stampBuildInfo() {
             addClassPanel(path, file.getName());
         }
 
-        setTitle("Code Clip — last updated: " + timestamp);
+        // Title is intentionally NOT updated here.
+        // Only restoreBuildInfoTitle() sets the title — on startup only.
         refreshText();
 
     } catch (java.io.IOException ex) {
