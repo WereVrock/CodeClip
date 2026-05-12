@@ -244,25 +244,40 @@ private void buildUI() {
     undoPanel.add(undoBtn);
     undoPanel.add(redoBtn);
 
-    JPanel codePanel = new JPanel(new BorderLayout());
-    codePanel.add(undoPanel, BorderLayout.NORTH);
-    codePanel.add(new JScrollPane(classTextArea), BorderLayout.CENTER);
-
     JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+    statsPanel.add(undoBtn);
+    statsPanel.add(redoBtn);
     statsPanel.add(enabledCountLabel);
     statsPanel.add(charCountLabel);
-    codePanel.add(statsPanel, BorderLayout.SOUTH);
-
-    add(codePanel, BorderLayout.NORTH);
+    add(statsPanel, BorderLayout.NORTH);
 
     notesTextPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
     JScrollPane notesScroll = new JScrollPane(notesTextPane);
+
+    JTextField classSearch = new JTextField();
+    classSearch.setToolTipText("Filter classes…");
+    classSearch.getDocument().addDocumentListener(new SimpleDocumentListener(() -> {
+        String q = classSearch.getText().trim().toLowerCase();
+        for (Component c : classPanel.getComponents()) {
+            if (c instanceof JPanel p) {
+                Object nameObj = p.getClientProperty("name");
+                String n = nameObj instanceof String s ? s.toLowerCase() : "";
+                c.setVisible(q.isEmpty() || n.contains(q));
+            }
+        }
+        classPanel.revalidate();
+        classPanel.repaint();
+    }));
 
     classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
     JScrollPane classScroll = new JScrollPane(classPanel);
     classScroll.getVerticalScrollBar().setUnitIncrement(16);
 
-    split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classScroll);
+    JPanel classListPanel = new JPanel(new BorderLayout(0, 2));
+    classListPanel.add(classSearch, BorderLayout.NORTH);
+    classListPanel.add(classScroll, BorderLayout.CENTER);
+
+    split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classListPanel);
     split.setResizeWeight(0.7);
 
     SwingUtilities.invokeLater(() -> {
@@ -542,6 +557,7 @@ private void addClass(File file) {
         panel.setOpaque(true);
         panel.setBackground(ENABLED_COLOR);
         panel.putClientProperty("path", path);
+        panel.putClientProperty("name", name);
 
         JLabel label   = new JLabel(name);
         label.setToolTipText("In sync with checkpoint");
@@ -609,27 +625,21 @@ private void addClass(File file) {
     // Refresh
     // ------------------------------------------------------------------
 
-    private void refreshText() {
-        StringBuilder sb = new StringBuilder();
-        repo.getClassCodeMap().forEach((path, code) -> {
-            if (!repo.getDisabledClasses().contains(path)) {
-                sb.append(code).append("\n\n");
-            }
-        });
-        classTextArea.setText(sb.toString());
+private void refreshText() {
         refreshStats();
     }
 
-    private void refreshStats() {
-        long enabled =
-                repo.getClassCodeMap().size() - repo.getDisabledClasses().size();
+private void refreshStats() {
+        long enabled = repo.getClassCodeMap().size() - repo.getDisabledClasses().size();
         enabledCountLabel.setText("Enabled Classes: " + enabled);
-        charCountLabel.setText(
-                "Code Characters: " + classTextArea.getText().length()
-        );
+        int totalChars = repo.getClassCodeMap().entrySet().stream()
+                .filter(e -> !repo.getDisabledClasses().contains(e.getKey()))
+                .mapToInt(e -> e.getValue().length())
+                .sum();
+        charCountLabel.setText("Code Characters: " + totalChars);
     }
 
-    private void refreshPanels() {
+private void refreshPanels() {
         List<PanelEntry> entries = new ArrayList<>();
         List<String> insertionOrder = new ArrayList<>(repo.getClassCodeMap().keySet());
 
