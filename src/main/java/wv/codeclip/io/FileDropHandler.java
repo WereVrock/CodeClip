@@ -59,10 +59,9 @@ public class FileDropHandler extends DropTargetAdapter {
 
     private void scanDirectory(File dir) {
         try (Stream<java.nio.file.Path> paths = Files.walk(dir.toPath())) {
-            paths
-                .filter(p -> p.toString().endsWith(".java"))
-                .map(java.nio.file.Path::toFile)
-                .forEach(fileConsumer);
+            paths.filter(p -> p.toString().endsWith(".java"))
+                 .map(java.nio.file.Path::toFile)
+                 .forEach(fileConsumer);
         } catch (IOException e) {
             e.printStackTrace();
         }

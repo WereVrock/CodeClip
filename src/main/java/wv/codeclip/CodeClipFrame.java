@@ -12,7 +12,6 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import wv.codeclip.config.AiInstructions;
 import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.ui.PasteClassHandler;

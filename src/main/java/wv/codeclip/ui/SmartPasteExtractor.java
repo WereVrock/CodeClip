@@ -82,7 +82,12 @@ public List<Entry> extract(boolean includeClasses) {
             int blockEnd = closeIdx + FENCE_END.length();
 
             if (!isInsideAnyBlock(fenceIdx, patchPositions)) {
-                classPositions.add(new int[]{fenceIdx, blockEnd});
+                // Skip fenced blocks that are actually patch blocks
+                int lineEndIdx = text.indexOf('\n', fenceIdx);
+                String inner = lineEndIdx >= 0 ? text.substring(lineEndIdx + 1, closeIdx) : "";
+                if (!inner.contains(patchMarker)) {
+                    classPositions.add(new int[]{fenceIdx, blockEnd});
+                }
             }
             searchFrom = blockEnd;
         }
