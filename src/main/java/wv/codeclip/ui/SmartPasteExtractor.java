@@ -41,6 +41,10 @@ public List<Entry> extract(boolean includeClasses) {
     List<int[]> patchPositions = new ArrayList<>();
     List<int[]> classPositions = new ArrayList<>();
 
+    // Normalize ```@@PATCH ... ``` into bare @@PATCH blocks before scanning
+    String text = this.text.replaceAll("(?m)^```@@", "@@")
+                           .replaceAll("(?m)^```\\s*$", "");
+
     String patchMarker = PatchParser.PATCH_MARKER();
     String endMarker   = PatchParser.END_MARKER();
 
