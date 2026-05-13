@@ -37,7 +37,12 @@ public void mergeTimestampSnapshot(String path, String oldContent) {
 }
 
 public boolean canUndo() { return !undoStack.isEmpty(); }
-    public boolean canRedo() { return !redoStack.isEmpty(); }
+public boolean canRedo() { return !redoStack.isEmpty(); }
+
+public void clear() {
+    undoStack.clear();
+    redoStack.clear();
+}
     public Entry undo(ClassRepository repo) throws IOException {
         if (!canUndo()) return null;
         Entry entry = undoStack.removeFirst();

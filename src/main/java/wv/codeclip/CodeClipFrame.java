@@ -70,6 +70,7 @@ private CheckpointDialog checkpointDialog = null;
 private PatchApplier.PatchResult lastPatchError = null;
 private JButton lastErrorBtn;
 private JMenuItem lastErrorMenuItem;
+private Runnable syncUndoRedo;
 
 private static final Color ENABLED_COLOR   = new Color(240, 240, 240);
 private static final Color DISABLED_COLOR  = new Color(210, 210, 210);
@@ -125,15 +126,24 @@ for (String path : settings.loadClassPaths()) {
 File f = new File(path);
 if (f.exists()) addClass(f);
 }
-// Restore title from existing BuildInfo — delayed to let async loaders finish
-SwingUtilities.invokeLater(() -> {
-// Try repo first (fast path if already loaded)
+// Retry title restore until workers finish, up to 20 attempts x 150ms = 3s
+int[] attempts = {0};
+javax.swing.Timer titleTimer = new javax.swing.Timer(150, null);
+titleTimer.addActionListener(e -> {
 restoreBuildInfoTitle();
-// If title unchanged, scan disk directly
-if (getTitle().equals("Code Clip")) {
-restoreBuildInfoTitleFromDisk();
+if (!getTitle().equals("Code Clip")) {
+titleTimer.stop();
+return;
 }
+restoreBuildInfoTitleFromDisk();
+if (!getTitle().equals("Code Clip")) {
+titleTimer.stop();
+return;
+}
+attempts[0]++;
+if (attempts[0] >= 20) titleTimer.stop();
 });
+titleTimer.start();
 
 notesTextPane.addFocusListener(this);
 
@@ -247,6 +257,9 @@ JOptionPane.WARNING_MESSAGE
 );
 if (confirm == JOptionPane.YES_OPTION) {
 actions.resetAll(classPanel);
+undoManager.clear();
+syncUndoRedo.run();
+setTitle("Code Clip");
 }
 });
 systemMenu.add(resetItem);
@@ -268,7 +281,7 @@ JButton redoBtn = new JButton("↪ Redo");
 undoBtn.setEnabled(false);
 redoBtn.setEnabled(false);
 
-Runnable syncUndoRedo = () -> {
+syncUndoRedo = () -> {
 undoBtn.setEnabled(undoManager.canUndo());
 redoBtn.setEnabled(undoManager.canRedo());
 };
@@ -1081,6 +1094,11 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+
+
+
+
 
 
 
