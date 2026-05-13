@@ -18,17 +18,39 @@ public class PatchErrorDialog extends JDialog {
 
         ClipboardService clipboard = new ClipboardService();
 
+        // --- Yellow warning theme ---
+        Color warnBg  = new Color(255, 243, 205);
+        Color warnFg  = new Color(133, 77, 14);
+        Color warnBorder = new Color(200, 160, 0);
+
+        // --- Warning header ---
+        JPanel warningHeader = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        warningHeader.setBackground(warnBg);
+        JLabel warnIcon = new JLabel("⚠");
+        warnIcon.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 24));
+        warnIcon.setForeground(new Color(180, 30, 30));
+        JLabel warnLabel = new JLabel("User Error");
+        warnLabel.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 18));
+        warnLabel.setForeground(new Color(180, 30, 30));
+        warningHeader.add(warnIcon);
+        warningHeader.add(warnLabel);
+        warningHeader.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
+
         // --- Top: error report text ---
         JTextArea text = new JTextArea(errorMessage);
         text.setEditable(false);
         text.setLineWrap(true);
         text.setWrapStyleWord(true);
         text.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        text.setBackground(UIManager.getColor("Panel.background"));
-        text.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        text.setBackground(warnBg);
+        text.setForeground(warnFg);
+        text.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(warnBorder, 1, true),
+                BorderFactory.createEmptyBorder(8, 8, 8, 8)));
 
         JScrollPane errorScroll = new JScrollPane(text);
         errorScroll.setPreferredSize(new Dimension(580, 220));
+        errorScroll.setBorder(BorderFactory.createEmptyBorder());
 
         // --- Middle: scrollable vertical list of per-class copy buttons ---
         JPanel classButtonsPanel = new JPanel();
@@ -41,6 +63,7 @@ public class PatchErrorDialog extends JDialog {
             for (String fileName : errorsByFile.keySet()) {
                 String classCode = findClassCode(repo, fileName);
                 JButton btn = new JButton("Copy Class: " + fileName);
+                btn.setForeground(warnFg);
                 btn.setAlignmentX(Component.LEFT_ALIGNMENT);
                 btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, btn.getPreferredSize().height));
                 btn.setToolTipText("Copy source code of " + fileName);
@@ -62,11 +85,23 @@ public class PatchErrorDialog extends JDialog {
         JScrollPane classScroll = new JScrollPane(classButtonsPanel);
         classScroll.setPreferredSize(new Dimension(580, 120));
         classScroll.getVerticalScrollBar().setUnitIncrement(16);
-        classScroll.setBorder(BorderFactory.createTitledBorder("Failed Classes — Click to Copy Source"));
+        classScroll.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(warnBorder, 1, true),
+                BorderFactory.createTitledBorder(
+                        BorderFactory.createEmptyBorder(),
+                        "Failed Classes — Click to Copy Source",
+                        javax.swing.border.TitledBorder.LEFT,
+                        javax.swing.border.TitledBorder.TOP,
+                        null,
+                        warnFg)));
 
-        // --- Center split: error report on top, class buttons below ---
+        // --- Center split: warning header + error report on top, class buttons below ---
+        JPanel errorPanel = new JPanel(new BorderLayout(0, 4));
+        errorPanel.add(warningHeader, BorderLayout.NORTH);
+        errorPanel.add(errorScroll, BorderLayout.CENTER);
+
         JPanel centerPanel = new JPanel(new BorderLayout(0, 8));
-        centerPanel.add(errorScroll, BorderLayout.CENTER);
+        centerPanel.add(errorPanel, BorderLayout.CENTER);
         if (hasClasses) {
             centerPanel.add(classScroll, BorderLayout.SOUTH);
         }
@@ -94,6 +129,7 @@ public class PatchErrorDialog extends JDialog {
         }
 
         JButton copyBothBtn = new JButton("Copy All + Error");
+        copyBothBtn.setForeground(warnFg);
         copyBothBtn.addActionListener(e -> {
             StringBuilder sb = new StringBuilder();
             if (hasClasses) {
@@ -112,6 +148,7 @@ public class PatchErrorDialog extends JDialog {
         });
 
         JButton copyErrorBtn = new JButton("Copy Error Report");
+        copyErrorBtn.setForeground(warnFg);
         copyErrorBtn.addActionListener(e -> {
             clipboard.write(errorMessage);
             copyErrorBtn.setText("Copied Error Report!");
@@ -119,6 +156,7 @@ public class PatchErrorDialog extends JDialog {
         });
 
         JButton closeBtn = new JButton("Close");
+        closeBtn.setForeground(warnFg);
         closeBtn.addActionListener(e -> dispose());
 
         if (hasClasses) bottomPanel.add(copyBothBtn);
