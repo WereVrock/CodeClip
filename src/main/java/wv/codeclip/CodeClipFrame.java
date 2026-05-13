@@ -841,6 +841,16 @@ return line.substring("LAST_UPDATED=".length()).trim();
 return null;
 }
 
+private String extractBuildNoFromContent(String content) {
+if (content == null) return "?";
+for (String line : content.split("\n")) {
+if (line.startsWith("BUILD_NO=")) {
+return line.substring("BUILD_NO=".length()).trim();
+}
+}
+return "?";
+}
+
 private void openTimestampDialog() {
 java.io.File sourceRoot = detectSourceRoot();
 boolean hasTimestamp = false;
@@ -951,7 +961,8 @@ java.io.File f = repo.getClassFileMap().get(entry.getKey());
 if (f == null || !f.getName().equals(BUILD_INFO_FILE)) continue;
 String timestamp = extractTimestampFromContent(content);
 if (timestamp != null) {
-setTitle("Code Clip — " + timestamp);
+String buildNo = extractBuildNoFromContent(content);
+setTitle("Code Clip — #" + buildNo + " " + timestamp);
 return;
 }
 }
@@ -975,7 +986,8 @@ String path = candidate.getAbsolutePath();
 repo.getClassCodeMap().put(path, content);
 repo.getClassFileMap().put(path, candidate);
 repo.setCheckpoint(path, content);
-setTitle("Code Clip — " + timestamp);
+String buildNo = extractBuildNoFromContent(content);
+setTitle("Code Clip — #" + buildNo + " " + timestamp);
 return;
 }
 } catch (java.io.IOException ignored) {}
@@ -992,8 +1004,29 @@ String timestamp = java.time.LocalDateTime.now()
 java.io.File sourceRoot = detectSourceRoot();
 if (sourceRoot == null) return;
 
+// Read existing build number and increment it (base-36)
+int nextBuildNo = 1;
 java.io.File file = new java.io.File(sourceRoot, BUILD_INFO_FILE);
-String content = "LAST_UPDATED=" + timestamp + "\n";
+if (file.exists()) {
+String oldContent = repo.getClassCodeMap().get(file.getAbsolutePath());
+if (oldContent == null) {
+try { oldContent = java.nio.file.Files.readString(file.toPath()); }
+catch (java.io.IOException ignored) {}
+}
+if (oldContent != null) {
+for (String line : oldContent.split("\n")) {
+if (line.startsWith("BUILD_NO=")) {
+String oldNo = line.substring("BUILD_NO=".length()).trim();
+try {
+nextBuildNo = Integer.parseInt(oldNo, 36) + 1;
+} catch (NumberFormatException ignored) {}
+break;
+}
+}
+}
+}
+String buildNo36 = Integer.toString(nextBuildNo, 36);
+String content = "LAST_UPDATED=" + timestamp + "\nBUILD_NO=" + buildNo36 + "\n";
 
 // Capture old content for undo snapshot before overwriting
 String path = file.getAbsolutePath();
@@ -1094,6 +1127,10 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+
+
+
 
 
 
