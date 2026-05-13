@@ -19,12 +19,24 @@ public class PatchUndoManager {
     public void setPanelAddCallback(java.util.function.BiConsumer<String, String> callback) {
         this.panelAddCallback = callback;
     }
-    public void pushUndo(Map<String, String> snapshot, String title) {
-        undoStack.addFirst(new Entry(snapshot, title));
-        if (undoStack.size() > MAX_HISTORY) undoStack.removeLast();
-        redoStack.clear();
+
+public void pushUndo(Map<String, String> snapshot, String title) {
+    undoStack.addFirst(new Entry(snapshot, title));
+    if (undoStack.size() > MAX_HISTORY) undoStack.removeLast();
+    redoStack.clear();
+}
+
+public void mergeTimestampSnapshot(String path, String oldContent) {
+    if (undoStack.isEmpty()) return;
+    Entry top = undoStack.peekFirst();
+    if (top == null) return;
+    // Only add if not already captured (don't overwrite an earlier old value)
+    if (!top.snapshot().containsKey(path)) {
+        top.snapshot().put(path, oldContent);
     }
-    public boolean canUndo() { return !undoStack.isEmpty(); }
+}
+
+public boolean canUndo() { return !undoStack.isEmpty(); }
     public boolean canRedo() { return !redoStack.isEmpty(); }
     public Entry undo(ClassRepository repo) throws IOException {
         if (!canUndo()) return null;
