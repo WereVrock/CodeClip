@@ -219,6 +219,11 @@ extraMenu.add(copyArchItem);
 JMenuItem timestampItem = new JMenuItem("Timestamp…");
 timestampItem.addActionListener(e -> openTimestampDialog());
 extraMenu.add(timestampItem);
+JMenuItem copyMetaItem = new JMenuItem("Copy Meta Instructions");
+copyMetaItem.addActionListener(e -> {
+new ClipboardService().write(wv.codeclip.config.MetaInstructions.TEXT);
+});
+extraMenu.add(copyMetaItem);
 menuBar.add(extraMenu);
 
 JMenu systemMenu = new JMenu("System");
@@ -1017,3 +1022,5 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+

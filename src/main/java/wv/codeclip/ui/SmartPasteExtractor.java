@@ -45,6 +45,12 @@ public List<Entry> extract(boolean includeClasses) {
     String text = this.text.replaceAll("(?m)^```@@", "@@")
                            .replaceAll("(?m)^```\\s*$", "");
 
+    // Strip @@IGNORE...@@IGNOREEND blocks entirely
+    text = text.replaceAll("(?s)@@IGNORE\\b.*?@@IGNOREEND", "");
+
+    // Strip lines prefixed with ! (escape single lines)
+    text = text.replaceAll("(?m)^!@@", "//escaped@@");
+
     String patchMarker = PatchParser.PATCH_MARKER();
     String endMarker   = PatchParser.END_MARKER();
 
