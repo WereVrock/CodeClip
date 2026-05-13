@@ -78,6 +78,7 @@ private static final Color LOG_CLASS_COLOR = new Color(30, 120, 220);
 private static final Color UNSYNCED_COLOR  = new Color(30, 100, 210);
 
 private static final String BUILD_INFO_FILE = "buildinfo.properties";
+private static final int ICON_SIZE = 64;
 
 public CodeClipFrame() {
 
@@ -106,6 +107,7 @@ includeInstructionsCheck::isSelected
 );
 
 setTitle("Code Clip");
+setIcon();
 setDefaultCloseOperation(EXIT_ON_CLOSE);
 setBounds(settings.loadFrameBounds());
 setLayout(new BorderLayout());
@@ -572,6 +574,46 @@ return notesBuffer;
 // Classes
 // ------------------------------------------------------------------
 
+private void setIcon() {
+java.net.URL iconURL = getClass().getResource("/icon.png");
+if (iconURL != null) {
+setIconImage(new ImageIcon(iconURL).getImage());
+return;
+}
+// Fallback: generate programmatic icon
+java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
+ICON_SIZE, ICON_SIZE, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+Graphics2D g2 = img.createGraphics();
+g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+// Background rounded square
+GradientPaint bgGrad = new GradientPaint(0, 0, new Color(79, 110, 247),
+ICON_SIZE, ICON_SIZE, new Color(43, 156, 216));
+g2.setPaint(bgGrad);
+g2.fillRoundRect(2, 2, ICON_SIZE - 4, ICON_SIZE - 4, 14, 14);
+// Clipboard body
+g2.setColor(Color.WHITE);
+g2.fillRoundRect(12, 20, ICON_SIZE - 24, ICON_SIZE - 28, 8, 8);
+// Clip
+GradientPaint clipGrad = new GradientPaint(0, 0, new Color(208, 213, 221),
+ICON_SIZE, 0, new Color(160, 170, 181));
+g2.setPaint(clipGrad);
+g2.fillRoundRect(ICON_SIZE / 2 - 12, 14, 24, 10, 4, 4);
+g2.setColor(new Color(176, 184, 194));
+g2.fillRect(ICON_SIZE / 2 - 12, 24, 24, 2);
+// Code brackets
+g2.setColor(new Color(79, 110, 247, 220));
+g2.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+int cy = ICON_SIZE / 2 + 8;
+g2.drawLine(26, cy - 10, 24, cy);
+g2.drawLine(24, cy, 26, cy + 10);
+g2.drawLine(ICON_SIZE - 26, cy - 10, ICON_SIZE - 24, cy);
+g2.drawLine(ICON_SIZE - 24, cy, ICON_SIZE - 26, cy + 10);
+// Center dot
+g2.fillOval(ICON_SIZE / 2 - 3, cy - 3, 6, 6);
+g2.dispose();
+setIconImage(img);
+}
+
 private void installDnD() {
 new FileDropHandler(this::addClass).install(this);
 }
@@ -967,7 +1009,7 @@ if (f == null || !f.getName().equals(BUILD_INFO_FILE)) continue;
 String timestamp = extractTimestampFromContent(content);
 if (timestamp != null) {
 String buildNo = extractBuildNoFromContent(content);
-setTitle("Code Clip — #" + buildNo + " " + timestamp);
+setTitle("Code Clip — #" + buildNo + " --- " + timestamp);
 return;
 }
 }
@@ -992,7 +1034,7 @@ repo.getClassCodeMap().put(path, content);
 repo.getClassFileMap().put(path, candidate);
 repo.setCheckpoint(path, content);
 String buildNo = extractBuildNoFromContent(content);
-setTitle("Code Clip — #" + buildNo + " " + timestamp);
+setTitle("Code Clip — #" + buildNo + " --- " + timestamp);
 return;
 }
 } catch (java.io.IOException ignored) {}
@@ -1132,6 +1174,11 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+
+
+
+
 
 
 
