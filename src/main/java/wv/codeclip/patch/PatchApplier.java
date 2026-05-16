@@ -367,13 +367,32 @@ return -1;
 }
 
 private String resolveFilePath(String fileName) {
-for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
-if (entry.getValue().getName().equalsIgnoreCase(fileName)) {
-return entry.getKey();
-}
-}
-return null;
-}
+        // Normalize: accept slash-separated or dot-separated package prefix
+        // e.g. "wv/codeclip/patch/NobleArmy.java" or "wv.codeclip.patch.NobleArmy.java"
+        String bareName = fileName;
+
+        // Strip slash-based path prefix
+        int lastSlash = fileName.lastIndexOf('/');
+        if (lastSlash < 0) lastSlash = fileName.lastIndexOf('\\');
+        if (lastSlash >= 0) {
+            bareName = fileName.substring(lastSlash + 1);
+        } else if (fileName.contains(".") && fileName.endsWith(".java")) {
+            // Dot-separated: wv.codeclip.patch.NobleArmy.java
+            // Split on dots, last two tokens are ClassName.java
+            String[] parts = fileName.split("\\.");
+            // last part is "java", second-to-last is the class name
+            if (parts.length >= 2) {
+                bareName = parts[parts.length - 2] + ".java";
+            }
+        }
+
+        for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
+            if (entry.getValue().getName().equalsIgnoreCase(bareName)) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
 
 private record ResolvedChange(String path, String newCode, String description) {}
 
