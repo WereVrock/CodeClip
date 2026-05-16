@@ -238,6 +238,14 @@ extraMenu.add(copyArchItem);
 JMenuItem timestampItem = new JMenuItem("Version Display…");
 timestampItem.addActionListener(e -> openTimestampDialog());
 extraMenu.add(timestampItem);
+JMenuItem copyEnablerItem = new JMenuItem("Copy Enable Instructions");
+copyEnablerItem.addActionListener(e -> {
+new ClipboardService().write(
+"Use @@Enable to enable the classes you want\n\n" +
+"@@Enable ClassName1, ClassName2, ClassName3"
+);
+});
+extraMenu.add(copyEnablerItem);
 JMenuItem copyMetaItem = new JMenuItem("Copy Meta Instructions");
 copyMetaItem.addActionListener(e -> {
 new ClipboardService().write(wv.codeclip.config.MetaInstructions.TEXT);
@@ -1191,6 +1199,9 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+
+
 
 
 
