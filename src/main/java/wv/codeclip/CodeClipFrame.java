@@ -87,7 +87,7 @@ undoManager = new wv.codeclip.patch.PatchUndoManager();
 pasteHandler = new PasteClassHandler(
 repo,
 this,
-this::refreshText,
+() -> { refreshText(); refreshPanels(); },
 this::appendTempLog,
 this::addClassPanel,
 this::onCodeChanged,
@@ -1063,73 +1063,73 @@ return false;
 }
 
 private void stampBuildInfo() {
-    String timestamp = java.time.LocalDateTime.now()
-            .format(java.time.format.DateTimeFormatter.ofPattern("EEE-HH:mm:ss"));
+String timestamp = java.time.LocalDateTime.now()
+.format(java.time.format.DateTimeFormatter.ofPattern("EEE-HH:mm:ss"));
 
-    java.io.File sourceRoot = detectSourceRoot();
-    if (sourceRoot == null) return;
+java.io.File sourceRoot = detectSourceRoot();
+if (sourceRoot == null) return;
 
-    int nextBuildNo = 1;
-    java.io.File file = new java.io.File(sourceRoot, BUILD_INFO_FILE);
-    if (file.exists()) {
-        String oldContent = repo.getClassCodeMap().get(file.getAbsolutePath());
-        if (oldContent == null) {
-            try { oldContent = java.nio.file.Files.readString(file.toPath()); }
-            catch (java.io.IOException ignored) {}
-        }
-        if (oldContent != null) {
-            for (String line : oldContent.split("\n")) {
-                if (line.startsWith("BUILD_NO=")) {
-                    String oldNo = line.substring("BUILD_NO=".length()).trim();
-                    try {
-                        nextBuildNo = Integer.parseInt(oldNo, 36) + 1;
-                    } catch (NumberFormatException ignored) {}
-                    break;
-                }
-            }
-        }
-    }
-    String buildNo36 = Integer.toString(nextBuildNo, 36);
-    String content = "LAST_UPDATED=" + timestamp + "\nBUILD_NO=" + buildNo36 + "\n";
+int nextBuildNo = 1;
+java.io.File file = new java.io.File(sourceRoot, BUILD_INFO_FILE);
+if (file.exists()) {
+String oldContent = repo.getClassCodeMap().get(file.getAbsolutePath());
+if (oldContent == null) {
+try { oldContent = java.nio.file.Files.readString(file.toPath()); }
+catch (java.io.IOException ignored) {}
+}
+if (oldContent != null) {
+for (String line : oldContent.split("\n")) {
+if (line.startsWith("BUILD_NO=")) {
+String oldNo = line.substring("BUILD_NO=".length()).trim();
+try {
+nextBuildNo = Integer.parseInt(oldNo, 36) + 1;
+} catch (NumberFormatException ignored) {}
+break;
+}
+}
+}
+}
+String buildNo36 = Integer.toString(nextBuildNo, 36);
+String content = "LAST_UPDATED=" + timestamp + "\nBUILD_NO=" + buildNo36 + "\n";
 
-    // Log target build info
-    appendTempLog("Target Build: #" + buildNo36 + " --- " + timestamp);
+// Log target build info
+appendTempLog("Target Build: #" + buildNo36 + " --- " + timestamp);
 
-    String path = file.getAbsolutePath();
-    String oldContent = repo.getClassCodeMap().get(path);
-    if (oldContent == null && file.exists()) {
-        try { oldContent = java.nio.file.Files.readString(file.toPath()); }
-        catch (java.io.IOException ignored) {}
-    }
+String path = file.getAbsolutePath();
+String oldContent = repo.getClassCodeMap().get(path);
+if (oldContent == null && file.exists()) {
+try { oldContent = java.nio.file.Files.readString(file.toPath()); }
+catch (java.io.IOException ignored) {}
+}
 
-    try {
-        java.nio.file.Files.writeString(file.toPath(), content);
-        repo.getClassCodeMap().put(path, content);
-        repo.getClassFileMap().put(path, file);
-        repo.setCheckpoint(path, content);
+try {
+java.nio.file.Files.writeString(file.toPath(), content);
+repo.getClassCodeMap().put(path, content);
+repo.getClassFileMap().put(path, file);
+repo.setCheckpoint(path, content);
 
-        if (oldContent != null) {
-            undoManager.mergeTimestampSnapshot(path, oldContent);
-        }
+if (oldContent != null) {
+undoManager.mergeTimestampSnapshot(path, oldContent);
+}
 
-        boolean panelExists = false;
-        for (java.awt.Component c : classPanel.getComponents()) {
-            if (c instanceof JPanel p &&
-                file.getAbsolutePath().equals(p.getClientProperty("path"))) {
-                panelExists = true;
-                break;
-            }
-        }
-        if (!panelExists) {
-            addClassPanel(path, file.getName());
-        }
+boolean panelExists = false;
+for (java.awt.Component c : classPanel.getComponents()) {
+if (c instanceof JPanel p &&
+file.getAbsolutePath().equals(p.getClientProperty("path"))) {
+panelExists = true;
+break;
+}
+}
+if (!panelExists) {
+addClassPanel(path, file.getName());
+}
 
-        refreshText();
-        refreshTitle();
+refreshText();
+refreshTitle();
 
-    } catch (java.io.IOException ex) {
-        ex.printStackTrace();
-    }
+} catch (java.io.IOException ex) {
+ex.printStackTrace();
+}
 }
 
 private java.io.File detectSourceRoot() {
@@ -1191,6 +1191,7 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
 
 
 
