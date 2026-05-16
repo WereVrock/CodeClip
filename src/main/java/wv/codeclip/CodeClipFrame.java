@@ -81,6 +81,10 @@ private static final String BUILD_INFO_FILE = "buildinfo.properties";
 private static final int ICON_SIZE = 64;
 private boolean titleFrozen = false;
 
+private JWindow loadBarWindow;
+private JProgressBar loadProgressBar;
+private JLabel loadProgressLabel;
+
 public CodeClipFrame() {
 
 undoManager = new wv.codeclip.patch.PatchUndoManager();
@@ -126,6 +130,7 @@ SmartPasteSettings.load(settings);
 renderNotes();
 
 loadClassPathsBatched(settings.loadClassPaths());
+showLoadBar();
 // Retry title restore until workers finish, up to 20 attempts x 150ms = 3s
 int[] attempts = {0};
 javax.swing.Timer titleTimer = new javax.swing.Timer(150, null);
@@ -627,100 +632,239 @@ g2.dispose();
 setIconImage(img);
 }
 
+private void showLoadBar() {
+loadBarWindow = new JWindow(this);
+loadProgressBar = new JProgressBar(0, 100);
+loadProgressBar.setValue(0);
+loadProgressBar.setStringPainted(false);
+loadProgressBar.setPreferredSize(new java.awt.Dimension(280, 7));
+loadProgressBar.setBorderPainted(false);
+
+loadProgressLabel = new JLabel("Loading…");
+loadProgressLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+loadProgressLabel.setForeground(UIManager.getColor("Label.foreground"));
+
+JLabel subLabel = new JLabel("Reading class files");
+subLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+subLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+subLabel.setName("subLabel");
+
+JPanel inner = new JPanel();
+inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
+inner.setBorder(BorderFactory.createCompoundBorder(
+BorderFactory.createLineBorder(UIManager.getColor("Separator.foreground"), 1),
+BorderFactory.createEmptyBorder(12, 16, 14, 16)
+));
+inner.setBackground(UIManager.getColor("Panel.background"));
+inner.add(loadProgressLabel);
+inner.add(Box.createVerticalStrut(3));
+inner.add(subLabel);
+inner.add(Box.createVerticalStrut(10));
+inner.add(loadProgressBar);
+
+loadBarWindow.setContentPane(inner);
+loadBarWindow.pack();
+
+// Position bottom-right of frame
+Rectangle b = getBounds();
+int wx = b.x + b.width  - loadBarWindow.getWidth()  - 16;
+int wy = b.y + b.height - loadBarWindow.getHeight() - 16;
+loadBarWindow.setLocation(wx, wy);
+loadBarWindow.setVisible(true);
+}
+
+private void updateLoadBar(int done, int total) {
+if (loadBarWindow == null || !loadBarWindow.isVisible()) return;
+int pct = (int) Math.round(done * 100.0 / total);
+loadProgressBar.setValue(pct);
+loadProgressLabel.setText("Loading " + done + " of " + total + "…");
+}
+
+private void hideLoadBar() {
+if (loadBarWindow != null) {
+loadBarWindow.setVisible(false);
+loadBarWindow.dispose();
+loadBarWindow = null;
+}
+}
+
 private void installDnD() {
-new FileDropHandler(this::addClass).install(this);
+new FileDropHandler(this::addFilesBatched, true).install(this);
 }
 
 private void addClass(File file) {
-    addClassInternal(file, true);
+    addFilesBatched(List.of(file));
 }
 
-private void addClassInternal(File file, boolean doRefresh) {
-    String path = file.getAbsolutePath();
+private void addFilesBatched(List<File> files) {
+    if (files.isEmpty()) return;
 
-    if (repo.getClassCodeMap().containsKey(path)) {
-        if (repo.getDisabledClasses().remove(path)) {
-            if (doRefresh) { refreshText(); refreshPanels(); }
+    List<File> toLoad = new ArrayList<>();
+    for (File file : files) {
+        String path = file.getAbsolutePath();
+        if (repo.getClassCodeMap().containsKey(path)) {
+            repo.getDisabledClasses().remove(path);
+        } else {
+            toLoad.add(file);
         }
+    }
+
+    if (toLoad.isEmpty()) {
+        refreshText();
+        refreshPanels();
         return;
     }
 
-    SwingWorker<String, Void> worker = new SwingWorker<>() {
-        @Override
-        protected String doInBackground() throws Exception {
-            return Files.readString(file.toPath());
-        }
-
-        @Override
-        protected void done() {
-            try {
-                String code = get();
-                repo.getClassCodeMap().put(path, code);
-                repo.getClassFileMap().put(path, file);
-                repo.setCheckpoint(path, code);
-                addClassPanel(path, file.getName());
-                if (doRefresh) {
-                    refreshText();
-                    refreshPanels();
-                }
-                if (file.getName().equals(BUILD_INFO_FILE)) {
-                    refreshTitle();
-                }
-            } catch (Exception ignored) {}
-        }
-    };
-    worker.execute();
-}
-
-private void loadClassPathsBatched(String[] paths) {
-    if (paths.length == 0) return;
+    int total = toLoad.size();
+    showLoadBar();
 
     java.util.concurrent.atomic.AtomicInteger remaining =
-        new java.util.concurrent.atomic.AtomicInteger(paths.length);
+        new java.util.concurrent.atomic.AtomicInteger(total);
+    java.util.concurrent.atomic.AtomicInteger loaded =
+        new java.util.concurrent.atomic.AtomicInteger(0);
 
-    for (String path : paths) {
-        File f = new File(path);
-        if (!f.exists()) {
-            if (remaining.decrementAndGet() == 0) {
-                SwingUtilities.invokeLater(() -> { refreshText(); refreshPanels(); });
-            }
-            continue;
-        }
-
-        String absPath = f.getAbsolutePath();
-        if (repo.getClassCodeMap().containsKey(absPath)) {
-            repo.getDisabledClasses().remove(absPath);
-            if (remaining.decrementAndGet() == 0) {
-                SwingUtilities.invokeLater(() -> { refreshText(); refreshPanels(); });
-            }
-            continue;
-        }
-
+    for (File file : toLoad) {
+        String path = file.getAbsolutePath();
         SwingWorker<String, Void> worker = new SwingWorker<>() {
             @Override
             protected String doInBackground() throws Exception {
-                return Files.readString(f.toPath());
+                return Files.readString(file.toPath());
             }
 
             @Override
             protected void done() {
                 try {
                     String code = get();
-                    repo.getClassCodeMap().put(absPath, code);
-                    repo.getClassFileMap().put(absPath, f);
-                    repo.setCheckpoint(absPath, code);
-                    addClassPanel(absPath, f.getName());
-                    if (f.getName().equals(BUILD_INFO_FILE)) refreshTitle();
+                    repo.getClassCodeMap().put(path, code);
+                    repo.getClassFileMap().put(path, file);
+                    repo.setCheckpoint(path, code);
+                    addClassPanel(path, file.getName());
+                    if (file.getName().equals(BUILD_INFO_FILE)) refreshTitle();
                 } catch (Exception ignored) {
                 } finally {
+                    int done = loaded.incrementAndGet();
+                    SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
                     if (remaining.decrementAndGet() == 0) {
-                        SwingUtilities.invokeLater(() -> { refreshText(); refreshPanels(); });
+                        SwingUtilities.invokeLater(() -> {
+                            refreshText();
+                            refreshPanels();
+                            hideLoadBar();
+                        });
                     }
                 }
             }
         };
         worker.execute();
     }
+}
+
+private void addClassInternal(File file, boolean doRefresh) {
+String path = file.getAbsolutePath();
+
+if (repo.getClassCodeMap().containsKey(path)) {
+if (repo.getDisabledClasses().remove(path)) {
+if (doRefresh) { refreshText(); refreshPanels(); }
+}
+return;
+}
+
+SwingWorker<String, Void> worker = new SwingWorker<>() {
+@Override
+protected String doInBackground() throws Exception {
+return Files.readString(file.toPath());
+}
+
+@Override
+protected void done() {
+try {
+String code = get();
+repo.getClassCodeMap().put(path, code);
+repo.getClassFileMap().put(path, file);
+repo.setCheckpoint(path, code);
+addClassPanel(path, file.getName());
+if (doRefresh) {
+refreshText();
+refreshPanels();
+}
+if (file.getName().equals(BUILD_INFO_FILE)) {
+refreshTitle();
+}
+} catch (Exception ignored) {}
+}
+};
+worker.execute();
+}
+
+private void loadClassPathsBatched(String[] paths) {
+if (paths.length == 0) return;
+
+java.util.concurrent.atomic.AtomicInteger remaining =
+new java.util.concurrent.atomic.AtomicInteger(paths.length);
+java.util.concurrent.atomic.AtomicInteger loaded =
+new java.util.concurrent.atomic.AtomicInteger(0);
+int total = paths.length;
+
+for (String path : paths) {
+File f = new File(path);
+if (!f.exists()) {
+int done = loaded.incrementAndGet();
+SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
+if (remaining.decrementAndGet() == 0) {
+SwingUtilities.invokeLater(() -> {
+refreshText();
+refreshPanels();
+hideLoadBar();
+});
+}
+continue;
+}
+
+String absPath = f.getAbsolutePath();
+if (repo.getClassCodeMap().containsKey(absPath)) {
+repo.getDisabledClasses().remove(absPath);
+int done = loaded.incrementAndGet();
+SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
+if (remaining.decrementAndGet() == 0) {
+SwingUtilities.invokeLater(() -> {
+refreshText();
+refreshPanels();
+hideLoadBar();
+});
+}
+continue;
+}
+
+SwingWorker<String, Void> worker = new SwingWorker<>() {
+@Override
+protected String doInBackground() throws Exception {
+return Files.readString(f.toPath());
+}
+
+@Override
+protected void done() {
+try {
+String code = get();
+repo.getClassCodeMap().put(absPath, code);
+repo.getClassFileMap().put(absPath, f);
+repo.setCheckpoint(absPath, code);
+addClassPanel(absPath, f.getName());
+if (f.getName().equals(BUILD_INFO_FILE)) refreshTitle();
+} catch (Exception ignored) {
+} finally {
+int done = loaded.incrementAndGet();
+SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
+if (remaining.decrementAndGet() == 0) {
+SwingUtilities.invokeLater(() -> {
+refreshText();
+refreshPanels();
+hideLoadBar();
+});
+}
+}
+}
+};
+worker.execute();
+}
 }
 
 // ------------------------------------------------------------------
@@ -1260,6 +1404,8 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+
 
 
 
