@@ -41,6 +41,7 @@ private final BiConsumer<String, String> codeChangedCallback;
 private final Supplier<Boolean> multiPatchMode;
 private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
 private final wv.codeclip.patch.PatchUndoManager undoManager;
+private final wv.codeclip.ui.CopierCommand copierCommand;
 private java.util.function.Consumer<Boolean> postPasteCallback;
 
 private static final int CLASS_NAME_WRAP_LENGTH = 40;
@@ -85,6 +86,7 @@ this.codeChangedCallback = codeChangedCallback;
 this.multiPatchMode = multiPatchMode;
 this.errorCallback = null;
 this.undoManager = undoManager;
+this.copierCommand = new wv.codeclip.ui.CopierCommand(repo, statusLogger);
 
 this.clipboard = new ClipboardService();
 this.parser = new JavaSourceParser();
@@ -97,48 +99,53 @@ this.fileWriter = new ClassFileWriter(repo);
 // ------------------------------------------------------------------
 
 public void handlePasteFromClipboard() {
-    String text = clipboard.read();
-    if (text == null || text.isBlank()) {
-        JOptionPane.showMessageDialog(
-            parent,
-            "Clipboard is empty or does not contain text.",
-            "Error",
-            JOptionPane.ERROR_MESSAGE
-        );
-        return;
-    }
+String text = clipboard.read();
+if (text == null || text.isBlank()) {
+JOptionPane.showMessageDialog(
+parent,
+"Clipboard is empty or does not contain text.",
+"Error",
+JOptionPane.ERROR_MESSAGE
+);
+return;
+}
 
-    if (text.trim().startsWith("@@Enable")) {
-        boolean changed = handleEnable(text.trim());
-        firePostPaste(changed);
-        return;
-    }
+if (text.trim().startsWith("@@Enable")) {
+boolean changed = handleEnable(text.trim());
+firePostPaste(changed);
+return;
+}
 
-    if (Boolean.TRUE.equals(multiPatchMode.get()) &&
-            (PatchParser.containsPatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
-        boolean changed = handleSmartPaste(text);
-        firePostPaste(changed);
-        return;
-    }
+if (text.trim().startsWith("@@Copier")) {
+copierCommand.handle(text.trim());
+return;
+}
 
-    if (PatchParser.containsPatch(text)) {
-        boolean changed = handlePatch(text);
-        firePostPaste(changed);
-        return;
-    }
+if (Boolean.TRUE.equals(multiPatchMode.get()) &&
+(PatchParser.containsPatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
+boolean changed = handleSmartPaste(text);
+firePostPaste(changed);
+return;
+}
 
-    if (!looksLikeJavaSource(text)) {
-        JOptionPane.showMessageDialog(
-            parent,
-            "Clipboard does not appear to contain Java source code.",
-            "Invalid Input",
-            JOptionPane.ERROR_MESSAGE
-        );
-        return;
-    }
+if (PatchParser.containsPatch(text)) {
+boolean changed = handlePatch(text);
+firePostPaste(changed);
+return;
+}
 
-    handlePaste(text);
-    firePostPaste(true);
+if (!looksLikeJavaSource(text)) {
+JOptionPane.showMessageDialog(
+parent,
+"Clipboard does not appear to contain Java source code.",
+"Invalid Input",
+JOptionPane.ERROR_MESSAGE
+);
+return;
+}
+
+handlePaste(text);
+firePostPaste(true);
 }
 
 // ------------------------------------------------------------------
@@ -163,58 +170,58 @@ PatchErrorDialog.show((JFrame) parent, result, repo);
 }
 
 private boolean handleSmartPaste(String text) {
-    SmartPasteExtractor extractor = new SmartPasteExtractor(text);
-    List<SmartPasteExtractor.Entry> entries = extractor.extract(
-            SmartPasteSettings.isAllowClasses()
-    );
+SmartPasteExtractor extractor = new SmartPasteExtractor(text);
+List<SmartPasteExtractor.Entry> entries = extractor.extract(
+SmartPasteSettings.isAllowClasses()
+);
 
-    if (entries.isEmpty()) {
-        JOptionPane.showMessageDialog(parent,
-                "Smart Paste: no patches or class blocks found.",
-                "Nothing Found", JOptionPane.INFORMATION_MESSAGE);
-        return false;
-    }
+if (entries.isEmpty()) {
+JOptionPane.showMessageDialog(parent,
+"Smart Paste: no patches or class blocks found.",
+"Nothing Found", JOptionPane.INFORMATION_MESSAGE);
+return false;
+}
 
-    List<String> logLines = new ArrayList<>();
-    Map<String, String> combinedSnapshot = new java.util.LinkedHashMap<>();
-    List<String> titles = new ArrayList<>();
+List<String> logLines = new ArrayList<>();
+Map<String, String> combinedSnapshot = new java.util.LinkedHashMap<>();
+List<String> titles = new ArrayList<>();
 
-    for (SmartPasteExtractor.Entry entry : entries) {
-        if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
-            handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles);
-        } else if (entry instanceof SmartPasteExtractor.ClassEntry ce) {
-            handlePasteInternal(ce.text(), logLines, combinedSnapshot, titles);
-        }
-    }
+for (SmartPasteExtractor.Entry entry : entries) {
+if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
+handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles);
+} else if (entry instanceof SmartPasteExtractor.ClassEntry ce) {
+handlePasteInternal(ce.text(), logLines, combinedSnapshot, titles);
+}
+}
 
-    if (!combinedSnapshot.isEmpty()) {
-        String combinedTitle = titles.isEmpty() ? "Smart Paste"
-                : titles.size() == 1 ? titles.get(0)
-                : titles.get(0) + " (+" + (titles.size() - 1) + " more)";
-        undoManager.pushUndo(combinedSnapshot, combinedTitle);
-    }
+if (!combinedSnapshot.isEmpty()) {
+String combinedTitle = titles.isEmpty() ? "Smart Paste"
+: titles.size() == 1 ? titles.get(0)
+: titles.get(0) + " (+" + (titles.size() - 1) + " more)";
+undoManager.pushUndo(combinedSnapshot, combinedTitle);
+}
 
-    if (!logLines.isEmpty() && statusLogger != null) {
-        int patchCount = (int) entries.stream()
-                .filter(e -> e instanceof SmartPasteExtractor.PatchEntry).count();
-        int classCount = (int) entries.stream()
-                .filter(e -> e instanceof SmartPasteExtractor.ClassEntry).count();
-        String time = java.time.LocalTime.now()
-                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
-        String footer = "─".repeat(32);
-        String header = "── Smart Paste [" + time + "]: "
-                + (patchCount > 0 ? patchCount + " patch block" + (patchCount > 1 ? "s" : "") : "")
-                + (patchCount > 0 && classCount > 0 ? ", " : "")
-                + (classCount > 0 ? classCount + " class" + (classCount > 1 ? "es" : "") : "")
-                + ", " + logLines.size() + " change" + (logLines.size() > 1 ? "s" : "") + " ──";
-        statusLogger.accept(footer);
-        for (int i = logLines.size() - 1; i >= 0; i--) {
-            statusLogger.accept(logLines.get(i));
-        }
-        statusLogger.accept(header);
-    }
+if (!logLines.isEmpty() && statusLogger != null) {
+int patchCount = (int) entries.stream()
+.filter(e -> e instanceof SmartPasteExtractor.PatchEntry).count();
+int classCount = (int) entries.stream()
+.filter(e -> e instanceof SmartPasteExtractor.ClassEntry).count();
+String time = java.time.LocalTime.now()
+.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+String footer = "─".repeat(32);
+String header = "── Smart Paste [" + time + "]: "
++ (patchCount > 0 ? patchCount + " patch block" + (patchCount > 1 ? "s" : "") : "")
++ (patchCount > 0 && classCount > 0 ? ", " : "")
++ (classCount > 0 ? classCount + " class" + (classCount > 1 ? "es" : "") : "")
++ ", " + logLines.size() + " change" + (logLines.size() > 1 ? "s" : "") + " ──";
+statusLogger.accept(footer);
+for (int i = logLines.size() - 1; i >= 0; i--) {
+statusLogger.accept(logLines.get(i));
+}
+statusLogger.accept(header);
+}
 
-    return !combinedSnapshot.isEmpty();
+return !combinedSnapshot.isEmpty();
 }
 
 private void handleSmartPatchEntry(String patchText, List<String> logLines,
@@ -310,71 +317,71 @@ statusLogger.accept(header);
 }
 
 private boolean handlePatch(String text) {
-    String title = PatchParser.extractTitle(text);
-    String desc  = PatchParser.extractDesc(text);
+String title = PatchParser.extractTitle(text);
+String desc  = PatchParser.extractDesc(text);
 
-    if (duplicateDetector.check(text) == PatchDuplicateDetector.Result.DUPLICATE) {
-        int choice = JOptionPane.showConfirmDialog(
-            parent,
-            "This patch looks identical to a recently applied one:\n\n" +
-            (title != null ? "Title: " + title + "\n" : "") +
-            (desc  != null ? "Desc:  " + desc  + "\n" : "") +
-            "\nApply it again?",
-            "Duplicate Patch Detected",
-            JOptionPane.YES_NO_OPTION,
-            JOptionPane.WARNING_MESSAGE
-        );
-        if (choice != JOptionPane.YES_OPTION) return false;
-    }
+if (duplicateDetector.check(text) == PatchDuplicateDetector.Result.DUPLICATE) {
+int choice = JOptionPane.showConfirmDialog(
+parent,
+"This patch looks identical to a recently applied one:\n\n" +
+(title != null ? "Title: " + title + "\n" : "") +
+(desc  != null ? "Desc:  " + desc  + "\n" : "") +
+"\nApply it again?",
+"Duplicate Patch Detected",
+JOptionPane.YES_NO_OPTION,
+JOptionPane.WARNING_MESSAGE
+);
+if (choice != JOptionPane.YES_OPTION) return false;
+}
 
-    PatchParser patchParser = new PatchParser();
-    List<PatchChange> changes;
+PatchParser patchParser = new PatchParser();
+List<PatchChange> changes;
 
-    try {
-        changes = patchParser.parse(text);
-    } catch (IllegalArgumentException e) {
-        PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
-        return false;
-    }
+try {
+changes = patchParser.parse(text);
+} catch (IllegalArgumentException e) {
+PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
+return false;
+}
 
-    PatchApplier applier = new PatchApplier(repo);
-    PatchApplier.PatchResult result = applier.apply(changes);
+PatchApplier applier = new PatchApplier(repo);
+PatchApplier.PatchResult result = applier.apply(changes);
 
-    if (result.hasFailures()) {
-        reportError(result);
-    }
+if (result.hasFailures()) {
+reportError(result);
+}
 
-    if (result.hasSuccesses()) {
-        duplicateDetector.record(text);
-        undoManager.pushUndo(result.undoSnapshot(), title);
-        refreshCallback.run();
-        notifyCodeChangedForPatch(changes);
+if (result.hasSuccesses()) {
+duplicateDetector.record(text);
+undoManager.pushUndo(result.undoSnapshot(), title);
+refreshCallback.run();
+notifyCodeChangedForPatch(changes);
 
-        if (statusLogger != null) {
-            List<String> summary = result.successSummary();
-            String time = java.time.LocalTime.now()
-                    .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
-            String footer = "─".repeat(32);
-            List<String> files = changes.stream()
-                    .map(PatchChange::fileName)
-                    .distinct()
-                    .toList();
-            String filesLine = "  Files: " + String.join(", ", files);
-            String header = "── Patch [" + time + "] (" + summary.size()
-                    + " change" + (summary.size() > 1 ? "s" : "") + ")"
-                    + (title != null ? ": " + title : "") + " ──";
-            statusLogger.accept(footer);
-            for (int i = summary.size() - 1; i >= 0; i--) {
-                statusLogger.accept(summary.get(i));
-            }
-            statusLogger.accept(filesLine);
-            if (desc != null) statusLogger.accept("  " + desc);
-            statusLogger.accept(header);
-        }
-        return true;
-    }
+if (statusLogger != null) {
+List<String> summary = result.successSummary();
+String time = java.time.LocalTime.now()
+.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+String footer = "─".repeat(32);
+List<String> files = changes.stream()
+.map(PatchChange::fileName)
+.distinct()
+.toList();
+String filesLine = "  Files: " + String.join(", ", files);
+String header = "── Patch [" + time + "] (" + summary.size()
++ " change" + (summary.size() > 1 ? "s" : "") + ")"
++ (title != null ? ": " + title : "") + " ──";
+statusLogger.accept(footer);
+for (int i = summary.size() - 1; i >= 0; i--) {
+statusLogger.accept(summary.get(i));
+}
+statusLogger.accept(filesLine);
+if (desc != null) statusLogger.accept("  " + desc);
+statusLogger.accept(header);
+}
+return true;
+}
 
-    return false;
+return false;
 }
 
 // ------------------------------------------------------------------
@@ -572,40 +579,40 @@ return choice == JOptionPane.OK_OPTION;
 // ------------------------------------------------------------------
 
 private boolean handleEnable(String text) {
-    // Parse: @@Enable Foo.java, Bar.java
-    String arg = text.substring("@@Enable".length()).trim();
-    if (arg.isEmpty()) return false;
+// Parse: @@Enable Foo.java, Bar.java
+String arg = text.substring("@@Enable".length()).trim();
+if (arg.isEmpty()) return false;
 
-    String[] parts = arg.split("[,\\s]+");
-    List<String> targets = new ArrayList<>();
-    for (String p : parts) {
-        String trimmed = p.trim();
-        if (!trimmed.isEmpty()) targets.add(trimmed.toLowerCase());
-    }
-    if (targets.isEmpty()) return false;
+String[] parts = arg.split("[,\\s]+");
+List<String> targets = new ArrayList<>();
+for (String p : parts) {
+String trimmed = p.trim();
+if (!trimmed.isEmpty()) targets.add(trimmed.toLowerCase());
+}
+if (targets.isEmpty()) return false;
 
-    // Disable all
-    repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
+// Disable all
+repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
 
-    // Enable matched
-    List<String> enabled = new ArrayList<>();
-    for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
-        if (entry.getValue() == null) continue;
-        String name = entry.getValue().getName().toLowerCase();
-        for (String target : targets) {
-            if (name.equals(target) || name.equals(target + ".java")) {
-                repo.getDisabledClasses().remove(entry.getKey());
-                enabled.add(entry.getValue().getName());
-                break;
-            }
-        }
-    }
+// Enable matched
+List<String> enabled = new ArrayList<>();
+for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+if (entry.getValue() == null) continue;
+String name = entry.getValue().getName().toLowerCase();
+for (String target : targets) {
+if (name.equals(target) || name.equals(target + ".java")) {
+repo.getDisabledClasses().remove(entry.getKey());
+enabled.add(entry.getValue().getName());
+break;
+}
+}
+}
 
-    refreshCallback.run();
-    if (statusLogger != null) {
-        statusLogger.accept("@@Enable: " + String.join(", ", enabled));
-    }
-    return true;
+refreshCallback.run();
+if (statusLogger != null) {
+statusLogger.accept("@@Enable: " + String.join(", ", enabled));
+}
+return true;
 }
 
 private boolean looksLikeJavaSource(String text) {
@@ -661,6 +668,9 @@ return text.replace("&", "&amp;")
 .replace(">", "&gt;");
 }
 }
+
+
+
 
 
 

@@ -246,6 +246,14 @@ new ClipboardService().write(
 );
 });
 extraMenu.add(copyEnablerItem);
+JMenuItem copyCopierItem = new JMenuItem("Copy Copier Instructions");
+copyCopierItem.addActionListener(e -> {
+new ClipboardService().write(
+"Use @@Copier to copy the classes you want see\n\n" +
+"@@Copier ClassName1, ClassName2, ClassName3"
+);
+});
+extraMenu.add(copyCopierItem);
 JMenuItem copyMetaItem = new JMenuItem("Copy Meta Instructions");
 copyMetaItem.addActionListener(e -> {
 new ClipboardService().write(wv.codeclip.config.MetaInstructions.TEXT);
@@ -1199,6 +1207,8 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+
 
 
 
