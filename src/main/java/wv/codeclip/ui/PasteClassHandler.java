@@ -108,6 +108,12 @@ public void handlePasteFromClipboard() {
         return;
     }
 
+    if (text.trim().startsWith("@@Enable")) {
+        boolean changed = handleEnable(text.trim());
+        firePostPaste(changed);
+        return;
+    }
+
     if (Boolean.TRUE.equals(multiPatchMode.get()) &&
             (PatchParser.containsPatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
         boolean changed = handleSmartPaste(text);
@@ -564,6 +570,43 @@ return choice == JOptionPane.OK_OPTION;
 // ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
+
+private boolean handleEnable(String text) {
+    // Parse: @@Enable Foo.java, Bar.java
+    String arg = text.substring("@@Enable".length()).trim();
+    if (arg.isEmpty()) return false;
+
+    String[] parts = arg.split("[,\\s]+");
+    List<String> targets = new ArrayList<>();
+    for (String p : parts) {
+        String trimmed = p.trim();
+        if (!trimmed.isEmpty()) targets.add(trimmed.toLowerCase());
+    }
+    if (targets.isEmpty()) return false;
+
+    // Disable all
+    repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
+
+    // Enable matched
+    List<String> enabled = new ArrayList<>();
+    for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+        if (entry.getValue() == null) continue;
+        String name = entry.getValue().getName().toLowerCase();
+        for (String target : targets) {
+            if (name.equals(target) || name.equals(target + ".java")) {
+                repo.getDisabledClasses().remove(entry.getKey());
+                enabled.add(entry.getValue().getName());
+                break;
+            }
+        }
+    }
+
+    refreshCallback.run();
+    if (statusLogger != null) {
+        statusLogger.accept("@@Enable: " + String.join(", ", enabled));
+    }
+    return true;
+}
 
 private boolean looksLikeJavaSource(String text) {
 // Skip leading comments and blank lines before checking
