@@ -41,7 +41,7 @@ private final BiConsumer<String, String> codeChangedCallback;
 private final Supplier<Boolean> multiPatchMode;
 private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
 private final wv.codeclip.patch.PatchUndoManager undoManager;
-private Runnable postPasteCallback;
+private java.util.function.Consumer<Boolean> postPasteCallback;
 
 private static final int CLASS_NAME_WRAP_LENGTH = 40;
 
@@ -97,42 +97,42 @@ this.fileWriter = new ClassFileWriter(repo);
 // ------------------------------------------------------------------
 
 public void handlePasteFromClipboard() {
-String text = clipboard.read();
-if (text == null || text.isBlank()) {
-JOptionPane.showMessageDialog(
-parent,
-"Clipboard is empty or does not contain text.",
-"Error",
-JOptionPane.ERROR_MESSAGE
-);
-return;
-}
+    String text = clipboard.read();
+    if (text == null || text.isBlank()) {
+        JOptionPane.showMessageDialog(
+            parent,
+            "Clipboard is empty or does not contain text.",
+            "Error",
+            JOptionPane.ERROR_MESSAGE
+        );
+        return;
+    }
 
-if (Boolean.TRUE.equals(multiPatchMode.get()) &&
-(PatchParser.containsPatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
-handleSmartPaste(text);
-firePostPaste();
-return;
-}
+    if (Boolean.TRUE.equals(multiPatchMode.get()) &&
+            (PatchParser.containsPatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
+        boolean changed = handleSmartPaste(text);
+        firePostPaste(changed);
+        return;
+    }
 
-if (PatchParser.isPatch(text)) {
-handlePatch(text);
-firePostPaste();
-return;
-}
+    if (PatchParser.containsPatch(text)) {
+        boolean changed = handlePatch(text);
+        firePostPaste(changed);
+        return;
+    }
 
-if (!looksLikeJavaSource(text)) {
-JOptionPane.showMessageDialog(
-parent,
-"Clipboard does not appear to contain Java source code.",
-"Invalid Input",
-JOptionPane.ERROR_MESSAGE
-);
-return;
-}
+    if (!looksLikeJavaSource(text)) {
+        JOptionPane.showMessageDialog(
+            parent,
+            "Clipboard does not appear to contain Java source code.",
+            "Invalid Input",
+            JOptionPane.ERROR_MESSAGE
+        );
+        return;
+    }
 
-handlePaste(text);
-firePostPaste();
+    handlePaste(text);
+    firePostPaste(true);
 }
 
 // ------------------------------------------------------------------
@@ -143,12 +143,12 @@ public void setErrorCallback(java.util.function.Consumer<PatchApplier.PatchResul
 this.errorCallback = errorCallback;
 }
 
-public void setPostPasteCallback(Runnable callback) {
+public void setPostPasteCallback(java.util.function.Consumer<Boolean> callback) {
 this.postPasteCallback = callback;
 }
 
-private void firePostPaste() {
-if (postPasteCallback != null) postPasteCallback.run();
+private void firePostPaste(boolean changed) {
+if (postPasteCallback != null) postPasteCallback.accept(changed);
 }
 
 private void reportError(PatchApplier.PatchResult result) {
@@ -156,7 +156,7 @@ if (errorCallback != null) errorCallback.accept(result);
 PatchErrorDialog.show((JFrame) parent, result, repo);
 }
 
-private void handleSmartPaste(String text) {
+private boolean handleSmartPaste(String text) {
     SmartPasteExtractor extractor = new SmartPasteExtractor(text);
     List<SmartPasteExtractor.Entry> entries = extractor.extract(
             SmartPasteSettings.isAllowClasses()
@@ -166,7 +166,7 @@ private void handleSmartPaste(String text) {
         JOptionPane.showMessageDialog(parent,
                 "Smart Paste: no patches or class blocks found.",
                 "Nothing Found", JOptionPane.INFORMATION_MESSAGE);
-        return;
+        return false;
     }
 
     List<String> logLines = new ArrayList<>();
@@ -207,60 +207,62 @@ private void handleSmartPaste(String text) {
         }
         statusLogger.accept(header);
     }
+
+    return !combinedSnapshot.isEmpty();
 }
 
 private void handleSmartPatchEntry(String patchText, List<String> logLines,
-                                    Map<String, String> combinedSnapshot, List<String> titles) {
-    if (duplicateDetector.check(patchText) == PatchDuplicateDetector.Result.DUPLICATE) {
-        String t = PatchParser.extractTitle(patchText);
-        String d = PatchParser.extractDesc(patchText);
-        int choice = JOptionPane.showConfirmDialog(
-                parent,
-                "This patch looks identical to a recently applied one:\n\n" +
-                (t != null ? "Title: " + t + "\n" : "") +
-                (d != null ? "Desc:  " + d + "\n" : "") +
-                "\nApply it again?",
-                "Duplicate Patch Detected",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.WARNING_MESSAGE
-        );
-        if (choice != JOptionPane.YES_OPTION) return;
-    }
+Map<String, String> combinedSnapshot, List<String> titles) {
+if (duplicateDetector.check(patchText) == PatchDuplicateDetector.Result.DUPLICATE) {
+String t = PatchParser.extractTitle(patchText);
+String d = PatchParser.extractDesc(patchText);
+int choice = JOptionPane.showConfirmDialog(
+parent,
+"This patch looks identical to a recently applied one:\n\n" +
+(t != null ? "Title: " + t + "\n" : "") +
+(d != null ? "Desc:  " + d + "\n" : "") +
+"\nApply it again?",
+"Duplicate Patch Detected",
+JOptionPane.YES_NO_OPTION,
+JOptionPane.WARNING_MESSAGE
+);
+if (choice != JOptionPane.YES_OPTION) return;
+}
 
-    String title = PatchParser.extractTitle(patchText);
-    String desc  = PatchParser.extractDesc(patchText);
-    List<PatchChange> changes;
-    try {
-        changes = new PatchParser().parse(patchText);
-    } catch (IllegalArgumentException e) {
-        PatchErrorDialog.show(parent,
-                "Patch format error:\n\n" + e.getMessage(), null, null);
-        return;
-    }
+String title = PatchParser.extractTitle(patchText);
+String desc  = PatchParser.extractDesc(patchText);
+List<PatchChange> changes;
+try {
+changes = new PatchParser().parse(patchText);
+} catch (IllegalArgumentException e) {
+PatchErrorDialog.show(parent,
+"Patch format error:\n\n" + e.getMessage(), null, null);
+return;
+}
 
-    PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
-    if (result.hasFailures()) reportError(result);
-    if (result.hasSuccesses()) {
-        duplicateDetector.record(patchText);
-        // Merge into combined snapshot — don't overwrite earlier entries for same path
-        for (Map.Entry<String, String> e : result.undoSnapshot().entrySet()) {
-            combinedSnapshot.putIfAbsent(e.getKey(), e.getValue());
-        }
-        if (title != null) titles.add(title);
-        refreshCallback.run();
-        notifyCodeChangedForPatch(changes);
+PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
+if (result.hasFailures()) reportError(result);
+if (result.hasSuccesses()) {
+duplicateDetector.record(patchText);
+// Merge into combined snapshot — don't overwrite earlier entries for same path
+for (Map.Entry<String, String> e : result.undoSnapshot().entrySet()) {
+combinedSnapshot.putIfAbsent(e.getKey(), e.getValue());
+}
+if (title != null) titles.add(title);
+refreshCallback.run();
+notifyCodeChangedForPatch(changes);
 
-        List<String> files = changes.stream()
-                .map(PatchChange::fileName)
-                .distinct()
-                .toList();
+List<String> files = changes.stream()
+.map(PatchChange::fileName)
+.distinct()
+.toList();
 
-        String titleLine = (title != null ? "── " + title + " ──" : "── patch ──")
-                + (desc != null ? " " + desc : "");
-        logLines.add(titleLine);
-        logLines.add("  Files: " + String.join(", ", files));
-        for (String s : result.successSummary()) logLines.add(s);
-    }
+String titleLine = (title != null ? "── " + title + " ──" : "── patch ──")
++ (desc != null ? " " + desc : "");
+logLines.add(titleLine);
+logLines.add("  Files: " + String.join(", ", files));
+for (String s : result.successSummary()) logLines.add(s);
+}
 }
 
 private void handleMultiPatch(String text) {
@@ -301,73 +303,72 @@ statusLogger.accept(header);
 }
 }
 
-private void handlePatch(String text) {
-String title = PatchParser.extractTitle(text);
-String desc  = PatchParser.extractDesc(text);
+private boolean handlePatch(String text) {
+    String title = PatchParser.extractTitle(text);
+    String desc  = PatchParser.extractDesc(text);
 
-if (duplicateDetector.check(text) == PatchDuplicateDetector.Result.DUPLICATE) {
-int choice = JOptionPane.showConfirmDialog(
-parent,
-"This patch looks identical to a recently applied one:\n\n" +
-(title != null ? "Title: " + title + "\n" : "") +
-(desc  != null ? "Desc:  " + desc  + "\n" : "") +
-"\nApply it again?",
-"Duplicate Patch Detected",
-JOptionPane.YES_NO_OPTION,
-JOptionPane.WARNING_MESSAGE
-);
-if (choice != JOptionPane.YES_OPTION) return;
-}
+    if (duplicateDetector.check(text) == PatchDuplicateDetector.Result.DUPLICATE) {
+        int choice = JOptionPane.showConfirmDialog(
+            parent,
+            "This patch looks identical to a recently applied one:\n\n" +
+            (title != null ? "Title: " + title + "\n" : "") +
+            (desc  != null ? "Desc:  " + desc  + "\n" : "") +
+            "\nApply it again?",
+            "Duplicate Patch Detected",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        );
+        if (choice != JOptionPane.YES_OPTION) return false;
+    }
 
-PatchParser patchParser = new PatchParser();
-List<PatchChange> changes;
+    PatchParser patchParser = new PatchParser();
+    List<PatchChange> changes;
 
-try {
-changes = patchParser.parse(text);
-} catch (IllegalArgumentException e) {
-PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
-return;
-}
+    try {
+        changes = patchParser.parse(text);
+    } catch (IllegalArgumentException e) {
+        PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
+        return false;
+    }
 
-PatchApplier applier = new PatchApplier(repo);
-PatchApplier.PatchResult result = applier.apply(changes);
+    PatchApplier applier = new PatchApplier(repo);
+    PatchApplier.PatchResult result = applier.apply(changes);
 
-if (result.hasFailures()) {
-reportError(result);
-}
+    if (result.hasFailures()) {
+        reportError(result);
+    }
 
-if (result.hasSuccesses()) {
-duplicateDetector.record(text);
-undoManager.pushUndo(result.undoSnapshot(), title);
-refreshCallback.run();
-notifyCodeChangedForPatch(changes);
+    if (result.hasSuccesses()) {
+        duplicateDetector.record(text);
+        undoManager.pushUndo(result.undoSnapshot(), title);
+        refreshCallback.run();
+        notifyCodeChangedForPatch(changes);
 
-if (statusLogger != null) {
-List<String> summary = result.successSummary();
-String time = java.time.LocalTime.now()
-.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
-String footer = "─".repeat(32);
+        if (statusLogger != null) {
+            List<String> summary = result.successSummary();
+            String time = java.time.LocalTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+            String footer = "─".repeat(32);
+            List<String> files = changes.stream()
+                    .map(PatchChange::fileName)
+                    .distinct()
+                    .toList();
+            String filesLine = "  Files: " + String.join(", ", files);
+            String header = "── Patch [" + time + "] (" + summary.size()
+                    + " change" + (summary.size() > 1 ? "s" : "") + ")"
+                    + (title != null ? ": " + title : "") + " ──";
+            statusLogger.accept(footer);
+            for (int i = summary.size() - 1; i >= 0; i--) {
+                statusLogger.accept(summary.get(i));
+            }
+            statusLogger.accept(filesLine);
+            if (desc != null) statusLogger.accept("  " + desc);
+            statusLogger.accept(header);
+        }
+        return true;
+    }
 
-// Collect unique file names touched
-List<String> files = changes.stream()
-.map(PatchChange::fileName)
-.distinct()
-.toList();
-String filesLine = "  Files: " + String.join(", ", files);
-
-String header = "── Patch [" + time + "] (" + summary.size()
-+ " change" + (summary.size() > 1 ? "s" : "") + ")"
-+ (title != null ? ": " + title : "") + " ──";
-
-statusLogger.accept(footer);
-for (int i = summary.size() - 1; i >= 0; i--) {
-statusLogger.accept(summary.get(i));
-}
-statusLogger.accept(filesLine);
-if (desc != null) statusLogger.accept("  " + desc);
-statusLogger.accept(header);
-}
-}
+    return false;
 }
 
 // ------------------------------------------------------------------
@@ -379,108 +380,108 @@ handlePasteInternal(classCode, null);
 }
 
 private void handlePasteInternal(String classCode, List<String> logCollector) {
-    handlePasteInternal(classCode, logCollector, null, null);
+handlePasteInternal(classCode, logCollector, null, null);
 }
 
 private void handlePasteInternal(String classCode, List<String> logCollector,
-                                  Map<String, String> combinedSnapshot, List<String> titles) {
-    String packageName = parser.parsePackage(classCode);
-    String className = parser.parseClassName(classCode);
+Map<String, String> combinedSnapshot, List<String> titles) {
+String packageName = parser.parsePackage(classCode);
+String className = parser.parseClassName(classCode);
 
-    if (className == null) {
-        JOptionPane.showMessageDialog(
-                parent,
-                "Could not determine the class/interface/enum name from the pasted code.",
-                "Invalid Source",
-                JOptionPane.ERROR_MESSAGE
-        );
-        return;
-    }
+if (className == null) {
+JOptionPane.showMessageDialog(
+parent,
+"Could not determine the class/interface/enum name from the pasted code.",
+"Invalid Source",
+JOptionPane.ERROR_MESSAGE
+);
+return;
+}
 
-    if (!JavaBraceEndChecker.hasCompleteEnd(classCode)) {
-        int choice = JOptionPane.showConfirmDialog(
-                parent,
-                classLabel(className) +
-                "The pasted source appears to have incomplete or unbalanced braces.\n\n" +
-                "Do you want to continue anyway?",
-                "Brace Validation Failed",
-                JOptionPane.OK_CANCEL_OPTION,
-                JOptionPane.WARNING_MESSAGE
-        );
-        if (choice != JOptionPane.OK_OPTION) return;
-    }
+if (!JavaBraceEndChecker.hasCompleteEnd(classCode)) {
+int choice = JOptionPane.showConfirmDialog(
+parent,
+classLabel(className) +
+"The pasted source appears to have incomplete or unbalanced braces.\n\n" +
+"Do you want to continue anyway?",
+"Brace Validation Failed",
+JOptionPane.OK_CANCEL_OPTION,
+JOptionPane.WARNING_MESSAGE
+);
+if (choice != JOptionPane.OK_OPTION) return;
+}
 
-    boolean smartSkipCreate    = logCollector != null && SmartPasteSettings.isSkipCreateConfirm();
-    boolean smartSkipOverwrite = logCollector != null && SmartPasteSettings.isSkipOverwriteConfirm();
+boolean smartSkipCreate    = logCollector != null && SmartPasteSettings.isSkipCreateConfirm();
+boolean smartSkipOverwrite = logCollector != null && SmartPasteSettings.isSkipOverwriteConfirm();
 
-    File sourceRoot = rootDetector.detect(packageName);
-    File existingFile = fileWriter.findExistingFile(packageName, className, sourceRoot);
-    boolean isNewFile = existingFile == null;
+File sourceRoot = rootDetector.detect(packageName);
+File existingFile = fileWriter.findExistingFile(packageName, className, sourceRoot);
+boolean isNewFile = existingFile == null;
 
-    if (!isNewFile && !smartSkipOverwrite && !confirmOverwrite(className, existingFile, classCode)) {
-        return;
-    }
+if (!isNewFile && !smartSkipOverwrite && !confirmOverwrite(className, existingFile, classCode)) {
+return;
+}
 
-    try {
-        File file;
-        if (isNewFile) {
-            if (!smartSkipCreate && !confirmCreate(className, packageName, sourceRoot)) return;
-            file = fileWriter.createFile(packageName, className, classCode, sourceRoot);
-            fileWriter.registerInRepo(file, classCode);
-            // null sentinel = file didn't exist, undo should delete it
-            Map<String, String> snapshot = new java.util.LinkedHashMap<>();
-            snapshot.put(file.getAbsolutePath(), null);
-            if (combinedSnapshot != null) {
-                combinedSnapshot.putIfAbsent(file.getAbsolutePath(), null);
-            } else {
-                undoManager.pushUndo(snapshot, "Class Created: " + className);
-            }
-            if (titles != null) titles.add("Class Created: " + className);
-        } else {
-            String oldCode = repo.getClassCodeMap().get(existingFile.getAbsolutePath());
-            Map<String, String> snapshot = new java.util.LinkedHashMap<>();
-            snapshot.put(existingFile.getAbsolutePath(), oldCode != null ? oldCode : "");
-            if (combinedSnapshot != null) {
-                combinedSnapshot.putIfAbsent(existingFile.getAbsolutePath(),
-                        oldCode != null ? oldCode : "");
-            } else {
-                undoManager.pushUndo(snapshot, "Class: " + className);
-            }
-            if (titles != null) titles.add("Class: " + className);
-            fileWriter.updateFile(existingFile, classCode);
-            fileWriter.registerInRepo(existingFile, classCode);
-            file = existingFile;
-        }
+try {
+File file;
+if (isNewFile) {
+if (!smartSkipCreate && !confirmCreate(className, packageName, sourceRoot)) return;
+file = fileWriter.createFile(packageName, className, classCode, sourceRoot);
+fileWriter.registerInRepo(file, classCode);
+// null sentinel = file didn't exist, undo should delete it
+Map<String, String> snapshot = new java.util.LinkedHashMap<>();
+snapshot.put(file.getAbsolutePath(), null);
+if (combinedSnapshot != null) {
+combinedSnapshot.putIfAbsent(file.getAbsolutePath(), null);
+} else {
+undoManager.pushUndo(snapshot, "Class Created: " + className);
+}
+if (titles != null) titles.add("Class Created: " + className);
+} else {
+String oldCode = repo.getClassCodeMap().get(existingFile.getAbsolutePath());
+Map<String, String> snapshot = new java.util.LinkedHashMap<>();
+snapshot.put(existingFile.getAbsolutePath(), oldCode != null ? oldCode : "");
+if (combinedSnapshot != null) {
+combinedSnapshot.putIfAbsent(existingFile.getAbsolutePath(),
+oldCode != null ? oldCode : "");
+} else {
+undoManager.pushUndo(snapshot, "Class: " + className);
+}
+if (titles != null) titles.add("Class: " + className);
+fileWriter.updateFile(existingFile, classCode);
+fileWriter.registerInRepo(existingFile, classCode);
+file = existingFile;
+}
 
-        refreshCallback.run();
+refreshCallback.run();
 
-        if (isNewFile) {
-            addPanelCallback.accept(file.getAbsolutePath(), file.getName());
-        }
+if (isNewFile) {
+addPanelCallback.accept(file.getAbsolutePath(), file.getName());
+}
 
-        String logMsg = (isNewFile ? "Class Created: " : "Class Updated: ")
-                + className + " (" + file.getAbsolutePath() + ")";
+String logMsg = (isNewFile ? "Class Created: " : "Class Updated: ")
++ className + " (" + file.getAbsolutePath() + ")";
 
-        if (logCollector != null) {
-            logCollector.add(logMsg);
-        } else if (statusLogger != null) {
-            statusLogger.accept(logMsg);
-        }
+if (logCollector != null) {
+logCollector.add(logMsg);
+} else if (statusLogger != null) {
+statusLogger.accept(logMsg);
+}
 
-        if (!isNewFile) {
-            notifyCodeChanged(file.getAbsolutePath(),
-                    repo.getClassCodeMap().get(file.getAbsolutePath()));
-        }
+if (!isNewFile) {
+notifyCodeChanged(file.getAbsolutePath(),
+repo.getClassCodeMap().get(file.getAbsolutePath()));
+}
 
-    } catch (IOException e) {
-        JOptionPane.showMessageDialog(
-                parent,
-                classLabel(className) +
-                "Failed to create/update file:\n" + e.getMessage(),
-                "Error",
-                JOptionPane.ERROR_MESSAGE
-        );
-    }
+} catch (IOException e) {
+JOptionPane.showMessageDialog(
+parent,
+classLabel(className) +
+"Failed to create/update file:\n" + e.getMessage(),
+"Error",
+JOptionPane.ERROR_MESSAGE
+);
+}
 }
 
 private boolean confirmOverwrite(String className, File existingFile, String newCode) {
@@ -617,6 +618,8 @@ return text.replace("&", "&amp;")
 .replace(">", "&gt;");
 }
 }
+
+
 
 
 

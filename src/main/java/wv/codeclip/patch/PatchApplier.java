@@ -140,7 +140,14 @@ count = countOccurrences(tabCode, tabFind);
 if (count == 1) return tabCode.replace(tabFind, normalizeTabs(normalize(fr.replace())));
 if (count > 1) throw ambiguousException(fr.fileName(), count, find, "tab normalization");
 
-// Step 5: strip all indentation (fuzzy) — last resort
+// Step 5: collapse runs of blank lines to a single blank line
+String blankCode = collapseBlankLines(tabCode);
+String blankFind = collapseBlankLines(tabFind);
+count = countOccurrences(blankCode, blankFind);
+if (count == 1) return blankCode.replace(blankFind, collapseBlankLines(normalizeTabs(normalize(fr.replace()))));
+if (count > 1) throw ambiguousException(fr.fileName(), count, find, "blank-line normalization");
+
+// Step 6: strip all indentation (fuzzy) — last resort
 String fuzzyCode = stripIndent(normCode);
 String fuzzyFind = stripIndent(normFind);
 count = countOccurrences(fuzzyCode, fuzzyFind);
@@ -153,7 +160,7 @@ fr.fileName());
 
 throw new PatchException(
 "@@FIND block not found in " + fr.fileName() +
-" (tried exact, line-ending, trailing-whitespace, and indent-stripped matching).\n\n" +
+" (tried exact, line-ending, trailing-whitespace, tab, blank-line, and indent-stripped matching).\n\n" +
 "Searched for:\n" + find,
 fr.fileName());
 }
@@ -186,6 +193,10 @@ for (String line : code.split("\n", -1)) {
 sb.append(line.stripTrailing()).append("\n");
 }
 return sb.toString();
+}
+
+private String collapseBlankLines(String code) {
+return code.replaceAll("(\n\\s*){2,}\n", "\n\n");
 }
 
 private String normalizeTabs(String code) {
@@ -424,6 +435,7 @@ return result;
 }
 }
 }
+
 
 
 

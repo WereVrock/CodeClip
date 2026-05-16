@@ -79,6 +79,7 @@ private static final Color UNSYNCED_COLOR  = new Color(30, 100, 210);
 
 private static final String BUILD_INFO_FILE = "buildinfo.properties";
 private static final int ICON_SIZE = 64;
+private boolean titleFrozen = false;
 
 public CodeClipFrame() {
 
@@ -261,7 +262,6 @@ if (confirm == JOptionPane.YES_OPTION) {
 actions.resetAll(classPanel);
 undoManager.clear();
 syncUndoRedo.run();
-setTitle("Code Clip");
 }
 });
 systemMenu.add(resetItem);
@@ -320,9 +320,9 @@ JOptionPane.showMessageDialog(this, "Redo failed:\n" + ex.getMessage(),
 syncUndoRedo.run();
 });
 
-pasteHandler.setPostPasteCallback(() -> {
+pasteHandler.setPostPasteCallback((changed) -> {
 syncUndoRedo.run();
-stampBuildInfo();
+if (changed) stampBuildInfo();
 });
 
 JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -646,7 +646,7 @@ addClassPanel(path, file.getName());
 refreshText();
 refreshPanels();
 if (file.getName().equals(BUILD_INFO_FILE)) {
-restoreBuildInfoTitle();
+refreshTitle();
 }
 } catch (Exception ignored) {}
 }
@@ -868,6 +868,7 @@ repo.getClassCodeMap().put(path, content);
 repo.getClassFileMap().put(path, file);
 repo.setCheckpoint(path, content);
 refreshText();
+refreshTitle();
 } catch (java.io.IOException ex) {
 ex.printStackTrace();
 }
@@ -1000,7 +1001,8 @@ dialog.setLocationRelativeTo(this);
 dialog.setVisible(true);
 }
 
-private void restoreBuildInfoTitle() {
+private void refreshTitle() {
+if (titleFrozen) return;
 for (java.util.Map.Entry<String, String> entry : repo.getClassCodeMap().entrySet()) {
 String content = entry.getValue();
 if (content == null) continue;
@@ -1010,38 +1012,54 @@ String timestamp = extractTimestampFromContent(content);
 if (timestamp != null) {
 String buildNo = extractBuildNoFromContent(content);
 setTitle("Code Clip — #" + buildNo + " --- " + timestamp);
+titleFrozen = true;
 return;
 }
 }
 }
 
+private void restoreBuildInfoTitle() {
+refreshTitle();
+}
+
 private void restoreBuildInfoTitleFromDisk() {
-// Walk loaded file locations to find source root candidates
-for (java.io.File file : repo.getClassFileMap().values()) {
+// Approach 1: walk parent dirs of all loaded files
+for (java.io.File file : new ArrayList<>(repo.getClassFileMap().values())) {
 if (file == null) continue;
-// Try parent, grandparent, great-grandparent (covers deep package paths)
 java.io.File dir = file.getParentFile();
 for (int depth = 0; depth < 6 && dir != null; depth++) {
 java.io.File candidate = new java.io.File(dir, BUILD_INFO_FILE);
 if (candidate.exists()) {
-try {
-String content = java.nio.file.Files.readString(candidate.toPath());
-String timestamp = extractTimestampFromContent(content);
-if (timestamp != null) {
-// Register in repo so future lookups work
-String path = candidate.getAbsolutePath();
-repo.getClassCodeMap().put(path, content);
-repo.getClassFileMap().put(path, candidate);
-repo.setCheckpoint(path, content);
-String buildNo = extractBuildNoFromContent(content);
-setTitle("Code Clip — #" + buildNo + " --- " + timestamp);
-return;
-}
-} catch (java.io.IOException ignored) {}
+if (tryRegisterAndSetTitle(candidate)) return;
 }
 dir = dir.getParentFile();
 }
 }
+
+// Approach 2: use detectSourceRoot directly
+java.io.File sourceRoot = detectSourceRoot();
+if (sourceRoot != null) {
+java.io.File candidate = new java.io.File(sourceRoot, BUILD_INFO_FILE);
+if (candidate.exists()) {
+tryRegisterAndSetTitle(candidate);
+}
+}
+}
+
+private boolean tryRegisterAndSetTitle(java.io.File candidate) {
+try {
+String content = java.nio.file.Files.readString(candidate.toPath());
+String timestamp = extractTimestampFromContent(content);
+if (timestamp != null) {
+String path = candidate.getAbsolutePath();
+repo.getClassCodeMap().put(path, content);
+repo.getClassFileMap().put(path, candidate);
+repo.setCheckpoint(path, content);
+refreshTitle();
+return true;
+}
+} catch (java.io.IOException ignored) {}
+return false;
 }
 
 private void stampBuildInfo() {
@@ -1051,7 +1069,6 @@ String timestamp = java.time.LocalDateTime.now()
 java.io.File sourceRoot = detectSourceRoot();
 if (sourceRoot == null) return;
 
-// Read existing build number and increment it (base-36)
 int nextBuildNo = 1;
 java.io.File file = new java.io.File(sourceRoot, BUILD_INFO_FILE);
 if (file.exists()) {
@@ -1075,7 +1092,6 @@ break;
 String buildNo36 = Integer.toString(nextBuildNo, 36);
 String content = "LAST_UPDATED=" + timestamp + "\nBUILD_NO=" + buildNo36 + "\n";
 
-// Capture old content for undo snapshot before overwriting
 String path = file.getAbsolutePath();
 String oldContent = repo.getClassCodeMap().get(path);
 if (oldContent == null && file.exists()) {
@@ -1085,12 +1101,10 @@ catch (java.io.IOException ignored) {}
 
 try {
 java.nio.file.Files.writeString(file.toPath(), content);
-
 repo.getClassCodeMap().put(path, content);
 repo.getClassFileMap().put(path, file);
 repo.setCheckpoint(path, content);
 
-// Push old content into undo snapshot so undo can revert it
 if (oldContent != null) {
 undoManager.mergeTimestampSnapshot(path, oldContent);
 }
@@ -1107,8 +1121,8 @@ if (!panelExists) {
 addClassPanel(path, file.getName());
 }
 
-// Title intentionally NOT updated here — startup only.
 refreshText();
+refreshTitle();
 
 } catch (java.io.IOException ex) {
 ex.printStackTrace();
@@ -1174,6 +1188,9 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+
+
 
 
 
