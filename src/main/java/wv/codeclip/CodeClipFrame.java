@@ -125,10 +125,7 @@ smartPasteCheck.setSelected(settings.loadSmartPaste());
 SmartPasteSettings.load(settings);
 renderNotes();
 
-for (String path : settings.loadClassPaths()) {
-File f = new File(path);
-if (f.exists()) addClass(f);
-}
+loadClassPathsBatched(settings.loadClassPaths());
 // Retry title restore until workers finish, up to 20 attempts x 150ms = 3s
 int[] attempts = {0};
 javax.swing.Timer titleTimer = new javax.swing.Timer(150, null);
@@ -635,39 +632,95 @@ new FileDropHandler(this::addClass).install(this);
 }
 
 private void addClass(File file) {
-String path = file.getAbsolutePath();
-
-if (repo.getClassCodeMap().containsKey(path)) {
-if (repo.getDisabledClasses().remove(path)) {
-refreshText();
-refreshPanels();
-}
-return;
+    addClassInternal(file, true);
 }
 
-SwingWorker<String, Void> worker = new SwingWorker<>() {
-@Override
-protected String doInBackground() throws Exception {
-return Files.readString(file.toPath());
+private void addClassInternal(File file, boolean doRefresh) {
+    String path = file.getAbsolutePath();
+
+    if (repo.getClassCodeMap().containsKey(path)) {
+        if (repo.getDisabledClasses().remove(path)) {
+            if (doRefresh) { refreshText(); refreshPanels(); }
+        }
+        return;
+    }
+
+    SwingWorker<String, Void> worker = new SwingWorker<>() {
+        @Override
+        protected String doInBackground() throws Exception {
+            return Files.readString(file.toPath());
+        }
+
+        @Override
+        protected void done() {
+            try {
+                String code = get();
+                repo.getClassCodeMap().put(path, code);
+                repo.getClassFileMap().put(path, file);
+                repo.setCheckpoint(path, code);
+                addClassPanel(path, file.getName());
+                if (doRefresh) {
+                    refreshText();
+                    refreshPanels();
+                }
+                if (file.getName().equals(BUILD_INFO_FILE)) {
+                    refreshTitle();
+                }
+            } catch (Exception ignored) {}
+        }
+    };
+    worker.execute();
 }
 
-@Override
-protected void done() {
-try {
-String code = get();
-repo.getClassCodeMap().put(path, code);
-repo.getClassFileMap().put(path, file);
-repo.setCheckpoint(path, code);
-addClassPanel(path, file.getName());
-refreshText();
-refreshPanels();
-if (file.getName().equals(BUILD_INFO_FILE)) {
-refreshTitle();
-}
-} catch (Exception ignored) {}
-}
-};
-worker.execute();
+private void loadClassPathsBatched(String[] paths) {
+    if (paths.length == 0) return;
+
+    java.util.concurrent.atomic.AtomicInteger remaining =
+        new java.util.concurrent.atomic.AtomicInteger(paths.length);
+
+    for (String path : paths) {
+        File f = new File(path);
+        if (!f.exists()) {
+            if (remaining.decrementAndGet() == 0) {
+                SwingUtilities.invokeLater(() -> { refreshText(); refreshPanels(); });
+            }
+            continue;
+        }
+
+        String absPath = f.getAbsolutePath();
+        if (repo.getClassCodeMap().containsKey(absPath)) {
+            repo.getDisabledClasses().remove(absPath);
+            if (remaining.decrementAndGet() == 0) {
+                SwingUtilities.invokeLater(() -> { refreshText(); refreshPanels(); });
+            }
+            continue;
+        }
+
+        SwingWorker<String, Void> worker = new SwingWorker<>() {
+            @Override
+            protected String doInBackground() throws Exception {
+                return Files.readString(f.toPath());
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    String code = get();
+                    repo.getClassCodeMap().put(absPath, code);
+                    repo.getClassFileMap().put(absPath, f);
+                    repo.setCheckpoint(absPath, code);
+                    addClassPanel(absPath, f.getName());
+                    if (f.getName().equals(BUILD_INFO_FILE)) refreshTitle();
+                } catch (Exception ignored) {
+                } finally {
+                    if (remaining.decrementAndGet() == 0) {
+                        SwingUtilities.invokeLater(() -> { refreshText(); refreshPanels(); });
+                    }
+                }
+            }
+        };
+        worker.execute();
+    }
 }
 
 // ------------------------------------------------------------------
@@ -1207,6 +1260,7 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
 
 
 
