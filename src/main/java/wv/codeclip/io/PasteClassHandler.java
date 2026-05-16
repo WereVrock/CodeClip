@@ -1,4 +1,4 @@
-package wv.codeclip.ui;
+package wv.codeclip.io;
 
 import wv.codeclip.parse.JavaSourceParser;
 import wv.codeclip.parse.JavaBraceEndChecker;
@@ -23,6 +23,8 @@ import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 import wv.codeclip.patch.PatchDuplicateDetector;
+import wv.codeclip.ui.SmartPasteExtractor;
+import wv.codeclip.ui.SmartPasteSettings;
 
 public class PasteClassHandler {
 
@@ -41,7 +43,7 @@ private final BiConsumer<String, String> codeChangedCallback;
 private final Supplier<Boolean> multiPatchMode;
 private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
 private final wv.codeclip.patch.PatchUndoManager undoManager;
-private final wv.codeclip.ui.CopierCommand copierCommand;
+private final wv.codeclip.commands.CopierCommand copierCommand;
 private java.util.function.Consumer<Boolean> postPasteCallback;
 
 private static final int CLASS_NAME_WRAP_LENGTH = 40;
@@ -86,7 +88,7 @@ this.codeChangedCallback = codeChangedCallback;
 this.multiPatchMode = multiPatchMode;
 this.errorCallback = null;
 this.undoManager = undoManager;
-this.copierCommand = new wv.codeclip.ui.CopierCommand(repo, statusLogger);
+this.copierCommand = new wv.codeclip.commands.CopierCommand(repo, statusLogger);
 
 this.clipboard = new ClipboardService();
 this.parser = new JavaSourceParser();
@@ -116,7 +118,7 @@ firePostPaste(changed);
 return;
 }
 
-if (text.trim().startsWith("@@Copier")) {
+if (text.trim().startsWith("@@Copy")) {
 copierCommand.handle(text.trim());
 return;
 }
@@ -668,6 +670,7 @@ return text.replace("&", "&amp;")
 .replace(">", "&gt;");
 }
 }
+
 
 
 

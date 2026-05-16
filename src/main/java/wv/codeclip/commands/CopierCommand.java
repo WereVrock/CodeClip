@@ -1,5 +1,5 @@
 // ===== CopierCommand.java =====
-package wv.codeclip.ui;
+package wv.codeclip.commands;
 
 import wv.codeclip.io.ClipboardService;
 import wv.codeclip.model.ClassRepository;
@@ -18,8 +18,8 @@ public class CopierCommand {
         this.statusLogger = statusLogger;
     }
 
-    public boolean handle(String text) {
-        String arg = text.substring("@@Copier".length()).trim();
+public boolean handle(String text) {
+        String arg = text.substring("@@Copy".length()).trim();
         if (arg.isEmpty()) return false;
 
         String[] parts = arg.split("[,\\s]+");
@@ -52,10 +52,11 @@ public class CopierCommand {
         if (!copied.isEmpty()) {
             new ClipboardService().write(sb.toString().stripTrailing());
             if (statusLogger != null) {
-                statusLogger.accept("@@Copier: " + String.join(", ", copied));
+                statusLogger.accept("@@Copy: " + String.join(", ", copied));
             }
         }
 
         return !copied.isEmpty();
     }
+
 }

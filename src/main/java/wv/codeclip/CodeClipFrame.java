@@ -14,7 +14,7 @@ import java.util.Comparator;
 import java.util.List;
 import wv.codeclip.config.AiInstructions;
 import wv.codeclip.ui.CheckpointDialog;
-import wv.codeclip.ui.PasteClassHandler;
+import wv.codeclip.io.PasteClassHandler;
 import wv.codeclip.ui.ClassActions;
 import wv.codeclip.ui.SimpleDocumentListener;
 import wv.codeclip.ui.SmartPasteSettings;
@@ -249,8 +249,8 @@ extraMenu.add(copyEnablerItem);
 JMenuItem copyCopierItem = new JMenuItem("Copy Copier Instructions");
 copyCopierItem.addActionListener(e -> {
 new ClipboardService().write(
-"Use @@Copier to copy the classes you want see\n\n" +
-"@@Copier ClassName1, ClassName2, ClassName3"
+"Use @@Copy to copy the classes you want see\n\n" +
+"@@Copy ClassName1, ClassName2, ClassName3"
 );
 });
 extraMenu.add(copyCopierItem);
@@ -1207,6 +1207,8 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+
 
 
 
