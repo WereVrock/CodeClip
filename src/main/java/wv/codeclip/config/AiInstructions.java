@@ -63,12 +63,13 @@ public final class AiInstructions {
 
         @@METHOD: / @@REPLACE:
           Use to replace one or more entire methods.
-          Write @@METHOD: with no name — the method name is parsed
-          automatically from each method signature in @@REPLACE.
+          Always write @@METHOD: with no name — the method name is
+          parsed automatically from each method signature in @@REPLACE.
           Multiple methods can be replaced in a single @@METHOD: block
           by placing them one after another in @@REPLACE.
-          If the method is overloaded, add the name explicitly:
-          @@METHOD: myMethod — this selects the correct overload.
+          NEVER put a name after @@METHOD: unless the method is
+          overloaded — in that case the explicit name selects the
+          correct overload, and only that one method can be in the block.
           @@REPLACE must contain complete methods including
           signatures, opening braces, bodies, and closing braces.
           @@METHOD: can only replace existing methods, not add new ones.
