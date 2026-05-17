@@ -134,12 +134,11 @@ changes.add(new PatchChange.FindReplace(currentFile, find.text(), replace.text()
 continue;
 }
 
-if (line.startsWith(MARKER_METHOD)) {
+if (line.equals(MARKER_METHOD) || line.startsWith(MARKER_METHOD)) {
 requireFile(currentFile, i);
-String methodName = line.substring(MARKER_METHOD.length()).trim();
-if (methodName.isEmpty()) {
-throw new IllegalArgumentException("@@METHOD: directive has no method name at line " + (i + 1));
-}
+String explicitMethodName = line.equals(MARKER_METHOD)
+? ""
+: line.substring(MARKER_METHOD.length()).trim();
 i++;
 while (i < lines.length && lines[i].isBlank()) i++;
 if (i >= lines.length || !lines[i].trim().equals(MARKER_REPLACE)) {
@@ -154,9 +153,17 @@ String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_METHOD + "|"
 ParsedBlock replace = readBlock(lines, i, replaceStops);
 if (replace.hitEndOfInput()) {
 throw new IllegalArgumentException(
-"@@REPLACE block for @@METHOD " + methodName + " is not terminated. Did you forget @@END?");
+"@@REPLACE block for @@METHOD is not terminated. Did you forget @@END?");
 }
 i = replace.nextIndex();
+String methodName = explicitMethodName.isEmpty()
+? extractMethodNameFromSignature(replace.text())
+: explicitMethodName;
+if (methodName == null || methodName.isEmpty()) {
+throw new IllegalArgumentException(
+"@@METHOD: has no name and none could be parsed from the @@REPLACE block.\n" +
+"Either add a name after @@METHOD: or ensure @@REPLACE starts with a valid method signature.");
+}
 changes.add(new PatchChange.MethodReplace(currentFile, methodName, replace.text()));
 continue;
 }
@@ -221,8 +228,34 @@ throw new IllegalArgumentException(
 }
 }
 
+private static String extractMethodNameFromSignature(String replaceText) {
+    if (replaceText == null || replaceText.isBlank()) return null;
+    for (String line : replaceText.lines().toList()) {
+        String trimmed = line.trim();
+        if (trimmed.isEmpty() || trimmed.startsWith("//") || trimmed.startsWith("*")
+                || trimmed.startsWith("@")) continue;
+        boolean hasDeclarationKeyword =
+                trimmed.contains("public ") || trimmed.contains("private ") ||
+                trimmed.contains("protected ") || trimmed.contains("static ") ||
+                trimmed.contains("void ") || trimmed.contains("@Override");
+        if (!hasDeclarationKeyword) return null;
+        int parenIdx = trimmed.indexOf('(');
+        if (parenIdx <= 0) return null;
+        String beforeParen = trimmed.substring(0, parenIdx).trim();
+        String[] tokens = beforeParen.split("\\s+");
+        if (tokens.length == 0) return null;
+        String candidate = tokens[tokens.length - 1];
+        int angleIdx = candidate.indexOf('<');
+        if (angleIdx > 0) candidate = candidate.substring(0, angleIdx);
+        if (candidate.matches("[a-zA-Z_][a-zA-Z0-9_]*")) return candidate;
+        return null;
+    }
+    return null;
+}
+
 private record ParsedBlock(String text, int nextIndex, boolean hitEndOfInput) {}
 }
+
 
 
 

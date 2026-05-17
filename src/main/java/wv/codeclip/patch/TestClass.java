@@ -4,7 +4,11 @@ package wv.codeclip.patch;
 public class TestClass {
 
 public static String hello() {
-        return "hello from fenced patch";
-    }
+    return "hello from method 1";
+}
+
+public static String goodbye() {
+    return "goodbye from method 2";
+}
 
 }
