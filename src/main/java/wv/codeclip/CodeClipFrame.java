@@ -87,6 +87,7 @@ private JLabel loadProgressLabel;
 
 public CodeClipFrame() {
 
+wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
 undoManager = new wv.codeclip.patch.PatchUndoManager();
 pasteHandler = new PasteClassHandler(
 repo,
@@ -693,69 +694,69 @@ new FileDropHandler(this::addFilesBatched, true).install(this);
 }
 
 private void addClass(File file) {
-    addFilesBatched(List.of(file));
+addFilesBatched(List.of(file));
 }
 
 private void addFilesBatched(List<File> files) {
-    if (files.isEmpty()) return;
+if (files.isEmpty()) return;
 
-    List<File> toLoad = new ArrayList<>();
-    for (File file : files) {
-        String path = file.getAbsolutePath();
-        if (repo.getClassCodeMap().containsKey(path)) {
-            repo.getDisabledClasses().remove(path);
-        } else {
-            toLoad.add(file);
-        }
-    }
+List<File> toLoad = new ArrayList<>();
+for (File file : files) {
+String path = file.getAbsolutePath();
+if (repo.getClassCodeMap().containsKey(path)) {
+repo.getDisabledClasses().remove(path);
+} else {
+toLoad.add(file);
+}
+}
 
-    if (toLoad.isEmpty()) {
-        refreshText();
-        refreshPanels();
-        return;
-    }
+if (toLoad.isEmpty()) {
+refreshText();
+refreshPanels();
+return;
+}
 
-    int total = toLoad.size();
-    showLoadBar();
+int total = toLoad.size();
+showLoadBar();
 
-    java.util.concurrent.atomic.AtomicInteger remaining =
-        new java.util.concurrent.atomic.AtomicInteger(total);
-    java.util.concurrent.atomic.AtomicInteger loaded =
-        new java.util.concurrent.atomic.AtomicInteger(0);
+java.util.concurrent.atomic.AtomicInteger remaining =
+new java.util.concurrent.atomic.AtomicInteger(total);
+java.util.concurrent.atomic.AtomicInteger loaded =
+new java.util.concurrent.atomic.AtomicInteger(0);
 
-    for (File file : toLoad) {
-        String path = file.getAbsolutePath();
-        SwingWorker<String, Void> worker = new SwingWorker<>() {
-            @Override
-            protected String doInBackground() throws Exception {
-                return Files.readString(file.toPath());
-            }
+for (File file : toLoad) {
+String path = file.getAbsolutePath();
+SwingWorker<String, Void> worker = new SwingWorker<>() {
+@Override
+protected String doInBackground() throws Exception {
+return Files.readString(file.toPath());
+}
 
-            @Override
-            protected void done() {
-                try {
-                    String code = get();
-                    repo.getClassCodeMap().put(path, code);
-                    repo.getClassFileMap().put(path, file);
-                    repo.setCheckpoint(path, code);
-                    addClassPanel(path, file.getName());
-                    if (file.getName().equals(BUILD_INFO_FILE)) refreshTitle();
-                } catch (Exception ignored) {
-                } finally {
-                    int done = loaded.incrementAndGet();
-                    SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
-                    if (remaining.decrementAndGet() == 0) {
-                        SwingUtilities.invokeLater(() -> {
-                            refreshText();
-                            refreshPanels();
-                            hideLoadBar();
-                        });
-                    }
-                }
-            }
-        };
-        worker.execute();
-    }
+@Override
+protected void done() {
+try {
+String code = get();
+repo.getClassCodeMap().put(path, code);
+repo.getClassFileMap().put(path, file);
+repo.setCheckpoint(path, code);
+addClassPanel(path, file.getName());
+if (file.getName().equals(BUILD_INFO_FILE)) refreshTitle();
+} catch (Exception ignored) {
+} finally {
+int done = loaded.incrementAndGet();
+SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
+if (remaining.decrementAndGet() == 0) {
+SwingUtilities.invokeLater(() -> {
+refreshText();
+refreshPanels();
+hideLoadBar();
+});
+}
+}
+}
+};
+worker.execute();
+}
 }
 
 private void addClassInternal(File file, boolean doRefresh) {
@@ -1215,20 +1216,12 @@ dialog.setVisible(true);
 }
 
 private void refreshTitle() {
-if (titleFrozen) return;
-for (java.util.Map.Entry<String, String> entry : repo.getClassCodeMap().entrySet()) {
-String content = entry.getValue();
-if (content == null) continue;
-java.io.File f = repo.getClassFileMap().get(entry.getKey());
-if (f == null || !f.getName().equals(BUILD_INFO_FILE)) continue;
-String timestamp = extractTimestampFromContent(content);
-if (timestamp != null) {
-String buildNo = extractBuildNoFromContent(content);
-setTitle("Code Clip — #" + buildNo + " --- " + timestamp);
-titleFrozen = true;
-return;
-}
-}
+    if (titleFrozen) return;
+    String info = wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
+    if (!info.equals("unknown")) {
+        setTitle("Code Clip — " + info);
+        titleFrozen = true;
+    }
 }
 
 private void restoreBuildInfoTitle() {
@@ -1404,6 +1397,7 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
 
 
 
