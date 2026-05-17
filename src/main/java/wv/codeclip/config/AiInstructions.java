@@ -29,9 +29,11 @@ public final class AiInstructions {
         <replacement lines>
 
         @@FILE: AnotherFile.java
-        @@METHOD: methodName
+        @@METHOD:
         @@REPLACE:
         <entire new method including signature and braces>
+
+        <another method if needed>
 
         @@END
 
@@ -60,12 +62,18 @@ public final class AiInstructions {
           Indentation must match the source exactly.
 
         @@METHOD: / @@REPLACE:
-          Use to replace an entire method.
-          The method name must be unique in the file.
-          If the method is overloaded, use @@FIND/@@REPLACE instead,
-          including the full signature line in the @@FIND block.
-          @@REPLACE must contain the complete new method including
-          its signature, opening brace, body, and closing brace.
+          Use to replace one or more entire methods.
+          Write @@METHOD: with no name — the method name is parsed
+          automatically from each method signature in @@REPLACE.
+          Multiple methods can be replaced in a single @@METHOD: block
+          by placing them one after another in @@REPLACE.
+          If the method is overloaded, add the name explicitly:
+          @@METHOD: myMethod — this selects the correct overload.
+          @@REPLACE must contain complete methods including
+          signatures, opening braces, bodies, and closing braces.
+          @@METHOD: can only replace existing methods, not add new ones.
+          To add a new method, use @@FIND/@@REPLACE to insert it
+          after an existing anchor.
 
         ----------------------------------------------------------------
         RULES

@@ -156,15 +156,24 @@ throw new IllegalArgumentException(
 "@@REPLACE block for @@METHOD is not terminated. Did you forget @@END?");
 }
 i = replace.nextIndex();
-String methodName = explicitMethodName.isEmpty()
-? extractMethodNameFromSignature(replace.text())
-: explicitMethodName;
-if (methodName == null || methodName.isEmpty()) {
+if (explicitMethodName.isEmpty()) {
+List<String> methods = splitIntoMethods(replace.text());
+if (methods.isEmpty()) {
 throw new IllegalArgumentException(
 "@@METHOD: has no name and none could be parsed from the @@REPLACE block.\n" +
 "Either add a name after @@METHOD: or ensure @@REPLACE starts with a valid method signature.");
 }
-changes.add(new PatchChange.MethodReplace(currentFile, methodName, replace.text()));
+for (String methodBlock : methods) {
+String name = extractMethodNameFromSignature(methodBlock);
+if (name == null || name.isEmpty()) {
+throw new IllegalArgumentException(
+"Could not parse method name from block:\n" + methodBlock);
+}
+changes.add(new PatchChange.MethodReplace(currentFile, name, methodBlock));
+}
+} else {
+changes.add(new PatchChange.MethodReplace(currentFile, explicitMethodName, replace.text()));
+}
 continue;
 }
 
@@ -228,33 +237,74 @@ throw new IllegalArgumentException(
 }
 }
 
-private static String extractMethodNameFromSignature(String replaceText) {
-    if (replaceText == null || replaceText.isBlank()) return null;
-    for (String line : replaceText.lines().toList()) {
-        String trimmed = line.trim();
-        if (trimmed.isEmpty() || trimmed.startsWith("//") || trimmed.startsWith("*")
-                || trimmed.startsWith("@")) continue;
+private static List<String> splitIntoMethods(String replaceText) {
+    List<String> methods = new ArrayList<>();
+    String[] lines = replaceText.split("\n", -1);
+    int i = 0;
+    while (i < lines.length) {
+        // Skip blank lines between methods
+        while (i < lines.length && lines[i].isBlank()) i++;
+        if (i >= lines.length) break;
+
+        // Find a line that looks like a method signature
+        String trimmed = lines[i].trim();
         boolean hasDeclarationKeyword =
                 trimmed.contains("public ") || trimmed.contains("private ") ||
                 trimmed.contains("protected ") || trimmed.contains("static ") ||
                 trimmed.contains("void ") || trimmed.contains("@Override");
-        if (!hasDeclarationKeyword) return null;
-        int parenIdx = trimmed.indexOf('(');
-        if (parenIdx <= 0) return null;
-        String beforeParen = trimmed.substring(0, parenIdx).trim();
-        String[] tokens = beforeParen.split("\\s+");
-        if (tokens.length == 0) return null;
-        String candidate = tokens[tokens.length - 1];
-        int angleIdx = candidate.indexOf('<');
-        if (angleIdx > 0) candidate = candidate.substring(0, angleIdx);
-        if (candidate.matches("[a-zA-Z_][a-zA-Z0-9_]*")) return candidate;
-        return null;
+        if (!hasDeclarationKeyword || !trimmed.contains("(")) {
+            i++;
+            continue;
+        }
+
+        // Collect lines until we find the opening brace, then trace to closing brace
+        StringBuilder methodSb = new StringBuilder();
+        int braceBalance = 0;
+        boolean started = false;
+        while (i < lines.length) {
+            String line = lines[i];
+            methodSb.append(line).append("\n");
+            for (char c : line.toCharArray()) {
+                if (c == '{') { braceBalance++; started = true; }
+                else if (c == '}') { braceBalance--; }
+            }
+            i++;
+            if (started && braceBalance == 0) break;
+        }
+        String block = methodSb.toString().strip();
+        if (!block.isEmpty()) methods.add(block);
     }
-    return null;
+    return methods;
+}
+
+private static String extractMethodNameFromSignature(String replaceText) {
+if (replaceText == null || replaceText.isBlank()) return null;
+for (String line : replaceText.lines().toList()) {
+String trimmed = line.trim();
+if (trimmed.isEmpty() || trimmed.startsWith("//") || trimmed.startsWith("*")
+|| trimmed.startsWith("@")) continue;
+boolean hasDeclarationKeyword =
+trimmed.contains("public ") || trimmed.contains("private ") ||
+trimmed.contains("protected ") || trimmed.contains("static ") ||
+trimmed.contains("void ") || trimmed.contains("@Override");
+if (!hasDeclarationKeyword) return null;
+int parenIdx = trimmed.indexOf('(');
+if (parenIdx <= 0) return null;
+String beforeParen = trimmed.substring(0, parenIdx).trim();
+String[] tokens = beforeParen.split("\\s+");
+if (tokens.length == 0) return null;
+String candidate = tokens[tokens.length - 1];
+int angleIdx = candidate.indexOf('<');
+if (angleIdx > 0) candidate = candidate.substring(0, angleIdx);
+if (candidate.matches("[a-zA-Z_][a-zA-Z0-9_]*")) return candidate;
+return null;
+}
+return null;
 }
 
 private record ParsedBlock(String text, int nextIndex, boolean hitEndOfInput) {}
 }
+
 
 
 

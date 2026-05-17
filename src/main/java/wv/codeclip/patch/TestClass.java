@@ -4,11 +4,11 @@ package wv.codeclip.patch;
 public class TestClass {
 
 public static String hello() {
-    return "hello from method 1";
+    return "hello from multi-patch";
 }
 
 public static String goodbye() {
-    return "goodbye from method 2";
+    return "goodbye from multi-patch";
 }
 
 }
