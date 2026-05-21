@@ -180,16 +180,28 @@ public class PatchErrorDialog extends JDialog {
         setLocationRelativeTo(parent);
     }
 
-    private String findClassCode(ClassRepository repo, String fileName) {
-        for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
-            if (entry.getValue().getName().equalsIgnoreCase(fileName)) {
-                return repo.getClassCodeMap().get(entry.getKey());
-            }
+private String findClassCode(ClassRepository repo, String fileName) {
+    // Normalize the same way PatchApplier.resolveFilePath does
+    String bareName = fileName;
+    int lastSlash = fileName.lastIndexOf('/');
+    if (lastSlash < 0) lastSlash = fileName.lastIndexOf('\\');
+    if (lastSlash >= 0) {
+        bareName = fileName.substring(lastSlash + 1);
+    } else if (fileName.contains(".") && fileName.endsWith(".java")) {
+        String[] parts = fileName.split("\\.");
+        if (parts.length >= 2) {
+            bareName = parts[parts.length - 2] + ".java";
         }
-        return null;
     }
+    for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+        if (entry.getValue().getName().equalsIgnoreCase(bareName)) {
+            return repo.getClassCodeMap().get(entry.getKey());
+        }
+    }
+    return null;
+}
 
-    public static void show(JFrame parent, String errorMessage) {
+public static void show(JFrame parent, String errorMessage) {
         new PatchErrorDialog(parent, errorMessage, null, null).setVisible(true);
     }
 
