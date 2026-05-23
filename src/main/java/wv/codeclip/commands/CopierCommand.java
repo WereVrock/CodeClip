@@ -40,7 +40,8 @@ public boolean handle(String text) {
                 if (name.equals(target) || name.equals(target + ".java")) {
                     String code = repo.getClassCodeMap().get(entry.getKey());
                     if (code != null) {
-                        sb.append("// ===== ").append(entry.getValue().getName()).append(" =====\n");
+                        String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
+                        sb.append(prefix).append(" ===== ").append(entry.getValue().getName()).append(" =====\n");
                         sb.append(code).append("\n\n");
                         copied.add(entry.getValue().getName());
                     }

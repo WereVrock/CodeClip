@@ -61,6 +61,8 @@ new JCheckBox("Smart Paste", false);
 private final JLabel enabledCountLabel = new JLabel("Enabled Classes: 0");
 private final JLabel charCountLabel    = new JLabel("Code Characters: 0");
 
+private AppMode currentMode = AppMode.JAVA;
+private FileDropHandler fileDropHandler;
 private final ClassRepository repo    = new ClassRepository();
 private final ClassActions actions;
 private PasteClassHandler pasteHandler;
@@ -124,6 +126,8 @@ installDnD();
 setAlwaysOnTop(alwaysOnTopCheck.isSelected());
 
 // Load persisted state
+currentMode = AppMode.valueOf(settings.loadMode());
+wv.codeclip.modecontext.ModeContext.setMode(currentMode);
 notesBuffer = settings.loadNotes();
 includeInstructionsCheck.setSelected(settings.loadIncludeInstructions());
 smartPasteCheck.setSelected(settings.loadSmartPaste());
@@ -188,6 +192,7 @@ settings.saveNotes(notesBuffer);
 settings.saveIncludeInstructions(includeInstructionsCheck.isSelected());
 settings.saveSmartPaste(smartPasteCheck.isSelected());
 SmartPasteSettings.save(settings);
+settings.saveMode(currentMode.name());
 settings.saveClassPaths(
 repo.getClassCodeMap().keySet().toArray(new String[0])
 );
@@ -232,6 +237,9 @@ JCheckBoxMenuItem showMissingItem = new JCheckBoxMenuItem(
 showMissingItem.addActionListener(e ->
 showMissingFileMessages.setSelected(showMissingItem.isSelected()));
 settingsMenu.add(showMissingItem);
+JMenuItem languageItem = new JMenuItem("Language…");
+languageItem.addActionListener(e -> openLanguageDialog());
+settingsMenu.add(languageItem);
 menuBar.add(settingsMenu);
 
 JMenu extraMenu = new JMenu("Extra");
@@ -444,7 +452,9 @@ syncUndoRedo.run();
 update.addActionListener(e -> actions.updateAll(this::refreshText, this::removeClassPanel));
 copy.addActionListener(e -> actions.copyAll(this::clearTempLogs, notesBuffer));
 copyCode.addActionListener(e -> actions.copyCodeOnly());
-copyInstructions.addActionListener(e -> new ClipboardService().write(AiInstructions.TEXT));
+copyInstructions.addActionListener(e -> new ClipboardService().write(currentMode.getInstructions()));
+
+
 
 smartPasteCheck.addMouseListener(new java.awt.event.MouseAdapter() {
 @Override
@@ -690,7 +700,27 @@ loadBarWindow = null;
 }
 
 private void installDnD() {
-new FileDropHandler(this::addFilesBatched, true).install(this);
+fileDropHandler = new FileDropHandler(this::addFilesBatched, true);
+fileDropHandler.setMode(currentMode);
+fileDropHandler.install(this);
+}
+
+private void openLanguageDialog() {
+AppMode[] modes = AppMode.values();
+AppMode selected = (AppMode) JOptionPane.showInputDialog(
+this,
+"Select language mode:",
+"Language",
+JOptionPane.QUESTION_MESSAGE,
+null,
+modes,
+currentMode
+);
+if (selected != null && selected != currentMode) {
+currentMode = selected;
+if (fileDropHandler != null) fileDropHandler.setMode(currentMode);
+wv.codeclip.modecontext.ModeContext.setMode(currentMode);
+}
 }
 
 private void addClass(File file) {
@@ -901,7 +931,8 @@ refreshText();
 copy.addActionListener(e -> {
 String code = repo.getClassCodeMap().get(path);
 if (code != null) {
-String text = "// ===== " + name + " =====\n" + code + "\n";
+String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
+String text = prefix + " ===== " + name + " =====\n" + code + "\n";
 Toolkit.getDefaultToolkit()
 .getSystemClipboard()
 .setContents(new java.awt.datatransfer.StringSelection(text), null);
@@ -1216,12 +1247,12 @@ dialog.setVisible(true);
 }
 
 private void refreshTitle() {
-    if (titleFrozen) return;
-    String info = wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
-    if (!info.equals("unknown")) {
-        setTitle("Code Clip — " + info);
-        titleFrozen = true;
-    }
+if (titleFrozen) return;
+String info = wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
+if (!info.equals("unknown")) {
+setTitle("Code Clip — " + info);
+titleFrozen = true;
+}
 }
 
 private void restoreBuildInfoTitle() {
@@ -1397,6 +1428,10 @@ updateCheckpointButtonColor(null);
 }
 
 }
+
+
+
+
 
 
 

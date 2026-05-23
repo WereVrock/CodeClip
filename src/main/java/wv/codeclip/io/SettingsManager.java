@@ -119,4 +119,13 @@ public class SettingsManager {
         settings.saveProperties();
         System.out.println("Frame position reset to default.");
     }
+
+public String loadMode() {
+    return props.getProperty("mode", "JAVA");
+}
+
+public void saveMode(String mode) {
+    props.setProperty("mode", mode);
+}
+
 }

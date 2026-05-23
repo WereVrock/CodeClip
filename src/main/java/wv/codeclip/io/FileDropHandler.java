@@ -62,16 +62,22 @@ public class FileDropHandler extends DropTargetAdapter {
         }
     }
 
+    private wv.codeclip.AppMode mode = wv.codeclip.AppMode.JAVA;
+
+    public void setMode(wv.codeclip.AppMode mode) {
+        this.mode = mode;
+    }
+
     private void collectFiles(File file, List<File> out) {
         if (file.isDirectory()) {
             try (Stream<java.nio.file.Path> paths = Files.walk(file.toPath())) {
-                paths.filter(p -> p.toString().endsWith(".java"))
+                paths.filter(p -> mode.accepts(p.toFile().getName()))
                      .map(java.nio.file.Path::toFile)
                      .forEach(out::add);
             } catch (IOException e) {
                 e.printStackTrace();
             }
-        } else if (file.getName().endsWith(".java")) {
+        } else if (mode.accepts(file.getName())) {
             out.add(file);
         }
     }
