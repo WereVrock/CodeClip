@@ -32,8 +32,10 @@ private static final String MARKER_FILE    = "@@FILE:";
 private static final String MARKER_FIND    = "@@FIND:";
 private static final String MARKER_METHOD  = "@@METHOD:";
 private static final String MARKER_REPLACE = "@@REPLACE:";
-private static final String MARKER_TITLE   = "@@TITLE:";
-private static final String MARKER_DESC    = "@@DESC:";
+private static final String MARKER_TITLE        = "@@TITLE:";
+private static final String MARKER_DESC         = "@@DESC:";
+private static final String MARKER_AFTER_METHOD = "@@AFTER_METHOD:";
+private static final String MARKER_INSERT_METHOD = "@@INSERT_METHOD:";
 
 public static boolean isPatch(String text) {
 return text != null && text.stripLeading().startsWith(MARKER_PATCH);
@@ -123,7 +125,8 @@ throw new IllegalArgumentException(
 "Expected @@REPLACE: after @@FIND block at line " + (i + 1));
 }
 i++;
-String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_FIND + "|" + MARKER_METHOD;
+String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_FIND + "|" + MARKER_METHOD
++ "|" + MARKER_INSERT_METHOD + "|" + MARKER_AFTER_METHOD;
 ParsedBlock replace = readBlock(lines, i, replaceStops);
 if (replace.hitEndOfInput()) {
 throw new IllegalArgumentException(
@@ -131,6 +134,49 @@ throw new IllegalArgumentException(
 }
 i = replace.nextIndex();
 changes.add(new PatchChange.FindReplace(currentFile, find.text(), replace.text()));
+continue;
+}
+
+if (line.startsWith(MARKER_AFTER_METHOD)) {
+requireFile(currentFile, i);
+String anchorMethod = line.substring(MARKER_AFTER_METHOD.length()).trim();
+if (anchorMethod.isEmpty()) {
+throw new IllegalArgumentException(
+"@@AFTER_METHOD: requires a method name at line " + (i + 1));
+}
+i++;
+while (i < lines.length && lines[i].isBlank()) i++;
+if (i >= lines.length || !lines[i].trim().equals(MARKER_INSERT_METHOD)) {
+String found = i < lines.length ? lines[i].trim() : "<end of input>";
+throw new IllegalArgumentException(
+"Expected @@INSERT_METHOD: after @@AFTER_METHOD: at line " + (i + 1)
++ "\nFound: \"" + found + "\"");
+}
+i++;
+String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_METHOD
++ "|" + MARKER_FIND + "|" + MARKER_INSERT_METHOD + "|" + MARKER_AFTER_METHOD;
+ParsedBlock code = readBlock(lines, i, replaceStops);
+if (code.hitEndOfInput()) {
+throw new IllegalArgumentException(
+"@@INSERT_METHOD block is not terminated. Did you forget @@END?");
+}
+i = code.nextIndex();
+changes.add(new PatchChange.InsertMethod(currentFile, anchorMethod, code.text()));
+continue;
+}
+
+if (line.startsWith(MARKER_INSERT_METHOD)) {
+requireFile(currentFile, i);
+i++;
+String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_METHOD
++ "|" + MARKER_FIND + "|" + MARKER_INSERT_METHOD + "|" + MARKER_AFTER_METHOD;
+ParsedBlock code = readBlock(lines, i, replaceStops);
+if (code.hitEndOfInput()) {
+throw new IllegalArgumentException(
+"@@INSERT_METHOD block is not terminated. Did you forget @@END?");
+}
+i = code.nextIndex();
+changes.add(new PatchChange.InsertMethod(currentFile, null, code.text()));
 continue;
 }
 
@@ -149,7 +195,8 @@ throw new IllegalArgumentException(
 "\nMake sure @@REPLACE: appears on its own line after @@METHOD:");
 }
 i++;
-String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_METHOD + "|" + MARKER_FIND;
+String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_METHOD + "|" + MARKER_FIND
++ "|" + MARKER_INSERT_METHOD + "|" + MARKER_AFTER_METHOD;
 ParsedBlock replace = readBlock(lines, i, replaceStops);
 if (replace.hitEndOfInput()) {
 throw new IllegalArgumentException(
@@ -238,43 +285,43 @@ throw new IllegalArgumentException(
 }
 
 private static List<String> splitIntoMethods(String replaceText) {
-    List<String> methods = new ArrayList<>();
-    String[] lines = replaceText.split("\n", -1);
-    int i = 0;
-    while (i < lines.length) {
-        // Skip blank lines between methods
-        while (i < lines.length && lines[i].isBlank()) i++;
-        if (i >= lines.length) break;
+List<String> methods = new ArrayList<>();
+String[] lines = replaceText.split("\n", -1);
+int i = 0;
+while (i < lines.length) {
+// Skip blank lines between methods
+while (i < lines.length && lines[i].isBlank()) i++;
+if (i >= lines.length) break;
 
-        // Find a line that looks like a method signature
-        String trimmed = lines[i].trim();
-        boolean hasDeclarationKeyword =
-                trimmed.contains("public ") || trimmed.contains("private ") ||
-                trimmed.contains("protected ") || trimmed.contains("static ") ||
-                trimmed.contains("void ") || trimmed.contains("@Override");
-        if (!hasDeclarationKeyword || !trimmed.contains("(")) {
-            i++;
-            continue;
-        }
+// Find a line that looks like a method signature
+String trimmed = lines[i].trim();
+boolean hasDeclarationKeyword =
+trimmed.contains("public ") || trimmed.contains("private ") ||
+trimmed.contains("protected ") || trimmed.contains("static ") ||
+trimmed.contains("void ") || trimmed.contains("@Override");
+if (!hasDeclarationKeyword || !trimmed.contains("(")) {
+i++;
+continue;
+}
 
-        // Collect lines until we find the opening brace, then trace to closing brace
-        StringBuilder methodSb = new StringBuilder();
-        int braceBalance = 0;
-        boolean started = false;
-        while (i < lines.length) {
-            String line = lines[i];
-            methodSb.append(line).append("\n");
-            for (char c : line.toCharArray()) {
-                if (c == '{') { braceBalance++; started = true; }
-                else if (c == '}') { braceBalance--; }
-            }
-            i++;
-            if (started && braceBalance == 0) break;
-        }
-        String block = methodSb.toString().strip();
-        if (!block.isEmpty()) methods.add(block);
-    }
-    return methods;
+// Collect lines until we find the opening brace, then trace to closing brace
+StringBuilder methodSb = new StringBuilder();
+int braceBalance = 0;
+boolean started = false;
+while (i < lines.length) {
+String line = lines[i];
+methodSb.append(line).append("\n");
+for (char c : line.toCharArray()) {
+if (c == '{') { braceBalance++; started = true; }
+else if (c == '}') { braceBalance--; }
+}
+i++;
+if (started && braceBalance == 0) break;
+}
+String block = methodSb.toString().strip();
+if (!block.isEmpty()) methods.add(block);
+}
+return methods;
 }
 
 private static String extractMethodNameFromSignature(String replaceText) {
@@ -304,6 +351,9 @@ return null;
 
 private record ParsedBlock(String text, int nextIndex, boolean hitEndOfInput) {}
 }
+
+
+
 
 
 

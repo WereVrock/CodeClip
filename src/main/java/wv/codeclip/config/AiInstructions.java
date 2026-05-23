@@ -12,7 +12,7 @@ public final class AiInstructions {
         alternative, you can send the entire updated class as plain code. All the patching should be in a single block unless it is necessary
         to do otherwise. Use method replacement if you are gonna change more than half of it.
 
-        prefer method replacement over exact code replacement unless you are doing small changes
+        Prefer method replacement over exact code replacement unless you are doing small changes.
 
         ----------------------------------------------------------------
         PATCH FORMAT
@@ -34,6 +34,15 @@ public final class AiInstructions {
         <entire new method including signature and braces>
 
         <another method if needed>
+
+        @@FILE: AnotherFile.java
+        @@AFTER_METHOD: existingMethodName
+        @@INSERT_METHOD:
+        <entire new method including signature and braces>
+
+        @@FILE: AnotherFile.java
+        @@INSERT_METHOD:
+        <entire new method including signature and braces>
 
         @@END
 
@@ -73,8 +82,19 @@ public final class AiInstructions {
           @@REPLACE must contain complete methods including
           signatures, opening braces, bodies, and closing braces.
           @@METHOD: can only replace existing methods, not add new ones.
-          To add a new method, use @@FIND/@@REPLACE to insert it
-          after an existing anchor.
+          To add a new method, use @@INSERT_METHOD: instead.
+
+        @@AFTER_METHOD: / @@INSERT_METHOD:
+          Use to add a new method after an existing one.
+          @@AFTER_METHOD: takes the name of the existing anchor method.
+          @@INSERT_METHOD: must follow immediately after @@AFTER_METHOD:.
+          The block must contain a complete method including signature,
+          opening brace, body, and closing brace.
+
+        @@INSERT_METHOD: (standalone)
+          Use to add a new method at the end of the class.
+          No @@AFTER_METHOD: needed — the method is inserted just before
+          the final closing brace of the class.
 
         ----------------------------------------------------------------
         RULES
