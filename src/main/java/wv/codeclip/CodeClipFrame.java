@@ -1353,7 +1353,7 @@ if (sourceRoot == null) return;
 int nextBuildNo = 1;
 java.io.File file = new java.io.File(sourceRoot, BUILD_INFO_FILE);
 if (file.exists()) {
-String oldContent = repo.getClassCodeMap().get(file.getAbsolutePath());//
+String oldContent = repo.getClassCodeMap().get(file.getAbsolutePath());
 if (oldContent == null) {
 try { oldContent = java.nio.file.Files.readString(file.toPath()); }
 catch (java.io.IOException ignored) {}
