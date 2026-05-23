@@ -66,7 +66,9 @@ private FileDropHandler fileDropHandler;
 private final ClassRepository repo    = new ClassRepository();
 private final ClassActions actions;
 private PasteClassHandler pasteHandler;
+private wv.codeclip.godot.GodotPasteHandler godotPasteHandler;
 private wv.codeclip.patch.PatchUndoManager undoManager;
+private JMenuItem godotDirMenuItem;
 private final SettingsManager settings = new SettingsManager();
 private CheckpointDialog checkpointDialog = null;
 private PatchApplier.PatchResult lastPatchError = null;
@@ -90,6 +92,7 @@ private JLabel loadProgressLabel;
 public CodeClipFrame() {
 
 wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
+wv.codeclip.godot.GodotDirectory.load(settings);
 undoManager = new wv.codeclip.patch.PatchUndoManager();
 pasteHandler = new PasteClassHandler(
 repo,
@@ -102,6 +105,16 @@ smartPasteCheck::isSelected,
 undoManager
 );
 pasteHandler.setErrorCallback(this::setLastPatchError);
+godotPasteHandler = new wv.codeclip.godot.GodotPasteHandler(
+repo, this,
+() -> { refreshText(); refreshPanels(); },
+this::appendTempLog,
+this::addClassPanel,
+this::onCodeChanged,
+smartPasteCheck::isSelected,
+undoManager
+);
+godotPasteHandler.setErrorCallback(this::setLastPatchError);
 undoManager.setPanelRemovalCallback(this::removeClassPanel);
 undoManager.setPanelAddCallback(this::addClassPanel);
 
@@ -128,14 +141,21 @@ setAlwaysOnTop(alwaysOnTopCheck.isSelected());
 // Load persisted state
 currentMode = AppMode.valueOf(settings.loadMode());
 wv.codeclip.modecontext.ModeContext.setMode(currentMode);
+if (fileDropHandler != null) fileDropHandler.setMode(currentMode);
+updateDirectoryButton();
 notesBuffer = settings.loadNotes();
 includeInstructionsCheck.setSelected(settings.loadIncludeInstructions());
 smartPasteCheck.setSelected(settings.loadSmartPaste());
 SmartPasteSettings.load(settings);
 renderNotes();
 
-loadClassPathsBatched(settings.loadClassPaths());
-showLoadBar();
+String[] savedPaths = settings.loadClassPaths();
+if (savedPaths.length == 0) {
+    // Nothing to load — don't show or leave a stuck load bar
+} else {
+    showLoadBar();
+    loadClassPathsBatched(savedPaths);
+}
 // Retry title restore until workers finish, up to 20 attempts x 150ms = 3s
 int[] attempts = {0};
 javax.swing.Timer titleTimer = new javax.swing.Timer(150, null);
@@ -192,6 +212,7 @@ settings.saveNotes(notesBuffer);
 settings.saveIncludeInstructions(includeInstructionsCheck.isSelected());
 settings.saveSmartPaste(smartPasteCheck.isSelected());
 SmartPasteSettings.save(settings);
+wv.codeclip.godot.GodotDirectory.save(settings);
 settings.saveMode(currentMode.name());
 settings.saveClassPaths(
 repo.getClassCodeMap().keySet().toArray(new String[0])
@@ -240,6 +261,10 @@ settingsMenu.add(showMissingItem);
 JMenuItem languageItem = new JMenuItem("Language…");
 languageItem.addActionListener(e -> openLanguageDialog());
 settingsMenu.add(languageItem);
+godotDirMenuItem = new JMenuItem("Godot Directory…");
+godotDirMenuItem.addActionListener(e -> openGodotDirectoryDialog());
+godotDirMenuItem.setVisible(false);
+settingsMenu.add(godotDirMenuItem);
 menuBar.add(settingsMenu);
 
 JMenu extraMenu = new JMenu("Extra");
@@ -445,7 +470,11 @@ lastErrorBtn.setEnabled(false);
 alwaysOnTopCheck.addActionListener(e -> setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
 
 pasteClass.addActionListener(e -> {
+if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
+godotPasteHandler.handlePasteFromClipboard();
+} else {
 pasteHandler.handlePasteFromClipboard();
+}
 syncUndoRedo.run();
 });
 
@@ -720,6 +749,7 @@ if (selected != null && selected != currentMode) {
 currentMode = selected;
 if (fileDropHandler != null) fileDropHandler.setMode(currentMode);
 wv.codeclip.modecontext.ModeContext.setMode(currentMode);
+updateDirectoryButton();
 }
 }
 
@@ -728,65 +758,70 @@ addFilesBatched(List.of(file));
 }
 
 private void addFilesBatched(List<File> files) {
-if (files.isEmpty()) return;
+    if (files.isEmpty()) return;
 
-List<File> toLoad = new ArrayList<>();
-for (File file : files) {
-String path = file.getAbsolutePath();
-if (repo.getClassCodeMap().containsKey(path)) {
-repo.getDisabledClasses().remove(path);
-} else {
-toLoad.add(file);
-}
-}
+    List<File> toLoad = new ArrayList<>();
+    for (File file : files) {
+        String path = file.getAbsolutePath();
+        if (repo.getClassCodeMap().containsKey(path)) {
+            repo.getDisabledClasses().remove(path);
+        } else {
+            toLoad.add(file);
+        }
+    }
 
-if (toLoad.isEmpty()) {
-refreshText();
-refreshPanels();
-return;
-}
+    if (toLoad.isEmpty()) {
+        refreshText();
+        refreshPanels();
+        return;
+    }
 
-int total = toLoad.size();
-showLoadBar();
+    int total = toLoad.size();
+    if (loadBarWindow == null || !loadBarWindow.isVisible()) {
+        showLoadBar();
+    }
 
-java.util.concurrent.atomic.AtomicInteger remaining =
-new java.util.concurrent.atomic.AtomicInteger(total);
-java.util.concurrent.atomic.AtomicInteger loaded =
-new java.util.concurrent.atomic.AtomicInteger(0);
+    java.util.concurrent.atomic.AtomicInteger remaining =
+            new java.util.concurrent.atomic.AtomicInteger(total);
+    java.util.concurrent.atomic.AtomicInteger loaded =
+            new java.util.concurrent.atomic.AtomicInteger(0);
 
-for (File file : toLoad) {
-String path = file.getAbsolutePath();
-SwingWorker<String, Void> worker = new SwingWorker<>() {
-@Override
-protected String doInBackground() throws Exception {
-return Files.readString(file.toPath());
-}
+    for (File file : toLoad) {
+        String path = file.getAbsolutePath();
+        SwingWorker<String, Void> worker = new SwingWorker<>() {
+            @Override
+            protected String doInBackground() throws Exception {
+                return Files.readString(file.toPath());
+            }
 
-@Override
-protected void done() {
-try {
-String code = get();
-repo.getClassCodeMap().put(path, code);
-repo.getClassFileMap().put(path, file);
-repo.setCheckpoint(path, code);
-addClassPanel(path, file.getName());
-if (file.getName().equals(BUILD_INFO_FILE)) refreshTitle();
-} catch (Exception ignored) {
-} finally {
-int done = loaded.incrementAndGet();
-SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
-if (remaining.decrementAndGet() == 0) {
-SwingUtilities.invokeLater(() -> {
-refreshText();
-refreshPanels();
-hideLoadBar();
-});
-}
-}
-}
-};
-worker.execute();
-}
+            @Override
+            protected void done() {
+                try {
+                    String code = get();
+                    repo.getClassCodeMap().put(path, code);
+                    repo.getClassFileMap().put(path, file);
+                    repo.setCheckpoint(path, code);
+                    addClassPanel(path, file.getName());
+                    if (file.getName().equals(BUILD_INFO_FILE)) refreshTitle();
+                } catch (Exception ignored) {
+                } finally {
+                    int done = loaded.incrementAndGet();
+                    SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
+                    if (remaining.decrementAndGet() == 0) {
+                        SwingUtilities.invokeLater(() -> {
+                            if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
+                                autoSetGodotDirectoryFromRepo(toLoad);
+                            }
+                            refreshText();
+                            refreshPanels();
+                            hideLoadBar();
+                        });
+                    }
+                }
+            }
+        };
+        worker.execute();
+    }
 }
 
 private void addClassInternal(File file, boolean doRefresh) {
@@ -827,75 +862,84 @@ worker.execute();
 }
 
 private void loadClassPathsBatched(String[] paths) {
-if (paths.length == 0) return;
+    if (paths.length == 0) return;
 
-java.util.concurrent.atomic.AtomicInteger remaining =
-new java.util.concurrent.atomic.AtomicInteger(paths.length);
-java.util.concurrent.atomic.AtomicInteger loaded =
-new java.util.concurrent.atomic.AtomicInteger(0);
-int total = paths.length;
+    java.util.concurrent.atomic.AtomicInteger remaining =
+            new java.util.concurrent.atomic.AtomicInteger(paths.length);
+    java.util.concurrent.atomic.AtomicInteger loaded =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    int total = paths.length;
 
-for (String path : paths) {
-File f = new File(path);
-if (!f.exists()) {
-int done = loaded.incrementAndGet();
-SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
-if (remaining.decrementAndGet() == 0) {
-SwingUtilities.invokeLater(() -> {
-refreshText();
-refreshPanels();
-hideLoadBar();
-});
-}
-continue;
-}
+    for (String path : paths) {
+        File f = new File(path);
+        if (!f.exists()) {
+            int done = loaded.incrementAndGet();
+            SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
+            if (remaining.decrementAndGet() == 0) {
+                SwingUtilities.invokeLater(() -> {
+                    if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
+                        autoSetGodotDirectoryFromRepo(null);
+                    }
+                    refreshText();
+                    refreshPanels();
+                    hideLoadBar();
+                });
+            }
+            continue;
+        }
 
-String absPath = f.getAbsolutePath();
-if (repo.getClassCodeMap().containsKey(absPath)) {
-repo.getDisabledClasses().remove(absPath);
-int done = loaded.incrementAndGet();
-SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
-if (remaining.decrementAndGet() == 0) {
-SwingUtilities.invokeLater(() -> {
-refreshText();
-refreshPanels();
-hideLoadBar();
-});
-}
-continue;
-}
+        String absPath = f.getAbsolutePath();
+        if (repo.getClassCodeMap().containsKey(absPath)) {
+            repo.getDisabledClasses().remove(absPath);
+            int done = loaded.incrementAndGet();
+            SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
+            if (remaining.decrementAndGet() == 0) {
+                SwingUtilities.invokeLater(() -> {
+                    if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
+                        autoSetGodotDirectoryFromRepo(null);
+                    }
+                    refreshText();
+                    refreshPanels();
+                    hideLoadBar();
+                });
+            }
+            continue;
+        }
 
-SwingWorker<String, Void> worker = new SwingWorker<>() {
-@Override
-protected String doInBackground() throws Exception {
-return Files.readString(f.toPath());
-}
+        SwingWorker<String, Void> worker = new SwingWorker<>() {
+            @Override
+            protected String doInBackground() throws Exception {
+                return Files.readString(f.toPath());
+            }
 
-@Override
-protected void done() {
-try {
-String code = get();
-repo.getClassCodeMap().put(absPath, code);
-repo.getClassFileMap().put(absPath, f);
-repo.setCheckpoint(absPath, code);
-addClassPanel(absPath, f.getName());
-if (f.getName().equals(BUILD_INFO_FILE)) refreshTitle();
-} catch (Exception ignored) {
-} finally {
-int done = loaded.incrementAndGet();
-SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
-if (remaining.decrementAndGet() == 0) {
-SwingUtilities.invokeLater(() -> {
-refreshText();
-refreshPanels();
-hideLoadBar();
-});
-}
-}
-}
-};
-worker.execute();
-}
+            @Override
+            protected void done() {
+                try {
+                    String code = get();
+                    repo.getClassCodeMap().put(absPath, code);
+                    repo.getClassFileMap().put(absPath, f);
+                    repo.setCheckpoint(absPath, code);
+                    addClassPanel(absPath, f.getName());
+                    if (f.getName().equals(BUILD_INFO_FILE)) refreshTitle();
+                } catch (Exception ignored) {
+                } finally {
+                    int done = loaded.incrementAndGet();
+                    SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
+                    if (remaining.decrementAndGet() == 0) {
+                        SwingUtilities.invokeLater(() -> {
+                            if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
+                                autoSetGodotDirectoryFromRepo(null);
+                            }
+                            refreshText();
+                            refreshPanels();
+                            hideLoadBar();
+                        });
+                    }
+                }
+            }
+        };
+        worker.execute();
+    }
 }
 
 // ------------------------------------------------------------------
@@ -1427,7 +1471,123 @@ refreshPanels();
 updateCheckpointButtonColor(null);
 }
 
+private void updateDirectoryButton() {
+    if (godotDirMenuItem == null) return;
+    boolean godot = wv.codeclip.modecontext.ModeContext.isGodotMode();
+    godotDirMenuItem.setVisible(godot);
 }
+
+private void refreshDirectoryButtonLabel() {
+}
+
+private void openGodotDirectoryDialog() {
+    java.io.File current = wv.codeclip.godot.GodotDirectory.get();
+
+    JPanel panel = new JPanel(new BorderLayout(8, 8));
+    panel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+
+    JLabel titleLabel = new JLabel("Godot Project Directory");
+    titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 13f));
+    panel.add(titleLabel, BorderLayout.NORTH);
+
+    JTextArea dirDisplay = new JTextArea(current != null ? current.getAbsolutePath() : "(not set)");
+    dirDisplay.setEditable(false);
+    dirDisplay.setLineWrap(true);
+    dirDisplay.setWrapStyleWord(false);
+    dirDisplay.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+    dirDisplay.setBackground(UIManager.getColor("Panel.background"));
+    dirDisplay.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(UIManager.getColor("Separator.foreground"), 1, true),
+            BorderFactory.createEmptyBorder(6, 8, 6, 8)));
+    dirDisplay.setRows(3);
+    dirDisplay.setColumns(40);
+    panel.add(new JScrollPane(dirDisplay), BorderLayout.CENTER);
+
+    JButton setNewBtn = new JButton("Set New Directory…");
+    JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+    btnRow.add(setNewBtn);
+    panel.add(btnRow, BorderLayout.SOUTH);
+
+    JDialog dialog = new JDialog(this, "Godot Directory", true);
+    dialog.setLayout(new BorderLayout(8, 8));
+    dialog.getRootPane().setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+    dialog.add(panel, BorderLayout.CENTER);
+
+    JButton closeBtn = new JButton("Close");
+    closeBtn.addActionListener(e -> dialog.dispose());
+    JPanel footerRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+    footerRow.add(closeBtn);
+    dialog.add(footerRow, BorderLayout.SOUTH);
+
+    setNewBtn.addActionListener(e -> {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setDialogTitle("Select Godot Project Directory");
+        if (current != null) chooser.setCurrentDirectory(current);
+        int result = chooser.showOpenDialog(dialog);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            java.io.File chosen = chooser.getSelectedFile();
+            wv.codeclip.godot.GodotDirectory.set(chosen);
+            dirDisplay.setText(chosen.getAbsolutePath());
+        }
+    });
+
+    dialog.pack();
+    dialog.setMinimumSize(new Dimension(420, 200));
+    dialog.setLocationRelativeTo(this);
+    dialog.setVisible(true);
+}
+
+/**
+ * Sets the Godot directory from loaded files if not already set.
+ * Prefers the most common parent directory among .gd files.
+ * hint: files from the current DnD batch (may be null to scan repo).
+ */
+
+private void autoSetGodotDirectoryFromRepo(List<File> hint) {
+    if (wv.codeclip.godot.GodotDirectory.isSet()) return;
+
+    List<File> candidates = new ArrayList<>();
+    if (hint != null) {
+        for (File f : hint) {
+            if (f.getName().endsWith(".gd")) candidates.add(f);
+        }
+    }
+    if (candidates.isEmpty()) {
+        for (File f : repo.getClassFileMap().values()) {
+            if (f != null && f.getName().endsWith(".gd")) candidates.add(f);
+        }
+    }
+    if (candidates.isEmpty()) return;
+
+    java.util.LinkedHashMap<File, Long> freq = new java.util.LinkedHashMap<>();
+    for (File f : candidates) {
+        File parent = f.getParentFile();
+        if (parent != null) freq.merge(parent, 1L, Long::sum);
+    }
+
+    File best = null;
+    long bestCount = 0;
+    for (java.util.Map.Entry<File, Long> e : freq.entrySet()) {
+        if (e.getValue() > bestCount) {
+            bestCount = e.getValue();
+            best = e.getKey();
+        }
+    }
+
+    if (best != null) {
+        wv.codeclip.godot.GodotDirectory.set(best);
+        appendTempLog("Godot directory auto-set: " + best.getAbsolutePath());
+    }
+}
+
+}
+
+
+
+
+
+
 
 
 

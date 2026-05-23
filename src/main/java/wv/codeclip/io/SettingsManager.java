@@ -128,4 +128,12 @@ public void saveMode(String mode) {
     props.setProperty("mode", mode);
 }
 
+public String loadGodotDirectory() {
+    return props.getProperty("godot.directory", "");
+}
+
+public void saveGodotDirectory(String path) {
+    props.setProperty("godot.directory", path);
+}
+
 }
