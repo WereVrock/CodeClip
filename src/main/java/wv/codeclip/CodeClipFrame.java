@@ -460,7 +460,7 @@ if (divider > 0) split.setDividerLocation(divider);
 add(split, BorderLayout.CENTER);
 
 // --- Bottom bar ---
-JButton pasteClass       = new JButton("Paste Class");
+JButton pasteClass       = new JButton("Paste");
 JButton update           = new JButton("Update All");
 JButton copy             = new JButton("Copy All");
 JButton copyCode         = new JButton("Copy Code Only");
@@ -1588,6 +1588,7 @@ appendTempLog("Godot directory auto-set: " + best.getAbsolutePath());
 }
 
 }
+
 
 
 
