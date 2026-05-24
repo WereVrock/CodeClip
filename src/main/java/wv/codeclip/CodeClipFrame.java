@@ -77,8 +77,8 @@ private JButton lastErrorBtn;
 private JMenuItem lastErrorMenuItem;
 private Runnable syncUndoRedo;
 
-private static final Color ENABLED_COLOR   = new Color(240, 240, 240);
-private static final Color DISABLED_COLOR  = new Color(210, 210, 210);
+// Background colors for class rows are now provided by ModeColors.
+// See ModeColors.getEnabledBackground() and getDisabledBackground().
 private static final Color LOG_CLASS_COLOR = new Color(30, 120, 220);
 private static final Color UNSYNCED_COLOR  = new Color(30, 100, 210);
 
@@ -751,6 +751,7 @@ currentMode = selected;
 if (fileDropHandler != null) fileDropHandler.setMode(currentMode);
 wv.codeclip.modecontext.ModeContext.setMode(currentMode);
 updateDirectoryButton();
+refreshPanels();
 }
 }
 
@@ -950,7 +951,7 @@ worker.execute();
 public void addClassPanel(String path, String name) {
 JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
 panel.setOpaque(true);
-panel.setBackground(ENABLED_COLOR);
+panel.setBackground(wv.codeclip.modecontext.ModeColors.getEnabledBackground());
 panel.putClientProperty("path", path);
 panel.putClientProperty("name", name);
 
@@ -964,11 +965,11 @@ panel.putClientProperty("label", label);
 toggle.addActionListener(e -> {
 if (repo.getDisabledClasses().remove(path)) {
 toggle.setText("Disable");
-panel.setBackground(ENABLED_COLOR);
+panel.setBackground(wv.codeclip.modecontext.ModeColors.getEnabledBackground());
 } else {
 repo.getDisabledClasses().add(path);
 toggle.setText("Enable");
-panel.setBackground(DISABLED_COLOR);
+panel.setBackground(wv.codeclip.modecontext.ModeColors.getDisabledBackground());
 }
 refreshText();
 });
@@ -1060,7 +1061,9 @@ String name = (file != null) ? file.getName() : path;
 int insertionIdx = insertionOrder.indexOf(path);
 entries.add(new PanelEntry(panel, path, name, disabled, insertionIdx));
 
-panel.setBackground(disabled ? DISABLED_COLOR : ENABLED_COLOR);
+panel.setBackground(disabled
+? wv.codeclip.modecontext.ModeColors.getDisabledBackground()
+: wv.codeclip.modecontext.ModeColors.getEnabledBackground());
 boolean unsynced = isUnsynced(path);
 Object labelObj = panel.getClientProperty("label");
 if (labelObj instanceof JLabel lbl) {
@@ -1588,6 +1591,15 @@ appendTempLog("Godot directory auto-set: " + best.getAbsolutePath());
 }
 
 }
+
+
+
+
+
+
+
+
+
 
 
 
