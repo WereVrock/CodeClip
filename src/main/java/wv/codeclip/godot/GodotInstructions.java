@@ -1,8 +1,10 @@
 package wv.codeclip.godot;
 
 public final class GodotInstructions {
-    private GodotInstructions() {}
-    public static final String TEXT =
+
+private GodotInstructions() {}
+
+public static final String TEXT =
         """
         ================================================================
         GODOT / GDSCRIPT PATCH INSTRUCTIONS

@@ -1021,14 +1021,18 @@ classPanel.repaint();
 // ------------------------------------------------------------------
 
 private void refreshText() {
-StringBuilder sb = new StringBuilder();
-repo.getClassCodeMap().forEach((path, code) -> {
-if (!repo.getDisabledClasses().contains(path)) {
-sb.append(code).append("\n\n");
-}
-});
-classTextArea.setText(sb.toString());
-refreshStats();
+    String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
+    StringBuilder sb = new StringBuilder();
+    repo.getClassCodeMap().forEach((path, code) -> {
+        if (!repo.getDisabledClasses().contains(path)) {
+            File file = repo.getClassFileMap().get(path);
+            String name = (file != null) ? file.getName() : path;
+            sb.append(prefix).append(" ===== ").append(name).append(" =====\n");
+            sb.append(code).append("\n\n");
+        }
+    });
+    classTextArea.setText(sb.toString());
+    refreshStats();
 }
 
 private void refreshStats() {
