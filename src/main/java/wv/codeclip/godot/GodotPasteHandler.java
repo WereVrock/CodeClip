@@ -38,6 +38,7 @@ public class GodotPasteHandler {
     private final ClipboardService clipboard = new ClipboardService();
     private final GodotSourceParser godotParser = new GodotSourceParser();
     private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
+    private wv.codeclip.commands.CopierCommand copierCommand;
 
     private Consumer<PatchApplier.PatchResult> errorCallback;
     private Consumer<Boolean> postPasteCallback;
@@ -60,6 +61,7 @@ public class GodotPasteHandler {
         this.codeChangedCallback = codeChangedCallback;
         this.multiPatchMode = multiPatchMode;
         this.undoManager = undoManager;
+        this.copierCommand = new wv.codeclip.commands.CopierCommand(repo, statusLogger);
     }
 
     public void setErrorCallback(Consumer<PatchApplier.PatchResult> errorCallback) {
@@ -80,6 +82,17 @@ public void handlePasteFromClipboard() {
         JOptionPane.showMessageDialog(parent,
                 "Clipboard is empty or does not contain text.",
                 "Error", JOptionPane.ERROR_MESSAGE);
+        return;
+    }
+
+    if (text.trim().startsWith("@@Enable")) {
+        boolean changed = handleEnable(text.trim());
+        firePostPaste(changed);
+        return;
+    }
+
+    if (text.trim().startsWith("@@Copy")) {
+        copierCommand.handle(text.trim());
         return;
     }
 
@@ -400,6 +413,34 @@ private boolean handleFileMarkerPaste(String text) {
         }
     }
     return anyChanged;
+}
+
+private boolean handleEnable(String text) {
+    String arg = text.substring("@@Enable".length()).trim();
+    if (arg.isEmpty()) return false;
+    String[] parts = arg.split("[,\\s]+");
+    java.util.List<String> targets = new java.util.ArrayList<>();
+    for (String p : parts) {
+        String trimmed = p.trim();
+        if (!trimmed.isEmpty()) targets.add(trimmed.toLowerCase());
+    }
+    if (targets.isEmpty()) return false;
+    repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
+    java.util.List<String> enabled = new java.util.ArrayList<>();
+    for (java.util.Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+        if (entry.getValue() == null) continue;
+        String name = entry.getValue().getName().toLowerCase();
+        for (String target : targets) {
+            if (name.equals(target) || name.equals(target + ".gd")) {
+                repo.getDisabledClasses().remove(entry.getKey());
+                enabled.add(entry.getValue().getName());
+                break;
+            }
+        }
+    }
+    refreshCallback.run();
+    if (statusLogger != null) statusLogger.accept("@@Enable: " + String.join(", ", enabled));
+    return true;
 }
 
 }

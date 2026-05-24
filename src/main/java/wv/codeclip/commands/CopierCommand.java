@@ -37,7 +37,14 @@ public boolean handle(String text) {
             if (entry.getValue() == null) continue;
             String name = entry.getValue().getName().toLowerCase();
             for (String target : targets) {
-                if (name.equals(target) || name.equals(target + ".java")) {
+                String[] exts = wv.codeclip.modecontext.ModeContext.getMode().getExtensions();
+                boolean matches = name.equals(target);
+                if (!matches) {
+                    for (String ext : exts) {
+                        if (name.equals(target + ext)) { matches = true; break; }
+                    }
+                }
+                if (matches) {
                     String code = repo.getClassCodeMap().get(entry.getKey());
                     if (code != null) {
                         String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
