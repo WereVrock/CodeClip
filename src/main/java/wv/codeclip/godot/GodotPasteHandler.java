@@ -74,126 +74,116 @@ public class GodotPasteHandler {
     // Main entry point
     // ------------------------------------------------------------------
 
-    public void handlePasteFromClipboard() {
-        String text = clipboard.read();
-        if (text == null || text.isBlank()) {
-            JOptionPane.showMessageDialog(parent,
-                    "Clipboard is empty or does not contain text.",
-                    "Error", JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        if (Boolean.TRUE.equals(multiPatchMode.get()) &&
-                (PatchParser.containsPatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
-            boolean changed = handleSmartPaste(text);
-            firePostPaste(changed);
-            return;
-        }
-
-        if (PatchParser.containsPatch(text)) {
-            boolean changed = handlePatch(text);
-            firePostPaste(changed);
-            return;
-        }
-
-        if (!looksLikeGdScript(text)) {
-            JOptionPane.showMessageDialog(parent,
-                    "Clipboard does not appear to contain GDScript source code.",
-                    "Invalid Input", JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        boolean changed = handleGdScriptPaste(text);
-        firePostPaste(changed);
+public void handlePasteFromClipboard() {
+    String text = clipboard.read();
+    if (text == null || text.isBlank()) {
+        JOptionPane.showMessageDialog(parent,
+                "Clipboard is empty or does not contain text.",
+                "Error", JOptionPane.ERROR_MESSAGE);
+        return;
     }
 
-    // ------------------------------------------------------------------
+    boolean hasPatches     = PatchParser.containsPatch(text);
+    boolean hasFileMarkers = GodotScriptExtractor.containsFileMarkers(text);
+    boolean hasClassBlocks = SmartPasteExtractor.containsClassBlock(text);
+
+    if (hasPatches || hasFileMarkers || hasClassBlocks) {
+        boolean changed = handleSmartPaste(text);
+        firePostPaste(changed);
+        return;
+    }
+
+    if (!looksLikeGdScript(text)) {
+        JOptionPane.showMessageDialog(parent,
+                "Clipboard does not appear to contain GDScript source code.",
+                "Invalid Input", JOptionPane.ERROR_MESSAGE);
+        return;
+    }
+
+    // Bare GDScript with no markers — prompt for name as last resort
+    boolean changed = handleGdScriptPaste(text, null);
+    firePostPaste(changed);
+}
+
+// ------------------------------------------------------------------
     // GDScript paste
     // ------------------------------------------------------------------
 
-    private boolean handleGdScriptPaste(String scriptCode) {
-        if (!GodotDirectory.isSet()) {
-            JOptionPane.showMessageDialog(parent,
-                    "No Godot project directory set.\nUse the directory button to set one.",
-                    "No Directory", JOptionPane.WARNING_MESSAGE);
-            return false;
-        }
-
-        String scriptName = parseScriptName(scriptCode);
-        if (scriptName == null) {
-            JOptionPane.showMessageDialog(parent,
-                    "Could not determine script name from pasted code.\n" +
-                    "Make sure the first non-blank line is a class_name or the file name is indicated.",
-                    "Invalid Script", JOptionPane.ERROR_MESSAGE);
-            return false;
-        }
-
-        String fileName = scriptName.endsWith(".gd") ? scriptName : scriptName + ".gd";
-        File targetDir  = GodotDirectory.get();
-        File targetFile = new File(targetDir, fileName);
-        boolean isNew   = !targetFile.exists();
-
-        if (!isNew && !SmartPasteSettings.isSkipOverwriteConfirm()) {
-            int choice = JOptionPane.showConfirmDialog(parent,
-                    "Script: " + fileName + "\n\nFile already exists. Overwrite?",
-                    "Overwrite Script",
-                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
-            if (choice != JOptionPane.OK_OPTION) return false;
-        }
-
-        if (isNew && !SmartPasteSettings.isSkipCreateConfirm()) {
-            int choice = JOptionPane.showConfirmDialog(parent,
-                    "Script: " + fileName + "\n\nTarget directory:\n" +
-                    targetDir.getAbsolutePath() + "\n\nCreate new file?",
-                    "Create Script",
-                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
-            if (choice != JOptionPane.OK_OPTION) return false;
-        }
-
-        try {
-            Files.writeString(targetFile.toPath(), scriptCode);
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(parent,
-                    "Failed to write script:\n" + e.getMessage(),
-                    "Error", JOptionPane.ERROR_MESSAGE);
-            return false;
-        }
-
-        // Auto-set directory from first successfully written script
-        if (!GodotDirectory.isSet()) {
-            GodotDirectory.set(targetDir);
-        }
-
-        String path = targetFile.getAbsolutePath();
-
-        // Undo snapshot
-        String oldCode = repo.getClassCodeMap().get(path);
-        Map<String, String> snapshot = new LinkedHashMap<>();
-        snapshot.put(path, isNew ? null : (oldCode != null ? oldCode : ""));
-        undoManager.pushUndo(snapshot, (isNew ? "Script Created: " : "Script Updated: ") + fileName);
-
-        repo.getClassCodeMap().put(path, scriptCode);
-        repo.getClassFileMap().put(path, targetFile);
-        repo.getDisabledClasses().remove(path);
-
-        refreshCallback.run();
-
-        if (isNew) {
-            addPanelCallback.accept(path, fileName);
-        }
-
-        if (codeChangedCallback != null) {
-            codeChangedCallback.accept(path, scriptCode);
-        }
-
-        String logMsg = (isNew ? "Script Created: " : "Script Updated: ") + fileName +
-                " (" + targetDir.getAbsolutePath() + ")";
-        if (statusLogger != null) statusLogger.accept(logMsg);
-
-        return true;
+private boolean handleGdScriptPaste(String scriptCode, String knownFileName) {
+    if (!GodotDirectory.isSet()) {
+        JOptionPane.showMessageDialog(parent,
+                "No Godot project directory set.\nUse the directory button to set one.",
+                "No Directory", JOptionPane.WARNING_MESSAGE);
+        return false;
     }
 
-    // ------------------------------------------------------------------
+    String fileName;
+    if (knownFileName != null && !knownFileName.isBlank()) {
+        fileName = knownFileName.endsWith(".gd") ? knownFileName : knownFileName + ".gd";
+    } else {
+        String scriptName = parseScriptName(scriptCode);
+        if (scriptName == null) return false;
+        fileName = scriptName.endsWith(".gd") ? scriptName : scriptName + ".gd";
+    }
+
+    File targetDir  = GodotDirectory.get();
+    File targetFile = new File(targetDir, fileName);
+    boolean isNew   = !targetFile.exists();
+
+    if (!isNew && !SmartPasteSettings.isSkipOverwriteConfirm()) {
+        int choice = JOptionPane.showConfirmDialog(parent,
+                "Script: " + fileName + "\n\nFile already exists. Overwrite?",
+                "Overwrite Script",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) return false;
+    }
+
+    if (isNew && !SmartPasteSettings.isSkipCreateConfirm()) {
+        int choice = JOptionPane.showConfirmDialog(parent,
+                "Script: " + fileName + "\n\nTarget directory:\n" +
+                targetDir.getAbsolutePath() + "\n\nCreate new file?",
+                "Create Script",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) return false;
+    }
+
+    try {
+        Files.writeString(targetFile.toPath(), scriptCode);
+    } catch (IOException e) {
+        JOptionPane.showMessageDialog(parent,
+                "Failed to write script:\n" + e.getMessage(),
+                "Error", JOptionPane.ERROR_MESSAGE);
+        return false;
+    }
+
+    String path = targetFile.getAbsolutePath();
+    String oldCode = repo.getClassCodeMap().get(path);
+    Map<String, String> snapshot = new LinkedHashMap<>();
+    snapshot.put(path, isNew ? null : (oldCode != null ? oldCode : ""));
+    undoManager.pushUndo(snapshot, (isNew ? "Script Created: " : "Script Updated: ") + fileName);
+
+    repo.getClassCodeMap().put(path, scriptCode);
+    repo.getClassFileMap().put(path, targetFile);
+    repo.getDisabledClasses().remove(path);
+
+    refreshCallback.run();
+
+    if (isNew) {
+        addPanelCallback.accept(path, fileName);
+    }
+
+    if (codeChangedCallback != null) {
+        codeChangedCallback.accept(path, scriptCode);
+    }
+
+    String logMsg = (isNew ? "Script Created: " : "Script Updated: ") + fileName +
+            " (" + targetDir.getAbsolutePath() + ")";
+    if (statusLogger != null) statusLogger.accept(logMsg);
+
+    return true;
+}
+
+// ------------------------------------------------------------------
     // Patch handling (delegates to shared PatchApplier)
     // ------------------------------------------------------------------
 
@@ -250,52 +240,47 @@ public class GodotPasteHandler {
         return false;
     }
 
-    private boolean handleSmartPaste(String text) {
-        SmartPasteExtractor extractor = new SmartPasteExtractor(text);
-        List<SmartPasteExtractor.Entry> entries = extractor.extract(SmartPasteSettings.isAllowClasses());
+private boolean handleSmartPaste(String text) {
+    List<SmartPasteExtractor.Entry> patchEntries = new SmartPasteExtractor(text).extract(false);
+    List<GodotScriptExtractor.ScriptEntry> scriptEntries = GodotScriptExtractor.extract(text);
 
-        if (entries.isEmpty()) {
-            JOptionPane.showMessageDialog(parent,
-                    "Smart Paste: no patches or script blocks found.",
-                    "Nothing Found", JOptionPane.INFORMATION_MESSAGE);
-            return false;
+    List<String> logLines = new ArrayList<>();
+    Map<String, String> combinedSnapshot = new LinkedHashMap<>();
+    List<String> titles = new ArrayList<>();
+
+    for (SmartPasteExtractor.Entry entry : patchEntries) {
+        if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
+            handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles);
         }
-
-        List<String> logLines = new ArrayList<>();
-        Map<String, String> combinedSnapshot = new LinkedHashMap<>();
-        List<String> titles = new ArrayList<>();
-
-        for (SmartPasteExtractor.Entry entry : entries) {
-            if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
-                handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles);
-            } else if (entry instanceof SmartPasteExtractor.ClassEntry ce) {
-                boolean ok = handleGdScriptPaste(ce.text());
-                if (ok) logLines.add("Script pasted");
-            }
-        }
-
-        if (!combinedSnapshot.isEmpty()) {
-            String combinedTitle = titles.isEmpty() ? "Smart Paste"
-                    : titles.size() == 1 ? titles.get(0)
-                    : titles.get(0) + " (+" + (titles.size() - 1) + " more)";
-            undoManager.pushUndo(combinedSnapshot, combinedTitle);
-        }
-
-        if (!logLines.isEmpty() && statusLogger != null) {
-            String time = java.time.LocalTime.now()
-                    .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
-            String footer = "─".repeat(32);
-            String header = "── Smart Paste [" + time + "]: " + logLines.size() +
-                    " change" + (logLines.size() > 1 ? "s" : "") + " ──";
-            statusLogger.accept(footer);
-            for (int i = logLines.size() - 1; i >= 0; i--) statusLogger.accept(logLines.get(i));
-            statusLogger.accept(header);
-        }
-
-        return !combinedSnapshot.isEmpty();
     }
 
-    private void handleSmartPatchEntry(String patchText, List<String> logLines,
+    for (GodotScriptExtractor.ScriptEntry script : scriptEntries) {
+        boolean ok = handleGdScriptPaste(script.code(), script.fileName());
+        if (ok) logLines.add("Script pasted: " + script.fileName());
+    }
+
+    if (!combinedSnapshot.isEmpty()) {
+        String combinedTitle = titles.isEmpty() ? "Smart Paste"
+                : titles.size() == 1 ? titles.get(0)
+                : titles.get(0) + " (+" + (titles.size() - 1) + " more)";
+        undoManager.pushUndo(combinedSnapshot, combinedTitle);
+    }
+
+    if (!logLines.isEmpty() && statusLogger != null) {
+        String time = java.time.LocalTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+        String footer = "─".repeat(32);
+        String header = "── Smart Paste [" + time + "]: " + logLines.size() +
+                " change" + (logLines.size() > 1 ? "s" : "") + " ──";
+        statusLogger.accept(footer);
+        for (int i = logLines.size() - 1; i >= 0; i--) statusLogger.accept(logLines.get(i));
+        statusLogger.accept(header);
+    }
+
+    return !logLines.isEmpty();
+}
+
+private void handleSmartPatchEntry(String patchText, List<String> logLines,
             Map<String, String> combinedSnapshot, List<String> titles) {
         if (duplicateDetector.check(patchText) == PatchDuplicateDetector.Result.DUPLICATE) {
             String t = PatchParser.extractTitle(patchText);
@@ -404,4 +389,17 @@ public class GodotPasteHandler {
             }
         }
     }
+
+private boolean handleFileMarkerPaste(String text) {
+    List<GodotScriptExtractor.ScriptEntry> scripts = GodotScriptExtractor.extract(text);
+    if (scripts.isEmpty()) return false;
+    boolean anyChanged = false;
+    for (GodotScriptExtractor.ScriptEntry entry : scripts) {
+        if (handleGdScriptPaste(entry.code(), entry.fileName())) {
+            anyChanged = true;
+        }
+    }
+    return anyChanged;
+}
+
 }
