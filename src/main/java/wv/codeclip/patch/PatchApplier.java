@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class PatchApplier {
 
@@ -119,7 +120,26 @@ public class PatchApplier {
             }
         }
 
-        return new PatchResult(summary, allFailures, applied, undoSnapshot);
+        // Collect all changes that did not succeed
+        Set<String> appliedSet = new java.util.HashSet<>(applied);
+        // A change failed if its file had any failure, or its file wasn't written
+        Set<String> failedFileNames = new java.util.HashSet<>();
+        for (FailedChange fc : allFailures) {
+            failedFileNames.add(fc.fileName());
+        }
+        List<PatchChange> failedChanges = new ArrayList<>();
+        for (PatchChange change : changes) {
+            String path = resolveFilePath(change.fileName());
+            boolean fileApplied = path != null && appliedSet.contains(
+                repo.getClassFileMap().containsKey(path)
+                    ? repo.getClassFileMap().get(path).getName()
+                    : "");
+            if (!fileApplied || failedFileNames.contains(change.fileName())) {
+                failedChanges.add(change);
+            }
+        }
+
+        return new PatchResult(summary, allFailures, applied, undoSnapshot, failedChanges);
     }
 
     private String applyFindReplace(PatchChange.FindReplace fr, String code)
@@ -556,7 +576,8 @@ public class PatchApplier {
             List<String> successSummary,
             List<FailedChange> failures,
             List<String> appliedFiles,
-            Map<String, String> undoSnapshot) {
+            Map<String, String> undoSnapshot,
+            List<PatchChange> failedChanges) {
 
         public boolean hasFailures() {
             return !failures.isEmpty();

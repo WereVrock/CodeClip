@@ -1,18 +1,41 @@
+// ===== PatchErrorDialog.java =====
 package wv.codeclip.patch;
 
 import wv.codeclip.io.ClipboardService;
 import wv.codeclip.model.ClassRepository;
+import wv.codeclip.model.PatchChange;
 
 import javax.swing.*;
 import java.awt.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 public class PatchErrorDialog extends JDialog {
+
+    private final JFrame parent;  // Store parent frame
+    private PatchApplier.PatchResult patchResult;
+    private ClassRepository repo;
 
     public PatchErrorDialog(JFrame parent, String errorMessage,
                              Map<String, String> errorsByFile,
                              ClassRepository repo) {
         super(parent, "Patch Failed", true);
+        this.parent = parent;
+        this.repo = repo;
+        buildUI(errorMessage, errorsByFile, null);
+    }
+
+    // New constructor that takes a PatchResult
+    public PatchErrorDialog(JFrame parent, PatchApplier.PatchResult result, ClassRepository repo) {
+        super(parent, "Patch Failed", true);
+        this.parent = parent;
+        this.patchResult = result;
+        this.repo = repo;
+        buildUI(result.buildErrorReport(), result.errorsByFile(), result);
+    }
+
+    private void buildUI(String errorMessage, Map<String, String> errorsByFile, PatchApplier.PatchResult result) {
         setLayout(new BorderLayout(10, 10));
         getRootPane().setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
@@ -119,7 +142,7 @@ public class PatchErrorDialog extends JDialog {
         }
         add(centerPanel, BorderLayout.CENTER);
 
-        // --- Bottom: copy all classes, copy error report, close ---
+        // --- Bottom: copy all classes, copy both, copy error, close, and (if applicable) Copy Failed Patch ---
         JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
 
         if (hasClasses && errorsByFile.size() > 1) {
@@ -173,35 +196,106 @@ public class PatchErrorDialog extends JDialog {
 
         if (hasClasses) bottomPanel.add(copyBothBtn);
         bottomPanel.add(copyErrorBtn);
+
+        // ---------- ADD THE "Copy Failed/Skipped Patch" BUTTON if we have a PatchResult ----------
+        if (result != null && !result.failedChanges().isEmpty()) {
+            JButton copyFailedPatchBtn = new JButton("Copy Failed/Skipped Patch");
+            copyFailedPatchBtn.setToolTipText("Copies a reconstructable @@PATCH block containing only the changes that failed or were skipped (errors + file conflicts).");
+            copyFailedPatchBtn.addActionListener(e -> {
+                String patch = reconstructPatch(result.failedChanges(), errorMessage, errorsByFile);
+                clipboard.write(patch);
+                copyFailedPatchBtn.setText("Copied Failed/Skipped Patch!");
+                copyFailedPatchBtn.setForeground(new Color(30, 120, 30));
+            });
+            bottomPanel.add(copyFailedPatchBtn);
+        }
+
         bottomPanel.add(closeBtn);
         add(bottomPanel, BorderLayout.SOUTH);
 
         pack();
-        setLocationRelativeTo(parent);
+        setLocationRelativeTo(parent);  // now parent field is accessible
     }
 
-private String findClassCode(ClassRepository repo, String fileName) {
-    // Normalize the same way PatchApplier.resolveFilePath does
-    String bareName = fileName;
-    int lastSlash = fileName.lastIndexOf('/');
-    if (lastSlash < 0) lastSlash = fileName.lastIndexOf('\\');
-    if (lastSlash >= 0) {
-        bareName = fileName.substring(lastSlash + 1);
-    } else if (fileName.contains(".") && fileName.endsWith(".java")) {
-        String[] parts = fileName.split("\\.");
-        if (parts.length >= 2) {
-            bareName = parts[parts.length - 2] + ".java";
-        }
-    }
-    for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
-        if (entry.getValue().getName().equalsIgnoreCase(bareName)) {
-            return repo.getClassCodeMap().get(entry.getKey());
-        }
-    }
-    return null;
-}
+    // Enhanced reconstructPatch that marks each offending change with its error
+    private String reconstructPatch(List<PatchChange> changes, String errorReport, Map<String, String> errorsByFile) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("@@PATCH\n");
+        sb.append("@@TITLE: Retry failed/skipped patch\n");
+        sb.append("@@DESC: Auto-reconstructed from changes that failed or were skipped — correct and re-apply\n\n");
 
-public static void show(JFrame parent, String errorMessage) {
+        java.util.LinkedHashMap<String, java.util.List<PatchChange>> byFile = new java.util.LinkedHashMap<>();
+        for (PatchChange change : changes) {
+            byFile.computeIfAbsent(change.fileName(), k -> new ArrayList<>()).add(change);
+        }
+
+        for (Map.Entry<String, java.util.List<PatchChange>> entry : byFile.entrySet()) {
+            String fileName = entry.getKey();
+            sb.append("@@FILE: ").append(fileName).append("\n");
+
+            String fileError = errorsByFile != null ? errorsByFile.get(fileName) : null;
+
+            for (PatchChange change : entry.getValue()) {
+                if (fileError != null && !fileError.isEmpty()) {
+                    sb.append("// FAILED: ").append(fileError.replace("\n", " ")).append("\n");
+                } else {
+                    sb.append("// SKIPPED: file had other failures or was not written\n");
+                }
+
+                switch (change) {
+                    case PatchChange.FindReplace fr -> {
+                        sb.append("@@FIND:\n").append(fr.find()).append("\n");
+                        sb.append("@@REPLACE:\n").append(fr.replace()).append("\n");
+                    }
+                    case PatchChange.MethodReplace mr -> {
+                        sb.append("@@METHOD:\n");
+                        sb.append("@@REPLACE:\n").append(mr.replace()).append("\n");
+                    }
+                    case PatchChange.InsertMethod im -> {
+                        if (im.afterMethod() != null) {
+                            sb.append("@@AFTER_METHOD: ").append(im.afterMethod()).append("\n");
+                        }
+                        sb.append("@@INSERT_METHOD:\n").append(im.code()).append("\n");
+                    }
+                }
+                sb.append("\n");
+            }
+        }
+
+        sb.append("@@END\n\n");
+        sb.append("// === PATCH FAILURE REPORT ===\n");
+        for (String line : errorReport.split("\n")) {
+            sb.append("// ").append(line).append("\n");
+        }
+
+        return sb.toString();
+    }
+
+    private String findClassCode(ClassRepository repo, String fileName) {
+        String bareName = fileName;
+        int lastSlash = fileName.lastIndexOf('/');
+        if (lastSlash < 0) lastSlash = fileName.lastIndexOf('\\');
+        if (lastSlash >= 0) {
+            bareName = fileName.substring(lastSlash + 1);
+        } else if (fileName.contains(".") && fileName.endsWith(".java")) {
+            String[] parts = fileName.split("\\.");
+            if (parts.length >= 2) {
+                bareName = parts[parts.length - 2] + ".java";
+            }
+        }
+        for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+            if (entry.getValue().getName().equalsIgnoreCase(bareName)) {
+                return repo.getClassCodeMap().get(entry.getKey());
+            }
+        }
+        return null;
+    }
+
+    // ------------------------------------------------------------------
+    // Public static show methods
+    // ------------------------------------------------------------------
+
+    public static void show(JFrame parent, String errorMessage) {
         new PatchErrorDialog(parent, errorMessage, null, null).setVisible(true);
     }
 
@@ -211,7 +305,6 @@ public static void show(JFrame parent, String errorMessage) {
     }
 
     public static void show(JFrame parent, PatchApplier.PatchResult result, ClassRepository repo) {
-        new PatchErrorDialog(parent, result.buildErrorReport(), result.errorsByFile(), repo)
-                .setVisible(true);
+        new PatchErrorDialog(parent, result, repo).setVisible(true);
     }
 }

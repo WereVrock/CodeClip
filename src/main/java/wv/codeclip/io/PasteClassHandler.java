@@ -102,15 +102,15 @@ this.fileWriter = new ClassFileWriter(repo);
 // ------------------------------------------------------------------
 
 public void handlePasteFromClipboard() {
-    if (!pasting.compareAndSet(false, true)) {
-        // A paste is already in progress — ignore the duplicate invocation.
-        return;
-    }
-    try {
-        handlePasteFromClipboardInternal();
-    } finally {
-        pasting.set(false);
-    }
+if (!pasting.compareAndSet(false, true)) {
+// A paste is already in progress — ignore the duplicate invocation.
+return;
+}
+try {
+handlePasteFromClipboardInternal();
+} finally {
+pasting.set(false);
+}
 }
 
 private void handlePasteFromClipboardInternal() {
@@ -684,21 +684,22 @@ return text.replace("&", "&amp;")
 }
 
 private boolean looksLikePatch(String text) {
-    boolean hasFile = false;
-    boolean hasDirective = false;
-    for (String line : text.split("\n")) {
-        String trimmed = line.trim();
-        if (trimmed.startsWith("@@FILE:"))           hasFile = true;
-        if (trimmed.startsWith("@@METHOD:")
-         || trimmed.startsWith("@@FIND:")
-         || trimmed.startsWith("@@AFTER_METHOD:")
-         || trimmed.startsWith("@@INSERT_METHOD:")) hasDirective = true;
-        if (hasFile && hasDirective) return true;
-    }
-    return false;
+boolean hasFile = false;
+boolean hasDirective = false;
+for (String line : text.split("\n")) {
+String trimmed = line.trim();
+if (trimmed.startsWith("@@FILE:"))           hasFile = true;
+if (trimmed.startsWith("@@METHOD:")
+|| trimmed.startsWith("@@FIND:")
+|| trimmed.startsWith("@@AFTER_METHOD:")
+|| trimmed.startsWith("@@INSERT_METHOD:")) hasDirective = true;
+if (hasFile && hasDirective) return true;
+}
+return false;
 }
 
 }
+
 
 
 
