@@ -53,11 +53,26 @@ text = text.replaceAll("(?m)^!@@", "//escaped@@");
 String patchMarker = PatchParser.PATCH_MARKER();
 String endMarker   = PatchParser.END_MARKER();
 
-// Collect @@PATCH block positions
+// Collect @@PATCH block positions (with or without leading @@PATCH line)
 int searchFrom = 0;
 while (true) {
+// Try to find an explicit @@PATCH marker first
 int patchIdx = text.indexOf(patchMarker, searchFrom);
-if (patchIdx < 0) break;
+
+// Also look for @@PATCH-less blocks: @@TITLE:, @@DESC:, or @@FILE: followed by @@END
+int loosePatchIdx = findLoosePatchBlock(text, searchFrom, patchMarker);
+
+// Pick whichever comes first
+if (patchIdx < 0 && loosePatchIdx < 0) break;
+boolean useLoose = (patchIdx < 0) || (loosePatchIdx >= 0 && loosePatchIdx < patchIdx);
+
+if (useLoose) {
+int endIdx = text.indexOf(endMarker, loosePatchIdx);
+if (endIdx < 0) break;
+int blockEnd = endIdx + endMarker.length();
+patchPositions.add(new int[]{loosePatchIdx, blockEnd});
+searchFrom = blockEnd;
+} else {
 int lineStart = text.lastIndexOf('\n', patchIdx);
 String before = text.substring(lineStart + 1, patchIdx);
 if (!before.isBlank()) { searchFrom = patchIdx + 1; continue; }
@@ -69,6 +84,7 @@ if (!endBefore.isBlank()) { searchFrom = patchIdx + 1; continue; }
 int blockEnd = endIdx + endMarker.length();
 patchPositions.add(new int[]{patchIdx, blockEnd});
 searchFrom = blockEnd;
+}
 }
 
 // Collect ```java fenced class block positions
@@ -129,4 +145,28 @@ entries.add(new ClassEntry(inner));
 return entries;
 }
 
+private int findLoosePatchBlock(String text, int searchFrom, String patchMarker) {
+    String[] lines = text.substring(searchFrom).split("\n", -1);
+    int offset = searchFrom;
+    for (int i = 0; i < lines.length; i++) {
+        String trimmed = lines[i].trim();
+        if (trimmed.equals(patchMarker)) {
+            offset += lines[i].length() + 1;
+            continue;
+        }
+        if (trimmed.startsWith("@@TITLE:") || trimmed.startsWith("@@DESC:") || trimmed.startsWith("@@FILE:")) {
+            int remaining = text.indexOf("@@END", offset);
+            if (remaining >= 0) {
+                int nextPatch = text.indexOf(patchMarker, offset);
+                if (nextPatch < 0 || nextPatch > remaining) {
+                    return offset;
+                }
+            }
+        }
+        offset += lines[i].length() + 1;
+    }
+    return -1;
 }
+
+}
+

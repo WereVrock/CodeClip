@@ -15,6 +15,10 @@ public static String testInserted() {
     return "inserted via test patch";
 }
 
+public static String testInserted() {
+    return "inserted via test patch";
+}
+
 public static String inserted() {
     return "inserted after goodbye";
 }
