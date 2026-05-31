@@ -142,86 +142,73 @@ public class PatchApplier {
         return new PatchResult(summary, allFailures, applied, undoSnapshot, failedChanges);
     }
 
-    private String applyFindReplace(PatchChange.FindReplace fr, String code)
-            throws PatchException {
-        String find = fr.find();
+private String applyFindReplace(PatchChange.FindReplace fr, String code)
+        throws PatchException {
+    String find = fr.find();
 
-// Step 1: exact match
-        int count = countOccurrences(code, find);
-        if (count == 1) {
-            return code.replace(find, fr.replace());
-        }
-        if (count > 1) {
-            throw ambiguousException(fr.fileName(), count, find, "exact");
-        }
+    // Step 1: exact match
+    int count = countOccurrences(code, find);
+    if (count == 1) return code.replace(find, fr.replace());
+    if (count > 1) throw ambiguousException(fr.fileName(), count, find, "exact");
 
-// Step 2: normalize line endings
-        String normCode = normalize(code);
-        String normFind = normalize(find);
-        count = countOccurrences(normCode, normFind);
-        if (count == 1) {
-            return normCode.replace(normFind, normalize(fr.replace()));
-        }
-        if (count > 1) {
-            throw ambiguousException(fr.fileName(), count, find, "line-ending normalization");
-        }
+    // Step 2: normalize line endings
+    String normCode = normalize(code);
+    String normFind = normalize(find);
+    count = countOccurrences(normCode, normFind);
+    if (count == 1) return normCode.replace(normFind, normalize(fr.replace()));
+    if (count > 1) throw ambiguousException(fr.fileName(), count, find, "line-ending normalization");
 
-// Step 3: normalize + trim trailing whitespace per line
-        String trimCode = trimLines(normCode);
-        String trimFind = trimLines(normFind);
-        count = countOccurrences(trimCode, trimFind);
-        if (count == 1) {
-            return trimCode.replace(trimFind, trimLines(normalize(fr.replace())));
-        }
-        if (count > 1) {
-            throw ambiguousException(fr.fileName(), count, find, "trailing-whitespace normalization");
-        }
+    // Step 3: normalize + trim trailing whitespace per line
+    String trimCode = trimLines(normCode);
+    String trimFind = trimLines(normFind);
+    count = countOccurrences(trimCode, trimFind);
+    if (count == 1) return trimCode.replace(trimFind, trimLines(normalize(fr.replace())));
+    if (count > 1) throw ambiguousException(fr.fileName(), count, find, "trailing-whitespace normalization");
 
-// Step 4: normalize tabs to spaces
-        String tabCode = normalizeTabs(trimCode);
-        String tabFind = normalizeTabs(trimFind);
-        count = countOccurrences(tabCode, tabFind);
-        if (count == 1) {
-            return tabCode.replace(tabFind, normalizeTabs(normalize(fr.replace())));
-        }
-        if (count > 1) {
-            throw ambiguousException(fr.fileName(), count, find, "tab normalization");
-        }
+    // Step 4: normalize tabs to spaces
+    String tabCode = normalizeTabs(trimCode);
+    String tabFind = normalizeTabs(trimFind);
+    count = countOccurrences(tabCode, tabFind);
+    if (count == 1) return tabCode.replace(tabFind, normalizeTabs(normalize(fr.replace())));
+    if (count > 1) throw ambiguousException(fr.fileName(), count, find, "tab normalization");
 
-// Step 5: collapse runs of blank lines to a single blank line
-        String blankCode = collapseBlankLines(tabCode);
-        String blankFind = collapseBlankLines(tabFind);
-        count = countOccurrences(blankCode, blankFind);
-        if (count == 1) {
-            return blankCode.replace(blankFind, collapseBlankLines(normalizeTabs(normalize(fr.replace()))));
-        }
-        if (count > 1) {
-            throw ambiguousException(fr.fileName(), count, find, "blank-line normalization");
-        }
+    // Step 5: collapse runs of blank lines to a single blank line
+    String blankCode = collapseBlankLines(tabCode);
+    String blankFind = collapseBlankLines(tabFind);
+    count = countOccurrences(blankCode, blankFind);
+    if (count == 1) return blankCode.replace(blankFind, collapseBlankLines(normalizeTabs(normalize(fr.replace()))));
+    if (count > 1) throw ambiguousException(fr.fileName(), count, find, "blank-line normalization");
 
-// Step 6: strip all indentation (fuzzy) — last resort
-        String fuzzyCode = stripIndent(normCode);
-        String fuzzyFind = stripIndent(normFind);
-        count = countOccurrences(fuzzyCode, fuzzyFind);
-        if (count == 1) {
-            return fuzzyCode.replace(fuzzyFind, stripIndent(normalize(fr.replace())));
-        }
-        if (count > 1) {
-            throw new PatchException(
-                    "@@FIND block is ambiguous in " + fr.fileName()
-                    + " — matched " + count + " locations even after indent-stripping."
-                    + " Add more surrounding lines to make it unique.\n\nSearched for:\n" + find,
-                    fr.fileName());
-        }
+    // Step 6: strip all indentation (fuzzy) — last resort before whitespace collapse
+    String dedentCode = stripIndent(normCode);
+    String dedentFind = stripIndent(normFind);
+    count = countOccurrences(dedentCode, dedentFind);
+    if (count == 1) return dedentCode.replace(dedentFind, stripIndent(normalize(fr.replace())));
+    if (count > 1) throw ambiguousException(fr.fileName(), count, find, "indent-stripping");
 
-        throw new PatchException(
-                "@@FIND block not found in " + fr.fileName()
-                + " (tried exact, line-ending, trailing-whitespace, tab, blank-line, and indent-stripped matching).\n\n"
-                + "Searched for:\n" + find,
-                fr.fileName());
-    }
+    // Step 7: collapse all runs of whitespace (including indentation) to a single space
+    String collapseCode = collapseWhitespace(normCode);
+    String collapseFind = collapseWhitespace(normFind);
+    count = countOccurrences(collapseCode, collapseFind);
+    if (count == 1) return collapseCode.replace(collapseFind, collapseWhitespace(normalize(fr.replace())));
+    if (count > 1) throw ambiguousException(fr.fileName(), count, find, "whitespace collapsing");
 
-    private PatchException ambiguousException(String fileName, int count, String find, String stage) {
+    // Step 8: remove all whitespace entirely
+    String noSpaceCode = removeWhitespace(normCode);
+    String noSpaceFind = removeWhitespace(normFind);
+    count = countOccurrences(noSpaceCode, noSpaceFind);
+    if (count == 1) return noSpaceCode.replace(noSpaceFind, removeWhitespace(normalize(fr.replace())));
+    if (count > 1) throw ambiguousException(fr.fileName(), count, find, "whitespace removal");
+
+    throw new PatchException(
+            "@@FIND block not found in " + fr.fileName()
+            + " (tried exact, line-ending, trailing-whitespace, tab, blank-line, indent-stripped,"
+            + " whitespace-collapsed, and whitespace-removed matching).\n\n"
+            + "Searched for:\n" + find,
+            fr.fileName());
+}
+
+private PatchException ambiguousException(String fileName, int count, String find, String stage) {
         return new PatchException(
                 "@@FIND block matches " + count + " locations in " + fileName
                 + " at stage: " + stage + " — must match exactly once.\n\nSearched for:\n" + find,
@@ -273,7 +260,16 @@ public class PatchApplier {
         return sb.toString();
     }
 
-    private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
+private String collapseWhitespace(String code) {
+    // Replace every run of whitespace characters (spaces, tabs, newlines) with a single space
+    return code.replaceAll("\\s+", " ");
+}
+
+private String removeWhitespace(String code) {
+    return code.replaceAll("\\s+", "");
+}
+
+private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
             throws PatchException {
         List<int[]> matches = findMethodExtents(code, mr.methodName());
 

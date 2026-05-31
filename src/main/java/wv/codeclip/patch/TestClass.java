@@ -1,33 +1,35 @@
-// ===== TestClass.java =====
 package wv.codeclip.patch;
 
 public class TestClass {
 
     public static String hello() {
-        return "hello - patch AND class paste now work together!";
+        return "hello - base version for fuzzy tests";
     }
 
     public static String goodbye() {
-        return "goodbye - method replace works";
+        return "goodbye - base version";
     }
 
-    public static String testInserted() {
-        return "inserted via test patch";
+    public static String fuzzyOne() {
+        // this method has trailing spaces in its comment    
+        return "fuzzyOne original";
     }
 
-    public static String inserted() {
-        return "inserted after goodbye";
+    public static String fuzzyTwo() {
+
+
+        return "fuzzyTwo original";
     }
 
-    public static String insertedAtEnd() {
-        return "inserted at end of class";
+    public static String fuzzyThree() {
+		return "fuzzyThree original";	// tabs used here
     }
 
-    public static String wholeClassTest() {
-        return "Whole class paste is working again!";
+    public static String fuzzyFour() {
+        return "fuzzyFour original";
     }
 
-    public static String chatterTest() {
-        return "This method was added by the whole-class replacement.";
+    public static String fuzzyFive() {
+        return "fuzzyFive original";
     }
 }
