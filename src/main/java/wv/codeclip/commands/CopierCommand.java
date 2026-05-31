@@ -32,11 +32,13 @@ public boolean handle(String text) {
 
         StringBuilder sb = new StringBuilder();
         List<String> copied = new ArrayList<>();
+        List<String> notFound = new ArrayList<>();
 
-        for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
-            if (entry.getValue() == null) continue;
-            String name = entry.getValue().getName().toLowerCase();
-            for (String target : targets) {
+        for (String target : targets) {
+            boolean found = false;
+            for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+                if (entry.getValue() == null) continue;
+                String name = entry.getValue().getName().toLowerCase();
                 String[] exts = wv.codeclip.modecontext.ModeContext.getMode().getExtensions();
                 boolean matches = name.equals(target);
                 if (!matches) {
@@ -51,9 +53,13 @@ public boolean handle(String text) {
                         sb.append(prefix).append(" ===== ").append(entry.getValue().getName()).append(" =====\n");
                         sb.append(code).append("\n\n");
                         copied.add(entry.getValue().getName());
+                        found = true;
                     }
                     break;
                 }
+            }
+            if (!found) {
+                notFound.add(target);
             }
         }
 
@@ -61,6 +67,12 @@ public boolean handle(String text) {
             new ClipboardService().write(sb.toString().stripTrailing());
             if (statusLogger != null) {
                 statusLogger.accept("@@Copy: " + String.join(", ", copied));
+            }
+        }
+
+        for (String missing : notFound) {
+            if (statusLogger != null) {
+                statusLogger.accept("@@Copy ERROR: \"" + missing + "\" not found in loaded classes");
             }
         }
 

@@ -81,6 +81,7 @@ private Runnable syncUndoRedo;
 // See ModeColors.getEnabledBackground() and getDisabledBackground().
 private static final Color LOG_CLASS_COLOR = new Color(30, 120, 220);
 private static final Color UNSYNCED_COLOR  = new Color(30, 100, 210);
+private static final Color LOG_ERROR_COLOR = new Color(200, 30, 30);
 
 private static final String BUILD_INFO_FILE = "buildinfo.properties";
 private static final int ICON_SIZE = 64;
@@ -581,6 +582,16 @@ internalUpdate = false;
 private void appendLogLine(StyledDocument doc, String line,
 Style base, Style highlight)
 throws BadLocationException {
+
+if (line.startsWith("@@Copy ERROR:")) {
+SimpleAttributeSet err = new SimpleAttributeSet();
+StyleConstants.setFontFamily(err, Font.MONOSPACED);
+StyleConstants.setFontSize(err, 12);
+StyleConstants.setBold(err, true);
+StyleConstants.setForeground(err, LOG_ERROR_COLOR);
+doc.insertString(doc.getLength(), line, err);
+return;
+}
 
 if (line.startsWith("──") && !line.contains("Smart Paste") && !line.contains("Patch [")) {
 SimpleAttributeSet title = new SimpleAttributeSet();
@@ -1591,6 +1602,8 @@ appendTempLog("Godot directory auto-set: " + best.getAbsolutePath());
 }
 
 }
+
+
 
 
 

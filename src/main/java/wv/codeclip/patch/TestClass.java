@@ -4,11 +4,15 @@ package wv.codeclip.patch;
 public class TestClass {
 
 public static String hello() {
-    return "hello - smart paste works";
+    return "hello - patch applied successfully";
 }
 
 public static String goodbye() {
     return "goodbye - method replace works";
+}
+
+public static String testInserted() {
+    return "inserted via test patch";
 }
 
 public static String inserted() {

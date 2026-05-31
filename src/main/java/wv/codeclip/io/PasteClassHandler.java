@@ -42,6 +42,7 @@ private final ClassFileWriter fileWriter;
 private final BiConsumer<String, String> codeChangedCallback;
 private final Supplier<Boolean> multiPatchMode;
 private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
+private final java.util.concurrent.atomic.AtomicBoolean pasting = new java.util.concurrent.atomic.AtomicBoolean(false);
 private final wv.codeclip.patch.PatchUndoManager undoManager;
 private final wv.codeclip.commands.CopierCommand copierCommand;
 private java.util.function.Consumer<Boolean> postPasteCallback;
@@ -101,53 +102,65 @@ this.fileWriter = new ClassFileWriter(repo);
 // ------------------------------------------------------------------
 
 public void handlePasteFromClipboard() {
-String text = clipboard.read();
-if (text == null || text.isBlank()) {
-JOptionPane.showMessageDialog(
-parent,
-"Clipboard is empty or does not contain text.",
-"Error",
-JOptionPane.ERROR_MESSAGE
-);
-return;
+    if (!pasting.compareAndSet(false, true)) {
+        // A paste is already in progress — ignore the duplicate invocation.
+        return;
+    }
+    try {
+        handlePasteFromClipboardInternal();
+    } finally {
+        pasting.set(false);
+    }
 }
 
-if (text.trim().startsWith("@@Enable")) {
-boolean changed = handleEnable(text.trim());
-firePostPaste(changed);
-return;
-}
+private void handlePasteFromClipboardInternal() {
+    String text = clipboard.read();
+    if (text == null || text.isBlank()) {
+        JOptionPane.showMessageDialog(
+            parent,
+            "Clipboard is empty or does not contain text.",
+            "Error",
+            JOptionPane.ERROR_MESSAGE
+        );
+        return;
+    }
 
-if (text.trim().startsWith("@@Copy")) {
-copierCommand.handle(text.trim());
-return;
-}
+    if (text.trim().startsWith("@@Enable")) {
+        boolean changed = handleEnable(text.trim());
+        firePostPaste(changed);
+        return;
+    }
 
-if (Boolean.TRUE.equals(multiPatchMode.get()) &&
-(PatchParser.containsPatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
-boolean changed = handleSmartPaste(text);
-firePostPaste(changed);
-return;
-}
+    if (text.trim().startsWith("@@Copy")) {
+        copierCommand.handle(text.trim());
+        return;
+    }
 
-if (PatchParser.containsPatch(text)) {
-boolean changed = handlePatch(text);
-firePostPaste(changed);
-return;
-}
+    if (Boolean.TRUE.equals(multiPatchMode.get()) &&
+        (PatchParser.containsPatch(text) || looksLikePatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
+        boolean changed = handleSmartPaste(text);
+        firePostPaste(changed);
+        return;
+    }
 
-if (!looksLikeJavaSource(text)) {
-JOptionPane.showMessageDialog(
-parent,
-"Clipboard does not appear to contain Java source code.",
-"Invalid Input",
-JOptionPane.ERROR_MESSAGE
-);
-return;
-}
+    if (PatchParser.containsPatch(text) || looksLikePatch(text)) {
+        boolean changed = handlePatch(text);
+        firePostPaste(changed);
+        return;
+    }
 
-handlePaste(text);
-firePostPaste(true);
+    if (!looksLikeJavaSource(text)) {
+        JOptionPane.showMessageDialog(
+            parent,
+            "Clipboard does not appear to contain Java source code.",
+            "Invalid Input",
+            JOptionPane.ERROR_MESSAGE
+        );
+        return;
+    }
+
+    handlePaste(text);
+    firePostPaste(true);
 }
 
 // ------------------------------------------------------------------
@@ -669,6 +682,22 @@ return text.replace("&", "&amp;")
 .replace("<", "&lt;")
 .replace(">", "&gt;");
 }
+
+private boolean looksLikePatch(String text) {
+    boolean hasFile = false;
+    boolean hasDirective = false;
+    for (String line : text.split("\n")) {
+        String trimmed = line.trim();
+        if (trimmed.startsWith("@@FILE:"))           hasFile = true;
+        if (trimmed.startsWith("@@METHOD:")
+         || trimmed.startsWith("@@FIND:")
+         || trimmed.startsWith("@@AFTER_METHOD:")
+         || trimmed.startsWith("@@INSERT_METHOD:")) hasDirective = true;
+        if (hasFile && hasDirective) return true;
+    }
+    return false;
+}
+
 }
 
 

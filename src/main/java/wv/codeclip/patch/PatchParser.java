@@ -83,11 +83,28 @@ String[] lines = text.lines().toArray(String[]::new);
 
 int i = 0;
 
-while (i < lines.length && (lines[i].isBlank() || lines[i].trim().startsWith("@@TITLE:") || lines[i].trim().startsWith("@@DESC:"))) i++;
-if (i >= lines.length || !lines[i].trim().equals(MARKER_PATCH)) {
-throw new IllegalArgumentException("Patch block must start with @@PATCH");
-}
+// Accept @@PATCH even if it was omitted — if we see @@FILE: later we proceed.
+// Skip leading blanks, @@TITLE:, @@DESC: lines before (optional) @@PATCH
+while (i < lines.length && (lines[i].isBlank()
+|| lines[i].trim().startsWith("@@TITLE:")
+|| lines[i].trim().startsWith("@@DESC:"))) i++;
+
+if (i < lines.length && lines[i].trim().equals(MARKER_PATCH)) {
+// Normal case: @@PATCH present
 i++;
+} else {
+// @@PATCH was omitted but caller has already verified the block looks like a patch.
+// Check that there is at least one @@FILE: somewhere so we don't silently
+// swallow garbage.
+boolean hasFile = false;
+for (int j = i; j < lines.length; j++) {
+if (lines[j].trim().startsWith(MARKER_FILE)) { hasFile = true; break; }
+}
+if (!hasFile) {
+throw new IllegalArgumentException("Patch block must start with @@PATCH (or contain at least one @@FILE: directive)");
+}
+// Fine — proceed without consuming a @@PATCH line
+}
 
 while (i < lines.length) {
 String trimmed = lines[i].trim();
@@ -351,6 +368,7 @@ return null;
 
 private record ParsedBlock(String text, int nextIndex, boolean hitEndOfInput) {}
 }
+
 
 
 
