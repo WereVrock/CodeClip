@@ -145,59 +145,60 @@ public class PatchApplier {
 private String applyFindReplace(PatchChange.FindReplace fr, String code)
         throws PatchException {
     String find = fr.find();
+    String replace = normalize(fr.replace());
 
     // Step 1: exact match
     int count = countOccurrences(code, find);
-    if (count == 1) return code.replace(find, fr.replace());
+    if (count == 1) return code.replace(find, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "exact");
 
     // Step 2: normalize line endings
     String normCode = normalize(code);
     String normFind = normalize(find);
     count = countOccurrences(normCode, normFind);
-    if (count == 1) return normCode.replace(normFind, normalize(fr.replace()));
+    if (count == 1) return spliceInto(normCode, normFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "line-ending normalization");
 
     // Step 3: normalize + trim trailing whitespace per line
     String trimCode = trimLines(normCode);
     String trimFind = trimLines(normFind);
     count = countOccurrences(trimCode, trimFind);
-    if (count == 1) return trimCode.replace(trimFind, trimLines(normalize(fr.replace())));
+    if (count == 1) return spliceInto(normCode, trimCode, trimFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "trailing-whitespace normalization");
 
     // Step 4: normalize tabs to spaces
     String tabCode = normalizeTabs(trimCode);
     String tabFind = normalizeTabs(trimFind);
     count = countOccurrences(tabCode, tabFind);
-    if (count == 1) return tabCode.replace(tabFind, normalizeTabs(normalize(fr.replace())));
+    if (count == 1) return spliceInto(normCode, tabCode, tabFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "tab normalization");
 
     // Step 5: collapse runs of blank lines to a single blank line
     String blankCode = collapseBlankLines(tabCode);
     String blankFind = collapseBlankLines(tabFind);
     count = countOccurrences(blankCode, blankFind);
-    if (count == 1) return blankCode.replace(blankFind, collapseBlankLines(normalizeTabs(normalize(fr.replace()))));
+    if (count == 1) return spliceInto(normCode, blankCode, blankFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "blank-line normalization");
 
-    // Step 6: strip all indentation (fuzzy) — last resort before whitespace collapse
+    // Step 6: strip all indentation (fuzzy)
     String dedentCode = stripIndent(normCode);
     String dedentFind = stripIndent(normFind);
     count = countOccurrences(dedentCode, dedentFind);
-    if (count == 1) return dedentCode.replace(dedentFind, stripIndent(normalize(fr.replace())));
+    if (count == 1) return spliceInto(normCode, dedentCode, dedentFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "indent-stripping");
 
-    // Step 7: collapse all runs of whitespace (including indentation) to a single space
+    // Step 7: collapse all runs of whitespace to a single space
     String collapseCode = collapseWhitespace(normCode);
     String collapseFind = collapseWhitespace(normFind);
     count = countOccurrences(collapseCode, collapseFind);
-    if (count == 1) return collapseCode.replace(collapseFind, collapseWhitespace(normalize(fr.replace())));
+    if (count == 1) return spliceInto(normCode, collapseCode, collapseFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "whitespace collapsing");
 
     // Step 8: remove all whitespace entirely
     String noSpaceCode = removeWhitespace(normCode);
     String noSpaceFind = removeWhitespace(normFind);
     count = countOccurrences(noSpaceCode, noSpaceFind);
-    if (count == 1) return noSpaceCode.replace(noSpaceFind, removeWhitespace(normalize(fr.replace())));
+    if (count == 1) return spliceInto(normCode, noSpaceCode, noSpaceFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "whitespace removal");
 
     throw new PatchException(
@@ -260,14 +261,66 @@ private PatchException ambiguousException(String fileName, int count, String fin
         return sb.toString();
     }
 
+/**
+ * Finds where normalizedFind sits in normalizedCode, maps that span back to
+ * the same character positions in originalCode, and splices replacement in.
+ * Falls back to a direct splice in normalizedCode if mapping fails.
+ */
+private String spliceInto(String originalCode, String normalizedCode,
+                           String normalizedFind, String replacement) {
+    int normStart = normalizedCode.indexOf(normalizedFind);
+    if (normStart < 0) return normalizedCode; // should not happen
+
+    // Map normalised offset back to original by counting non-normalised chars.
+    // This works because trimLines/normalizeTabs/collapseBlankLines are all
+    // character-count-preserving or only shrink runs — we walk both strings
+    // in parallel to find the matching original span.
+    int origStart = mapOffset(originalCode, normalizedCode, normStart);
+    int origEnd   = mapOffset(originalCode, normalizedCode, normStart + normalizedFind.length());
+
+    if (origStart < 0 || origEnd < 0 || origStart > origEnd) {
+        // Fallback: splice into the normalised code
+        return normalizedCode.substring(0, normStart) + replacement
+                + normalizedCode.substring(normStart + normalizedFind.length());
+    }
+
+    return originalCode.substring(0, origStart) + replacement + originalCode.substring(origEnd);
+}
+
+/** Overload for when originalCode == normalizedCode (steps 1-2). */
+private String spliceInto(String code, String find, String replacement) {
+    int idx = code.indexOf(find);
+    if (idx < 0) return code;
+    return code.substring(0, idx) + replacement + code.substring(idx + find.length());
+}
+
+/**
+ * Maps a character offset in a normalised string back to the corresponding
+ * offset in the original string by walking both in parallel.
+ * Returns -1 if the strings diverge unexpectedly.
+ */
+private int mapOffset(String original, String normalized, int normOffset) {
+    int o = 0, n = 0;
+    while (n < normOffset && o < original.length()) {
+        char oc = original.charAt(o);
+        if (n < normalized.length() && normalized.charAt(n) == oc) {
+            o++; n++;
+        } else {
+            // original has a character that was removed/collapsed in normalization — skip it
+            o++;
+        }
+    }
+    return (n == normOffset) ? o : -1;
+}
+
 private String collapseWhitespace(String code) {
-    // Replace every run of whitespace characters (spaces, tabs, newlines) with a single space
     return code.replaceAll("\\s+", " ");
 }
 
 private String removeWhitespace(String code) {
     return code.replaceAll("\\s+", "");
 }
+
 
 private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
             throws PatchException {
