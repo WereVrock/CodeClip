@@ -248,7 +248,11 @@ public class PatchErrorDialog extends JDialog {
                         sb.append("@@REPLACE:\n").append(fr.replace()).append("\n");
                     }
                     case PatchChange.MethodReplace mr -> {
-                        sb.append("@@METHOD:\n");
+                        sb.append("@@METHOD: ").append(mr.methodName());
+                        if (mr.paramTypes() != null) {
+                            sb.append("(").append(mr.paramTypes()).append(")");
+                        }
+                        sb.append("\n");
                         sb.append("@@REPLACE:\n").append(mr.replace()).append("\n");
                     }
                     case PatchChange.InsertMethod im -> {

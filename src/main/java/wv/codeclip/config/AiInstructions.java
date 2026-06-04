@@ -7,12 +7,12 @@ public final class AiInstructions {
         ================================================================
         CODECLIP PATCH INSTRUCTIONS
         ================================================================
-        When making surgical changes to existing code, produce a @@PATCH block. This should be in a code block.
-        This is the preferred method for targeted changes. As an
-        alternative, you can send the entire updated class as plain code. All the patching should be in a single block unless it is necessary
-        to do otherwise. Use method replacement if you are gonna change more than half of it.
+        When making surgical changes to existing code, produce a @@PATCH block inside a code block.
+        This is the preferred method for targeted changes. As an alternative, send the entire
+        updated class as plain code. All patching should be in a single block unless strictly necessary.
+        Use method replacement if changing more than half a method.
 
-        Prefer method replacement over exact code replacement unless you are doing small changes.
+        Prefer method replacement over exact code replacement unless making small changes.
 
         ----------------------------------------------------------------
         PATCH FORMAT
@@ -36,6 +36,11 @@ public final class AiInstructions {
         <another method if needed>
 
         @@FILE: AnotherFile.java
+        @@METHOD: overloadedMethod(String, int)
+        @@REPLACE:
+        <entire new method including signature and braces>
+
+        @@FILE: AnotherFile.java
         @@AFTER_METHOD: existingMethodName
         @@INSERT_METHOD:
         <entire new method including signature and braces>
@@ -52,7 +57,6 @@ public final class AiInstructions {
 
         @@TITLE: (optional)
           A short human-readable label for this patch.
-          Appears as a heading in the paste log.
           Place immediately after @@PATCH, before any @@FILE:.
 
         @@DESC: (optional)
@@ -72,17 +76,22 @@ public final class AiInstructions {
 
         @@METHOD: / @@REPLACE:
           Use to replace one or more entire methods.
-          Always write @@METHOD: with no name — the method name is
-          parsed automatically from each method signature in @@REPLACE.
-          Multiple methods can be replaced in a single @@METHOD: block
-          by placing them one after another in @@REPLACE.
-          NEVER put a name after @@METHOD: unless the method is
-          overloaded — in that case the explicit name selects the
-          correct overload, and only that one method can be in the block.
-          @@REPLACE must contain complete methods including
-          signatures, opening braces, bodies, and closing braces.
-          @@METHOD: can only replace existing methods, not add new ones.
-          To add a new method, use @@INSERT_METHOD: instead.
+          Write @@METHOD: with no name when the method name is unique in the file —
+          the name is parsed automatically from the signature in @@REPLACE.
+          Multiple methods can be replaced in a single @@METHOD: block by placing
+          them one after another in @@REPLACE.
+
+          OVERLOADED METHODS: If a method name appears more than once in the file
+          (different parameter lists), you MUST specify the parameter types:
+            @@METHOD: methodName(Type1, Type2)
+          Only simple type names are needed — no generics, no variable names, no packages.
+          Examples:
+            @@METHOD: process(String, int)
+            @@METHOD: handle(List, boolean)
+          Only one method per overloaded @@METHOD: block.
+          If you receive an ambiguity error, it will list the exact signatures to use.
+
+          @@METHOD: can only replace existing methods. To add a new method use @@INSERT_METHOD:.
 
         @@AFTER_METHOD: / @@INSERT_METHOD:
           Use to add a new method after an existing one.
@@ -92,9 +101,8 @@ public final class AiInstructions {
           opening brace, body, and closing brace.
 
         @@INSERT_METHOD: (standalone)
-          Use to add a new method at the end of the class.
-          No @@AFTER_METHOD: needed — the method is inserted just before
-          the final closing brace of the class.
+          Inserts a new method just before the final closing brace of the class.
+          No @@AFTER_METHOD: needed.
 
         ----------------------------------------------------------------
         RULES
@@ -111,8 +119,7 @@ public final class AiInstructions {
         WHOLE CLASS FORMAT
         ----------------------------------------------------------------
 
-        When sending a complete class (new or updated), wrap it in a
-        java code fence:
+        When sending a complete class (new or updated), wrap it in a java code fence:
 
 ```java
         package com.example;
@@ -121,9 +128,8 @@ public final class AiInstructions {
         }
 ```
 
-        Use this when sending full class replacements alongside patches
-        in the same message. Smart Paste will extract and apply them
-        in document order together with any @@PATCH blocks.
+        Use this when sending full class replacements alongside patches in the same message.
+        Smart Paste extracts and applies them in document order together with any @@PATCH blocks.
         ================================================================
         """;
 }

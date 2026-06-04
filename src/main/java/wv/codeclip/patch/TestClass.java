@@ -1,12 +1,20 @@
+// ===== TestClass.java =====
 package wv.codeclip.patch;
 
 public class TestClass {
 
+    // ---- overloaded: hello() ----
     public static String hello() {
         return "hello - base version for fuzzy tests";
     }
 
-    public static String goodbye() {
+    // ---- overloaded: hello(String) ----
+
+public static String hello(String name) {
+        return "Hello " + name + "! (patched with parameter type)";
+    }
+
+public static String goodbye() {
         return "goodbye - base version";
     }
 

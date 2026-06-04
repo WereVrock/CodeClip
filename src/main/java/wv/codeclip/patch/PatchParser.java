@@ -197,11 +197,13 @@ changes.add(new PatchChange.InsertMethod(currentFile, null, code.text()));
 continue;
 }
 
-if (line.equals(MARKER_METHOD) || line.startsWith(MARKER_METHOD)) {
-requireFile(currentFile, i);
-String explicitMethodName = line.equals(MARKER_METHOD)
-? ""
-: line.substring(MARKER_METHOD.length()).trim();
+        if (line.equals(MARKER_METHOD) || line.startsWith(MARKER_METHOD)) {
+            requireFile(currentFile, i);
+            String rawMethodSpec = line.equals(MARKER_METHOD)
+                    ? ""
+                    : line.substring(MARKER_METHOD.length()).trim();
+            String explicitMethodName = extractNameFromSpec(rawMethodSpec);
+            String explicitParamTypes = extractParamTypesFromSpec(rawMethodSpec);
 i++;
 while (i < lines.length && lines[i].isBlank()) i++;
 if (i >= lines.length || !lines[i].trim().equals(MARKER_REPLACE)) {
@@ -220,24 +222,24 @@ throw new IllegalArgumentException(
 "@@REPLACE block for @@METHOD is not terminated. Did you forget @@END?");
 }
 i = replace.nextIndex();
-if (explicitMethodName.isEmpty()) {
-List<String> methods = splitIntoMethods(replace.text());
-if (methods.isEmpty()) {
-throw new IllegalArgumentException(
-"@@METHOD: has no name and none could be parsed from the @@REPLACE block.\n" +
-"Either add a name after @@METHOD: or ensure @@REPLACE starts with a valid method signature.");
-}
-for (String methodBlock : methods) {
-String name = extractMethodNameFromSignature(methodBlock);
-if (name == null || name.isEmpty()) {
-throw new IllegalArgumentException(
-"Could not parse method name from block:\n" + methodBlock);
-}
-changes.add(new PatchChange.MethodReplace(currentFile, name, methodBlock));
-}
-} else {
-changes.add(new PatchChange.MethodReplace(currentFile, explicitMethodName, replace.text()));
-}
+            if (explicitMethodName.isEmpty()) {
+                List<String> methods = splitIntoMethods(replace.text());
+                if (methods.isEmpty()) {
+                    throw new IllegalArgumentException(
+                        "@@METHOD: has no name and none could be parsed from the @@REPLACE block.\n" +
+                        "Either add a name after @@METHOD: or ensure @@REPLACE starts with a valid method signature.");
+                }
+                for (String methodBlock : methods) {
+                    String name = extractMethodNameFromSignature(methodBlock);
+                    if (name == null || name.isEmpty()) {
+                        throw new IllegalArgumentException(
+                            "Could not parse method name from block:\n" + methodBlock);
+                    }
+                    changes.add(new PatchChange.MethodReplace(currentFile, name, null, methodBlock));
+                }
+            } else {
+                changes.add(new PatchChange.MethodReplace(currentFile, explicitMethodName, explicitParamTypes, replace.text()));
+            }
 continue;
 }
 
@@ -365,6 +367,21 @@ return null;
 }
 return null;
 }
+
+private static String extractNameFromSpec(String spec) {
+        if (spec == null || spec.isBlank()) return "";
+        int paren = spec.indexOf('(');
+        return (paren >= 0 ? spec.substring(0, paren) : spec).trim();
+    }
+
+    private static String extractParamTypesFromSpec(String spec) {
+        if (spec == null || spec.isBlank()) return null;
+        int open  = spec.indexOf('(');
+        int close = spec.lastIndexOf(')');
+        if (open < 0 || close <= open) return null;
+        String inner = spec.substring(open + 1, close).trim();
+        return inner.isEmpty() ? "" : inner;
+    }
 
 private record ParsedBlock(String text, int nextIndex, boolean hitEndOfInput) {}
 }

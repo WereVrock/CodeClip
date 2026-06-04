@@ -9,7 +9,7 @@ public sealed interface PatchChange permits PatchChange.FindReplace, PatchChange
 
     record FindReplace(String fileName, String find, String replace) implements PatchChange {}
 
-    record MethodReplace(String fileName, String methodName, String replace) implements PatchChange {}
+    record MethodReplace(String fileName, String methodName, String paramTypes, String replace) implements PatchChange {}
 
     /**
      * afterMethod is the name of the method to insert after.

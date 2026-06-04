@@ -363,10 +363,9 @@ private String removeWhitespace(String code) {
     return code.replaceAll("\\s+", "");
 }
 
-
 private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
             throws PatchException {
-        List<int[]> matches = findMethodExtents(code, mr.methodName());
+        List<int[]> matches = findMethodExtents(code, mr.methodName(), mr.paramTypes());
 
         if (matches.isEmpty()) {
             throw new PatchException(
@@ -374,31 +373,60 @@ private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
                     mr.fileName());
         }
         if (matches.size() > 1) {
+            if (mr.paramTypes() == null) {
+                String overloads = buildOverloadList(code, mr.methodName());
+                throw new PatchException(
+                        "Method '" + mr.methodName() + "' is overloaded (" + matches.size()
+                        + " matches) in " + mr.fileName() + ".\n"
+                        + "Specify parameter types to target one overload, e.g.:\n"
+                        + overloads,
+                        mr.fileName());
+            }
             throw new PatchException(
-                    "Method '" + mr.methodName() + "' is overloaded (" + matches.size()
-                    + " matches) in " + mr.fileName()
+                    "Method '" + mr.methodName() + "' still ambiguous after param-type filtering ("
+                    + matches.size() + " matches) in " + mr.fileName()
                     + " — use @@FIND/@@REPLACE to target the specific overload.",
                     mr.fileName());
         }
 
         int[] extent = matches.get(0);
-        int start = extent[0];
-        int end = extent[1];
-
-        String before = code.substring(0, start).stripTrailing();
+        String before = code.substring(0, extent[0]).stripTrailing();
         String replacement = mr.replace().strip();
-        String after = code.substring(end).stripLeading();
+        String after = code.substring(extent[1]).stripLeading();
 
         return before + "\n\n" + replacement + "\n\n" + after;
     }
 
-    private String applyInsertMethod(PatchChange.InsertMethod im, String code)
+/**
+     * Builds a human-readable list of all overloads found for methodName,
+     * formatted as @@METHOD: name(Type, Type) hints for the AI to use.
+     */
+    private String buildOverloadList(String code, String methodName) {
+        String[] lines = code.split("\n", -1);
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (!isFuzzyMethodLine(trimmed, methodName, false)) continue;
+            int open  = trimmed.indexOf(methodName + "(");
+            if (open < 0) continue;
+            int parenOpen  = open + methodName.length();
+            int parenClose = trimmed.indexOf(')', parenOpen);
+            if (parenClose < 0) continue;
+            String paramSection = trimmed.substring(parenOpen + 1, parenClose).trim();
+            List<String> types = parseTypeList(paramSection);
+            sb.append("  @@METHOD: ").append(methodName)
+              .append("(").append(String.join(", ", types)).append(")\n");
+        }
+        return sb.isEmpty() ? "  (could not parse overload signatures)\n" : sb.toString();
+    }
+
+private String applyInsertMethod(PatchChange.InsertMethod im, String code)
             throws PatchException {
 
         int insertAfterPos;
 
         if (im.afterMethod() != null) {
-            List<int[]> matches = findMethodExtents(code, im.afterMethod());
+            List<int[]> matches = findMethodExtents(code, im.afterMethod(), null);
             if (matches.isEmpty()) {
                 throw new PatchException(
                         "@@AFTER_METHOD: anchor '" + im.afterMethod() + "' not found in " + im.fileName(),
@@ -411,9 +439,8 @@ private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
                         + " — use the explicit overload name to target one.",
                         im.fileName());
             }
-            insertAfterPos = matches.get(0)[1]; // end of anchor method's closing brace
+            insertAfterPos = matches.get(0)[1];
         } else {
-            // Find the last top-level closing brace of the class
             insertAfterPos = findLastClassBrace(code);
             if (insertAfterPos < 0) {
                 throw new PatchException(
@@ -429,7 +456,7 @@ private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
         return before + "\n\n" + newMethod + "\n\n" + after;
     }
 
-    /**
+/**
      * Finds the position of the last top-level closing brace in the source,
      * which is the class closing brace. Returns the index of that '}'.
      */
@@ -447,7 +474,7 @@ private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
         return -1;
     }
 
-    private List<int[]> findMethodExtents(String code, String methodName) {
+    private List<int[]> findMethodExtents(String code, String methodName, String paramTypes) {
         String[] lines = code.split("\n", -1);
 
         int[] lineStart = new int[lines.length + 1];
@@ -456,27 +483,143 @@ private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
             lineStart[i + 1] = lineStart[i] + lines[i].length() + 1;
         }
 
-// Step 1: exact signature match
+        // Step 1: exact signature match
         List<int[]> results = collectMethodExtents(lines, lineStart, code, methodName, false, false);
         if (!results.isEmpty()) {
-            return results;
+            return filterByParamTypes(results, lines, lineStart, methodName, paramTypes);
         }
 
-// Step 2: fuzzy — ignore modifiers/return type, just find methodName( on a line
+        // Step 2: fuzzy — ignore modifiers/return type, just find methodName( on a line
         results = collectMethodExtents(lines, lineStart, code, methodName, true, false);
-        if (results.size() == 1) {
-            return results;
+        List<int[]> filtered = filterByParamTypes(results, lines, lineStart, methodName, paramTypes);
+        if (filtered.size() == 1) {
+            return filtered;
         }
-        if (results.size() > 1) {
-            return results; // let caller handle ambiguity
-        }
-// Step 3: case-insensitive fuzzy
-        results = collectMethodExtents(lines, lineStart, code, methodName, true, true);
-        if (results.size() == 1) {
-            return results;
+        if (filtered.size() > 1) {
+            return filtered;
         }
 
-        return results;
+        // Step 3: case-insensitive fuzzy
+        results = collectMethodExtents(lines, lineStart, code, methodName, true, true);
+        filtered = filterByParamTypes(results, lines, lineStart, methodName, paramTypes);
+        if (filtered.size() == 1) {
+            return filtered;
+        }
+
+        return filtered;
+    }
+
+    /**
+     * If paramTypes is null, returns matches unchanged.
+     * If paramTypes is non-null (including empty string for zero-arg),
+     * filters to only those methods whose parameter list matches.
+     * Matching is type-name only (no package, no generics), comma-separated,
+     * case-insensitive, whitespace-tolerant.
+     */
+    private List<int[]> filterByParamTypes(List<int[]> matches, String[] lines,
+                                            int[] lineStart, String methodName, String paramTypes) {
+        if (paramTypes == null || matches.size() <= 1) return matches;
+
+        List<String> expectedTypes = parseTypeList(paramTypes);
+
+        List<int[]> filtered = new ArrayList<>();
+        for (int[] extent : matches) {
+            // Find the signature line(s) for this extent
+            int startOffset = extent[0];
+            String sigLine = findSignatureLineForOffset(lines, lineStart, startOffset, methodName);
+            if (sigLine == null) {
+                filtered.add(extent); // can't parse, keep it
+                continue;
+            }
+            List<String> actualTypes = extractParamTypesFromSignature(sigLine, methodName);
+            if (actualTypes == null) {
+                filtered.add(extent);
+                continue;
+            }
+            if (paramTypesMatch(expectedTypes, actualTypes)) {
+                filtered.add(extent);
+            }
+        }
+        return filtered.isEmpty() ? matches : filtered;
+    }
+
+    private String findSignatureLineForOffset(String[] lines, int[] lineStart, int startOffset, String methodName) {
+        // Find which line this extent starts on, then look for the method name within a few lines
+        int sigLineIdx = -1;
+        for (int i = 0; i < lines.length; i++) {
+            if (lineStart[i] == startOffset) {
+                sigLineIdx = i;
+                break;
+            }
+        }
+        if (sigLineIdx < 0) return null;
+        // The signature may span multiple lines (params on next lines), collect up to opening brace
+        StringBuilder sb = new StringBuilder();
+        for (int i = sigLineIdx; i < Math.min(sigLineIdx + 10, lines.length); i++) {
+            sb.append(lines[i]).append(" ");
+            if (lines[i].contains("{")) break;
+        }
+        return sb.toString();
+    }
+
+    private List<String> extractParamTypesFromSignature(String sigLine, String methodName) {
+        // Find methodName( ... ) and extract the param list
+        String search = methodName + "(";
+        int idx = sigLine.indexOf(search);
+        if (idx < 0) {
+            // case-insensitive fallback
+            idx = sigLine.toLowerCase().indexOf(search.toLowerCase());
+        }
+        if (idx < 0) return null;
+        int open = idx + search.length() - 1;
+        // find matching close paren
+        int depth = 1;
+        int i = open + 1;
+        while (i < sigLine.length() && depth > 0) {
+            char c = sigLine.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            i++;
+        }
+        String paramSection = sigLine.substring(open + 1, i - 1).trim();
+        return parseTypeList(paramSection);
+    }
+
+    /**
+     * Parses a comma-separated list of param declarations or type names.
+     * Handles both "String foo, int bar" (declarations) and "String, int" (types only).
+     * Strips generics and array notation for simple matching.
+     */
+    private List<String> parseTypeList(String raw) {
+        List<String> types = new ArrayList<>();
+        if (raw == null || raw.isBlank()) return types; // zero-arg
+        for (String part : raw.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) continue;
+            // Strip generics: List<String> -> List
+            int angle = trimmed.indexOf('<');
+            if (angle >= 0) trimmed = trimmed.substring(0, angle).trim();
+            // Strip array: String[] -> String
+            int bracket = trimmed.indexOf('[');
+            if (bracket >= 0) trimmed = trimmed.substring(0, bracket).trim();
+            // If it looks like "Type varName", keep only the type token
+            String[] tokens = trimmed.split("\\s+");
+            types.add(tokens[0].toLowerCase());
+        }
+        return types;
+    }
+
+    private boolean paramTypesMatch(List<String> expected, List<String> actual) {
+        if (expected.size() != actual.size()) return false;
+        for (int i = 0; i < expected.size(); i++) {
+            String exp = expected.get(i);
+            String act = actual.get(i);
+            // Strip simple package prefix for comparison: com.foo.Bar -> bar
+            exp = exp.substring(exp.lastIndexOf('.') + 1);
+            act = act.substring(act.lastIndexOf('.') + 1);
+            if (!exp.equalsIgnoreCase(act)) return false;
+        }
+        return true;
     }
 
     private List<int[]> collectMethodExtents(String[] lines, int[] lineStart, String code,
