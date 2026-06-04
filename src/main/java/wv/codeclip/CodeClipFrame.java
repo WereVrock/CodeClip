@@ -77,6 +77,12 @@ private JButton lastErrorBtn;
 private JMenuItem lastErrorMenuItem;
 private Runnable syncUndoRedo;
 
+private JTabbedPane notesTabs;
+private JTextArea persistentLogArea;
+private JPanel versionPanel;
+private final java.util.List<VersionEvent> versionHistory = new java.util.ArrayList<>();
+private int versionCurrentIdx = -1;
+
 // Background colors for class rows are now provided by ModeColors.
 // See ModeColors.getEnabledBackground() and getDisabledBackground().
 private static final Color LOG_CLASS_COLOR = new Color(30, 120, 220);
@@ -343,40 +349,52 @@ redoBtn.setEnabled(undoManager.canRedo());
 };
 
 undoBtn.addActionListener(e -> {
-try {
-wv.codeclip.patch.PatchUndoManager.Entry entry = undoManager.undo(repo);
-if (entry != null) {
-refreshText();
-refreshPanels();
-appendTempLog("↩ Undo: " + describeEntry(entry));
-restoreTimestampFromSnapshot(entry);
-}
-} catch (java.io.IOException ex) {
-JOptionPane.showMessageDialog(this, "Undo failed:\n" + ex.getMessage(),
-"Error", JOptionPane.ERROR_MESSAGE);
-}
-syncUndoRedo.run();
+    try {
+        wv.codeclip.patch.PatchUndoManager.Entry entry = undoManager.undo(repo);
+        if (entry != null) {
+            refreshText();
+            refreshPanels();
+            restoreTimestampFromSnapshot(entry);
+            versionUndo();
+            pasteHandler.clearDuplicateHistory();
+            godotPasteHandler.clearDuplicateHistory();
+        }
+    } catch (java.io.IOException ex) {
+        JOptionPane.showMessageDialog(this, "Undo failed:\n" + ex.getMessage(),
+                "Error", JOptionPane.ERROR_MESSAGE);
+    }
+    syncUndoRedo.run();
 });
 
 redoBtn.addActionListener(e -> {
-try {
-wv.codeclip.patch.PatchUndoManager.Entry entry = undoManager.redo(repo);
-if (entry != null) {
-refreshText();
-refreshPanels();
-appendTempLog("↪ Redo: " + describeEntry(entry));
-restoreTimestampFromSnapshot(entry);
-}
-} catch (java.io.IOException ex) {
-JOptionPane.showMessageDialog(this, "Redo failed:\n" + ex.getMessage(),
-"Error", JOptionPane.ERROR_MESSAGE);
-}
-syncUndoRedo.run();
+    try {
+        wv.codeclip.patch.PatchUndoManager.Entry entry = undoManager.redo(repo);
+        if (entry != null) {
+            refreshText();
+            refreshPanels();
+            restoreTimestampFromSnapshot(entry);
+            versionRedo();
+        }
+    } catch (java.io.IOException ex) {
+        JOptionPane.showMessageDialog(this, "Redo failed:\n" + ex.getMessage(),
+                "Error", JOptionPane.ERROR_MESSAGE);
+    }
+    syncUndoRedo.run();
 });
 
 pasteHandler.setPostPasteCallback((changed) -> {
-syncUndoRedo.run();
-if (changed) stampBuildInfo();
+    syncUndoRedo.run();
+    if (changed) {
+        stampBuildInfo();
+        addVersionEventFromUndoTop();
+    }
+});
+godotPasteHandler.setPostPasteCallback((changed) -> {
+    syncUndoRedo.run();
+    if (changed) {
+        stampBuildInfo();
+        addVersionEventFromUndoTop();
+    }
 });
 
 JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -450,7 +468,23 @@ classListPanel.add(classSearch, BorderLayout.NORTH);
 classListPanel.add(classScroll, BorderLayout.CENTER);
 classListPanel.add(enableDisablePanel, BorderLayout.SOUTH);
 
-split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesScroll, classListPanel);
+persistentLogArea = new JTextArea();
+persistentLogArea.setEditable(false);
+persistentLogArea.setLineWrap(true);
+persistentLogArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+JScrollPane persistentLogScroll = new JScrollPane(persistentLogArea);
+
+versionPanel = new JPanel();
+versionPanel.setLayout(new BoxLayout(versionPanel, BoxLayout.Y_AXIS));
+JScrollPane versionScroll = new JScrollPane(versionPanel);
+versionScroll.getVerticalScrollBar().setUnitIncrement(16);
+
+notesTabs = new JTabbedPane();
+notesTabs.addTab("Notes", notesScroll);
+notesTabs.addTab("Log", persistentLogScroll);
+notesTabs.addTab("Versions", versionScroll);
+
+split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, notesTabs, classListPanel);
 split.setResizeWeight(0.7);
 
 SwingUtilities.invokeLater(() -> {
@@ -522,12 +556,10 @@ add(bottomBar, BorderLayout.SOUTH);
 // ------------------------------------------------------------------
 
 public void appendTempLog(String message) {
-logBuffer = message + "\n" + logBuffer;
-renderNotes();
-// Scroll to top so the new message is immediately visible
-SwingUtilities.invokeLater(() ->
-notesTextPane.setCaretPosition(0)
-);
+    logBuffer = message + "\n" + logBuffer;
+    renderNotes();
+    appendToPersistentLog(message);
+    SwingUtilities.invokeLater(() -> notesTextPane.setCaretPosition(0));
 }
 
 public void clearTempLogs() {
@@ -1115,6 +1147,8 @@ classPanel.repaint();
 private record PanelEntry(JPanel panel, String path, String name,
 boolean disabled, int insertionIdx) {}
 
+private record VersionEvent(String title, String files, String timestamp) {}
+
 private String describeEntry(wv.codeclip.patch.PatchUndoManager.Entry entry) {
 List<String> names = new ArrayList<>();
 for (String path : entry.snapshot().keySet()) {
@@ -1599,6 +1633,134 @@ if (best != null) {
 wv.codeclip.godot.GodotDirectory.set(best);
 appendTempLog("Godot directory auto-set: " + best.getAbsolutePath());
 }
+}
+
+private void appendToPersistentLog(String message) {
+    if (persistentLogArea == null) return;
+    SwingUtilities.invokeLater(() -> {
+        try {
+            persistentLogArea.insert(message + "\n", 0);
+        } catch (Exception ignored) {}
+    });
+}
+
+private void addVersionEventFromUndoTop() {
+    wv.codeclip.patch.PatchUndoManager.Entry top = undoManager.peekUndo();
+    if (top == null) return;
+    String title = top.title() != null ? top.title() : "Change";
+    String files = top.snapshot().keySet().stream()
+            .map(p -> {
+                java.io.File f = repo.getClassFileMap().get(p);
+                return f != null ? f.getName() : new java.io.File(p).getName();
+            })
+            .filter(n -> !n.equals(BUILD_INFO_FILE))
+            .collect(java.util.stream.Collectors.joining(", "));
+    while (versionHistory.size() > versionCurrentIdx + 1) {
+        versionHistory.remove(versionHistory.size() - 1);
+    }
+    String time = java.time.LocalTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+    versionHistory.add(new VersionEvent(title, files, time));
+    versionCurrentIdx = versionHistory.size() - 1;
+    refreshVersionPanel();
+}
+
+private void versionUndo() {
+    if (versionCurrentIdx >= 0) {
+        versionCurrentIdx--;
+        refreshVersionPanel();
+    }
+}
+
+private void versionRedo() {
+    if (versionCurrentIdx < versionHistory.size() - 1) {
+        versionCurrentIdx++;
+        refreshVersionPanel();
+    }
+}
+
+private void refreshVersionPanel() {
+    if (versionPanel == null) return;
+    versionPanel.removeAll();
+    if (versionHistory.isEmpty()) {
+        JLabel empty = new JLabel("No version events yet.");
+        empty.setForeground(Color.GRAY);
+        empty.setAlignmentX(Component.LEFT_ALIGNMENT);
+        empty.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        versionPanel.add(empty);
+    } else {
+        for (int i = versionHistory.size() - 1; i >= 0; i--) {
+            versionPanel.add(createVersionRow(versionHistory.get(i), i <= versionCurrentIdx));
+        }
+    }
+    versionPanel.revalidate();
+    versionPanel.repaint();
+}
+
+private JPanel createVersionRow(VersionEvent ev, boolean active) {
+    Color sepColor = UIManager.getColor("Separator.foreground");
+    if (sepColor == null) sepColor = Color.LIGHT_GRAY;
+    Color bg = UIManager.getColor("Panel.background");
+    if (bg == null) bg = Color.WHITE;
+    if (!active) bg = new Color(242, 242, 242);
+    Color fg = UIManager.getColor("Label.foreground");
+    if (fg == null) fg = Color.BLACK;
+    if (!active) fg = new Color(140, 140, 140);
+
+    JPanel row = new JPanel(new BorderLayout(4, 2));
+    row.setBackground(bg);
+    row.setOpaque(true);
+    row.setAlignmentX(Component.LEFT_ALIGNMENT);
+    row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+    row.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, sepColor),
+            BorderFactory.createEmptyBorder(5, 8, 5, 8)));
+
+    JLabel icon = new JLabel(active ? "●" : "↩");
+    icon.setFont(icon.getFont().deriveFont(Font.BOLD, 13f));
+    icon.setForeground(active ? new Color(40, 160, 40) : new Color(170, 170, 170));
+    icon.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 8));
+
+    Font baseFont = UIManager.getFont("Label.font");
+    if (baseFont == null) baseFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+    Font titleFont = active ? baseFont.deriveFont(Font.BOLD) : baseFont.deriveFont(Font.PLAIN);
+    if (!active) {
+        java.util.Map attrs = new java.util.HashMap(titleFont.getAttributes());
+        attrs.put(java.awt.font.TextAttribute.STRIKETHROUGH,
+                java.awt.font.TextAttribute.STRIKETHROUGH_ON);
+        titleFont = titleFont.deriveFont(attrs);
+    }
+
+    JLabel titleLbl = new JLabel(ev.title());
+    titleLbl.setFont(titleFont);
+    titleLbl.setForeground(fg);
+
+    JLabel timeLbl = new JLabel(ev.timestamp());
+    timeLbl.setFont(timeLbl.getFont().deriveFont(Font.PLAIN, 11f));
+    timeLbl.setForeground(active ? new Color(110, 110, 110) : new Color(180, 180, 180));
+
+    JPanel header = new JPanel(new BorderLayout(4, 0));
+    header.setOpaque(false);
+    header.add(titleLbl, BorderLayout.CENTER);
+    header.add(timeLbl, BorderLayout.EAST);
+
+    JPanel content = new JPanel();
+    content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+    content.setOpaque(false);
+    header.setAlignmentX(Component.LEFT_ALIGNMENT);
+    content.add(header);
+
+    if (ev.files() != null && !ev.files().isBlank()) {
+        JLabel filesLbl = new JLabel(ev.files());
+        filesLbl.setFont(filesLbl.getFont().deriveFont(Font.PLAIN, 11f));
+        filesLbl.setForeground(active ? new Color(70, 70, 200) : new Color(170, 170, 170));
+        filesLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(filesLbl);
+    }
+
+    row.add(icon, BorderLayout.WEST);
+    row.add(content, BorderLayout.CENTER);
+    return row;
 }
 
 }

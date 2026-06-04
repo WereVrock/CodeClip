@@ -100,4 +100,9 @@ public void clear() {
             }
         }
     }
+
+public Entry peekUndo() {
+    return undoStack.peekFirst();
+}
+
 }

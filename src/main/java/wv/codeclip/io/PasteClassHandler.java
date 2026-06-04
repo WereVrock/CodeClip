@@ -698,6 +698,10 @@ if (hasFile && hasDirective) return true;
 return false;
 }
 
+public void clearDuplicateHistory() {
+    duplicateDetector.clearHistory();
+}
+
 }
 
 

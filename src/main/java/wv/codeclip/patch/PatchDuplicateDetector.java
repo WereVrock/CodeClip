@@ -63,4 +63,9 @@ public void record(String rawPatchText) {
 private String normalize(String text) {
         return text.replaceAll("\\r\\n|\\r", "\n").strip();
     }
+
+public void clearHistory() {
+    recentPatches.clear();
+}
+
 }

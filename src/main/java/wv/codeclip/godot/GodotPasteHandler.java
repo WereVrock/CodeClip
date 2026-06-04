@@ -443,4 +443,8 @@ private boolean handleEnable(String text) {
     return true;
 }
 
+public void clearDuplicateHistory() {
+    duplicateDetector.clearHistory();
+}
+
 }

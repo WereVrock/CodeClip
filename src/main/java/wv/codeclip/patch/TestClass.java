@@ -18,12 +18,11 @@ public static String goodbye() {
         return "goodbye - base version";
     }
 
-    public static String fuzzyOne() {
-        // this method has trailing spaces in its comment    
-        return "fuzzyOne original";
+public static String fuzzyOne() {
+        return "fuzzyOne - UI test passed";
     }
 
-    public static String fuzzyTwo() {
+public static String fuzzyTwo() {
 
 
         return "fuzzyTwo original";
