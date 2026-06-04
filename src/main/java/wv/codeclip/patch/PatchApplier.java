@@ -146,59 +146,60 @@ private String applyFindReplace(PatchChange.FindReplace fr, String code)
         throws PatchException {
     String find = fr.find();
     String replace = normalize(fr.replace());
+    String original = code;
 
     // Step 1: exact match
     int count = countOccurrences(code, find);
     if (count == 1) return code.replace(find, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "exact");
 
-    // Step 2: normalize line endings
+    // Step 2: normalize line endings — normCode is structurally close to original,
+    // mapOffset can walk it back reliably
     String normCode = normalize(code);
     String normFind = normalize(find);
     count = countOccurrences(normCode, normFind);
-    if (count == 1) return spliceInto(normCode, normFind, replace);
+    if (count == 1) return spliceInto(original, normCode, normFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "line-ending normalization");
 
-    // Step 3: normalize + trim trailing whitespace per line
+    // Steps 3-5 build on normCode (character-count-preserving transforms),
+    // so mapOffset from normCode -> original still works
     String trimCode = trimLines(normCode);
     String trimFind = trimLines(normFind);
     count = countOccurrences(trimCode, trimFind);
-    if (count == 1) return spliceInto(normCode, trimCode, trimFind, replace);
+    if (count == 1) return spliceInto(original, normCode, trimCode, trimFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "trailing-whitespace normalization");
 
-    // Step 4: normalize tabs to spaces
     String tabCode = normalizeTabs(trimCode);
     String tabFind = normalizeTabs(trimFind);
     count = countOccurrences(tabCode, tabFind);
-    if (count == 1) return spliceInto(normCode, tabCode, tabFind, replace);
+    if (count == 1) return spliceInto(original, normCode, tabCode, tabFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "tab normalization");
 
-    // Step 5: collapse runs of blank lines to a single blank line
     String blankCode = collapseBlankLines(tabCode);
     String blankFind = collapseBlankLines(tabFind);
     count = countOccurrences(blankCode, blankFind);
-    if (count == 1) return spliceInto(normCode, blankCode, blankFind, replace);
+    if (count == 1) return spliceInto(original, normCode, blankCode, blankFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "blank-line normalization");
 
-    // Step 6: strip all indentation (fuzzy)
+    // Steps 6-8 destroy structure (strip indent, collapse/remove whitespace).
+    // We find the match in the transformed string, map back to normCode first
+    // (still line-by-line intact), then map normCode -> original.
     String dedentCode = stripIndent(normCode);
     String dedentFind = stripIndent(normFind);
     count = countOccurrences(dedentCode, dedentFind);
-    if (count == 1) return spliceInto(normCode, dedentCode, dedentFind, replace);
+    if (count == 1) return spliceInto(original, normCode, dedentCode, dedentFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "indent-stripping");
 
-    // Step 7: collapse all runs of whitespace to a single space
     String collapseCode = collapseWhitespace(normCode);
     String collapseFind = collapseWhitespace(normFind);
     count = countOccurrences(collapseCode, collapseFind);
-    if (count == 1) return spliceInto(normCode, collapseCode, collapseFind, replace);
+    if (count == 1) return spliceInto(original, normCode, collapseCode, collapseFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "whitespace collapsing");
 
-    // Step 8: remove all whitespace entirely
     String noSpaceCode = removeWhitespace(normCode);
     String noSpaceFind = removeWhitespace(normFind);
     count = countOccurrences(noSpaceCode, noSpaceFind);
-    if (count == 1) return spliceInto(normCode, noSpaceCode, noSpaceFind, replace);
+    if (count == 1) return spliceInto(original, normCode, noSpaceCode, noSpaceFind, replace);
     if (count > 1) throw ambiguousException(fr.fileName(), count, find, "whitespace removal");
 
     throw new PatchException(
@@ -234,10 +235,13 @@ private PatchException ambiguousException(String fileName, int count, String fin
     }
 
     private String trimLines(String code) {
+        String[] parts = code.split("\n", -1);
         StringBuilder sb = new StringBuilder();
-        for (String line : code.split("\n", -1)) {
-            sb.append(line.stripTrailing()).append("\n");
+        for (int i = 0; i < parts.length; i++) {
+            sb.append(parts[i].stripTrailing());
+            if (i < parts.length - 1) sb.append("\n");
         }
+        if (code.endsWith("\n")) sb.append("\n");
         return sb.toString();
     }
 
@@ -246,52 +250,90 @@ private PatchException ambiguousException(String fileName, int count, String fin
     }
 
     private String normalizeTabs(String code) {
+        String[] parts = code.split("\n", -1);
         StringBuilder sb = new StringBuilder();
-        for (String line : code.split("\n", -1)) {
-            sb.append(line.replace("\t", "    ")).append("\n");
+        for (int i = 0; i < parts.length; i++) {
+            sb.append(parts[i].replace("\t", "    "));
+            if (i < parts.length - 1) sb.append("\n");
         }
+        if (code.endsWith("\n")) sb.append("\n");
         return sb.toString();
     }
 
     private String stripIndent(String code) {
+        String[] parts = code.split("\n", -1);
         StringBuilder sb = new StringBuilder();
-        for (String line : code.split("\n", -1)) {
-            sb.append(line.stripLeading().stripTrailing()).append("\n");
+        for (int i = 0; i < parts.length; i++) {
+            sb.append(parts[i].stripLeading().stripTrailing());
+            if (i < parts.length - 1) sb.append("\n");
         }
+        if (code.endsWith("\n")) sb.append("\n");
         return sb.toString();
     }
 
 /**
- * Finds where normalizedFind sits in normalizedCode, maps that span back to
- * the same character positions in originalCode, and splices replacement in.
- * Falls back to a direct splice in normalizedCode if mapping fails.
+ * Steps 2 only: originalCode == normalizedCode, direct splice.
+ */
+private String spliceInto(String code, String find, String replacement) {
+    int idx = code.indexOf(find);
+    if (idx < 0) return code;
+    return code.substring(0, idx) + replacement + code.substring(idx + find.length());
+}
+
+/**
+ * Steps 2-5: transformedCode is structurally close to originalCode (only
+ * line endings / trailing spaces / tabs altered). Map match offsets from
+ * transformedCode directly back to originalCode via mapOffset.
  */
 private String spliceInto(String originalCode, String normalizedCode,
-                           String normalizedFind, String replacement) {
-    int normStart = normalizedCode.indexOf(normalizedFind);
-    if (normStart < 0) return normalizedCode; // should not happen
+                           String transformedFind, String replacement) {
+    int transStart = normalizedCode.indexOf(transformedFind);
+    if (transStart < 0) return originalCode;
 
-    // Map normalised offset back to original by counting non-normalised chars.
-    // This works because trimLines/normalizeTabs/collapseBlankLines are all
-    // character-count-preserving or only shrink runs — we walk both strings
-    // in parallel to find the matching original span.
-    int origStart = mapOffset(originalCode, normalizedCode, normStart);
-    int origEnd   = mapOffset(originalCode, normalizedCode, normStart + normalizedFind.length());
+    int origStart = mapOffset(originalCode, normalizedCode, transStart);
+    int origEnd   = mapOffset(originalCode, normalizedCode, transStart + transformedFind.length());
 
     if (origStart < 0 || origEnd < 0 || origStart > origEnd) {
-        // Fallback: splice into the normalised code
-        return normalizedCode.substring(0, normStart) + replacement
-                + normalizedCode.substring(normStart + normalizedFind.length());
+        return normalizedCode.substring(0, transStart) + replacement
+                + normalizedCode.substring(transStart + transformedFind.length());
     }
 
     return originalCode.substring(0, origStart) + replacement + originalCode.substring(origEnd);
 }
 
-/** Overload for when originalCode == normalizedCode (steps 1-2). */
-private String spliceInto(String code, String find, String replacement) {
-    int idx = code.indexOf(find);
-    if (idx < 0) return code;
-    return code.substring(0, idx) + replacement + code.substring(idx + find.length());
+/**
+ * Steps 6-8: transformedCode has severe whitespace destruction (indent strip,
+ * collapse, remove). We cannot map directly to originalCode. Instead:
+ * 1. Find match in transformedCode.
+ * 2. Map those offsets back to normCode (line-ending normalized only, still
+ *    structurally intact relative to original).
+ * 3. Map normCode offsets back to originalCode.
+ * Falls back to splicing into normCode if either mapping fails.
+ */
+private String spliceInto(String originalCode, String normCode,
+                           String transformedCode, String transformedFind, String replacement) {
+    int transStart = transformedCode.indexOf(transformedFind);
+    if (transStart < 0) return originalCode;
+
+    int normStart = mapOffset(normCode, transformedCode, transStart);
+    int normEnd   = mapOffset(normCode, transformedCode, transStart + transformedFind.length());
+
+    if (normStart < 0 || normEnd < 0 || normStart > normEnd) {
+        // Can't map back to norm — last resort: splice into normCode
+        int s = Math.max(0, transStart);
+        int e = Math.min(normCode.length(), transStart + transformedFind.length());
+        return normCode.substring(0, s) + replacement + normCode.substring(e);
+    }
+
+    int origStart = mapOffset(originalCode, normCode, normStart);
+    int origEnd   = mapOffset(originalCode, normCode, normEnd);
+
+    if (origStart < 0 || origEnd < 0 || origStart > origEnd) {
+        // Can map to norm but not to original — splice into normCode
+        return normCode.substring(0, normStart) + replacement + normCode.substring(normEnd);
+    }
+
+    return originalCode.substring(0, origStart) + replacement + originalCode.substring(origEnd);
 }
 
 /**
@@ -467,6 +509,15 @@ private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
 
     private boolean isFuzzyMethodLine(String trimmed, String methodName, boolean ignoreCase) {
         if (trimmed.startsWith("//") || trimmed.startsWith("*")) {
+            return false;
+        }
+        // Must look like a definition, not a call site.
+        // A call site has no declaration keyword and would cause silent corruption.
+        boolean hasDeclarationKeyword
+                = trimmed.contains("public ") || trimmed.contains("private ")
+                || trimmed.contains("protected ") || trimmed.contains("static ")
+                || trimmed.contains("void ") || trimmed.contains("@Override");
+        if (!hasDeclarationKeyword) {
             return false;
         }
         String haystack = ignoreCase ? trimmed.toLowerCase() : trimmed;
