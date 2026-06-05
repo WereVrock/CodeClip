@@ -12,9 +12,9 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import wv.codeclip.config.AiInstructions;
 import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.io.PasteClassHandler;
+import wv.codeclip.patch.InsertMethodConflictDialog;
 import wv.codeclip.ui.ClassActions;
 import wv.codeclip.ui.SimpleDocumentListener;
 import wv.codeclip.ui.SmartPasteSettings;
@@ -71,6 +71,7 @@ private wv.codeclip.patch.PatchUndoManager undoManager;
 private JMenuItem godotDirMenuItem;
 private JMenuItem copyMetaItem;
 private final SettingsManager settings = new SettingsManager();
+private JCheckBoxMenuItem autoReplaceInsertConflictItem;
 private CheckpointDialog checkpointDialog = null;
 private PatchApplier.PatchResult lastPatchError = null;
 private JButton lastErrorBtn;
@@ -147,13 +148,15 @@ installDnD();
 setAlwaysOnTop(alwaysOnTopCheck.isSelected());
 
 // Load persisted state
-currentMode = AppMode.valueOf(settings.loadMode());
-wv.codeclip.modecontext.ModeContext.setMode(currentMode);
-if (fileDropHandler != null) fileDropHandler.setMode(currentMode);
-updateDirectoryButton();
-notesBuffer = settings.loadNotes();
-includeInstructionsCheck.setSelected(settings.loadIncludeInstructions());
-smartPasteCheck.setSelected(settings.loadSmartPaste());
+        currentMode = AppMode.valueOf(settings.loadMode());
+        wv.codeclip.modecontext.ModeContext.setMode(currentMode);
+        if (fileDropHandler != null) fileDropHandler.setMode(currentMode);
+        updateDirectoryButton();
+        notesBuffer = settings.loadNotes();
+        includeInstructionsCheck.setSelected(settings.loadIncludeInstructions());
+        smartPasteCheck.setSelected(settings.loadSmartPaste());
+        autoReplaceInsertConflictItem.setSelected(settings.loadAutoReplaceOnInsertConflict());
+        wireConflictResolver();
 SmartPasteSettings.load(settings);
 renderNotes();
 
@@ -218,8 +221,9 @@ settings.saveFrameBounds(getBounds());
 settings.saveDividerPosition(split.getDividerLocation());
 settings.saveNotes(notesBuffer);
 settings.saveIncludeInstructions(includeInstructionsCheck.isSelected());
-settings.saveSmartPaste(smartPasteCheck.isSelected());
-SmartPasteSettings.save(settings);
+        settings.saveSmartPaste(smartPasteCheck.isSelected());
+        settings.saveAutoReplaceOnInsertConflict(autoReplaceInsertConflictItem.isSelected());
+        SmartPasteSettings.save(settings);
 wv.codeclip.godot.GodotDirectory.save(settings);
 settings.saveMode(currentMode.name());
 settings.saveClassPaths(
@@ -266,9 +270,15 @@ JCheckBoxMenuItem showMissingItem = new JCheckBoxMenuItem(
 showMissingItem.addActionListener(e ->
 showMissingFileMessages.setSelected(showMissingItem.isSelected()));
 settingsMenu.add(showMissingItem);
-JMenuItem languageItem = new JMenuItem("Language…");
-languageItem.addActionListener(e -> openLanguageDialog());
-settingsMenu.add(languageItem);
+        JMenuItem languageItem = new JMenuItem("Language…");
+        languageItem.addActionListener(e -> openLanguageDialog());
+        settingsMenu.add(languageItem);
+        autoReplaceInsertConflictItem = new JCheckBoxMenuItem("Auto-Replace Duplicate Methods");
+        autoReplaceInsertConflictItem.setToolTipText(
+                "Java mode only: when @@INSERT_METHOD finds an existing method with a different body, "
+                + "automatically replace it and log a warning instead of showing a dialog.");
+        autoReplaceInsertConflictItem.setVisible(currentMode == AppMode.JAVA);
+        settingsMenu.add(autoReplaceInsertConflictItem);
 godotDirMenuItem = new JMenuItem("Godot Directory…");
 godotDirMenuItem.addActionListener(e -> openGodotDirectoryDialog());
 godotDirMenuItem.setVisible(false);
@@ -1524,11 +1534,33 @@ refreshPanels();
 updateCheckpointButtonColor(null);
 }
 
-private void updateDirectoryButton() {
-if (godotDirMenuItem == null) return;
-boolean godot = wv.codeclip.modecontext.ModeContext.isGodotMode();
-godotDirMenuItem.setVisible(godot);
-if (copyMetaItem != null) copyMetaItem.setVisible(!godot);
+    private void updateDirectoryButton() {
+        if (godotDirMenuItem == null) return;
+        boolean godot = wv.codeclip.modecontext.ModeContext.isGodotMode();
+        godotDirMenuItem.setVisible(godot);
+        if (copyMetaItem != null) copyMetaItem.setVisible(!godot);
+        if (autoReplaceInsertConflictItem != null) {
+            autoReplaceInsertConflictItem.setVisible(!godot);
+        }
+    }
+
+/**
+ * Wires a shared InsertConflictResolver into both paste handlers.
+ * Called once after settings are loaded, and whenever the resolver logic needs updating.
+ * The resolver either shows the dialog or auto-replaces based on the menu setting.
+ */
+private void wireConflictResolver() {
+    PatchApplier.InsertConflictResolver resolver = (methodName, existingCode, incomingCode) -> {
+        if (autoReplaceInsertConflictItem != null && autoReplaceInsertConflictItem.isSelected()) {
+            appendTempLog("Auto-replaced duplicate method: " + methodName);
+            return true;
+        }
+        InsertMethodConflictDialog.Choice choice =
+                InsertMethodConflictDialog.show(this, methodName, existingCode, incomingCode);
+        return choice == InsertMethodConflictDialog.Choice.REPLACE;
+    };
+    pasteHandler.setConflictResolver(resolver);
+    
 }
 
 private void refreshDirectoryButtonLabel() {

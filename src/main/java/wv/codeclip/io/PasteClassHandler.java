@@ -46,6 +46,7 @@ private final java.util.concurrent.atomic.AtomicBoolean pasting = new java.util.
 private final wv.codeclip.patch.PatchUndoManager undoManager;
 private final wv.codeclip.commands.CopierCommand copierCommand;
 private java.util.function.Consumer<Boolean> postPasteCallback;
+private PatchApplier.InsertConflictResolver conflictResolver;
 
 private static final int CLASS_NAME_WRAP_LENGTH = 40;
 
@@ -171,6 +172,10 @@ public void setErrorCallback(java.util.function.Consumer<PatchApplier.PatchResul
 this.errorCallback = errorCallback;
 }
 
+public void setConflictResolver(PatchApplier.InsertConflictResolver resolver) {
+this.conflictResolver = resolver;
+}
+
 public void setPostPasteCallback(java.util.function.Consumer<Boolean> callback) {
 this.postPasteCallback = callback;
 }
@@ -268,7 +273,9 @@ PatchErrorDialog.show(parent,
 return;
 }
 
-PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
+PatchApplier applier = new PatchApplier(repo);
+applier.setConflictResolver(conflictResolver);
+PatchApplier.PatchResult result = applier.apply(changes);
 if (result.hasFailures()) reportError(result);
 if (result.hasSuccesses()) {
 duplicateDetector.record(patchText);
@@ -305,17 +312,18 @@ PatchErrorDialog.show(parent, "Multi-patch format error:\n\n" + e.getMessage(), 
 return;
 }
 
-PatchApplier applier = new PatchApplier(repo);
-PatchApplier.PatchResult result = applier.apply(changes);
+        PatchApplier applier = new PatchApplier(repo);
+        applier.setConflictResolver(conflictResolver);
+        PatchApplier.PatchResult result = applier.apply(changes);
 
-if (result.hasFailures()) {
-reportError(result);
-}
+        if (result.hasFailures()) {
+            reportError(result);
+        }
 
-if (result.hasSuccesses()) {
-refreshCallback.run();
-notifyCodeChangedForPatch(changes);
-if (statusLogger != null) {
+        if (result.hasSuccesses()) {
+            refreshCallback.run();
+            notifyCodeChangedForPatch(changes);
+            if (statusLogger != null) {
 List<String> summary = result.successSummary();
 String footer = "─".repeat(32);
 String time = java.time.LocalTime.now()
@@ -359,15 +367,16 @@ PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, 
 return false;
 }
 
-PatchApplier applier = new PatchApplier(repo);
-PatchApplier.PatchResult result = applier.apply(changes);
+        PatchApplier applier = new PatchApplier(repo);
+        applier.setConflictResolver(conflictResolver);
+        PatchApplier.PatchResult result = applier.apply(changes);
 
-if (result.hasFailures()) {
-reportError(result);
-}
+        if (result.hasFailures()) {
+        reportError(result);
+        }
 
-if (result.hasSuccesses()) {
-duplicateDetector.record(text);
+        if (result.hasSuccesses()) {
+        duplicateDetector.record(text);
 undoManager.pushUndo(result.undoSnapshot(), title);
 refreshCallback.run();
 notifyCodeChangedForPatch(changes);

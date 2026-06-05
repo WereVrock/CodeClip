@@ -15,10 +15,24 @@ import java.util.Set;
 
 public class PatchApplier {
 
+    public interface InsertConflictResolver {
+        /**
+         * Called when @@INSERT_METHOD finds a method with the same name and param types
+         * already in the file, but with a different body.
+         * Return true to replace the existing method, false to keep it unchanged.
+         */
+        boolean shouldReplace(String methodName, String existingCode, String incomingCode);
+    }
+
     private final ClassRepository repo;
+    private InsertConflictResolver conflictResolver;
 
     public PatchApplier(ClassRepository repo) {
         this.repo = repo;
+    }
+
+    public void setConflictResolver(InsertConflictResolver resolver) {
+        this.conflictResolver = resolver;
     }
 
     public PatchResult apply(List<PatchChange> changes) {
@@ -421,40 +435,119 @@ private String applyMethodReplace(PatchChange.MethodReplace mr, String code)
     }
 
 private String applyInsertMethod(PatchChange.InsertMethod im, String code)
-            throws PatchException {
+        throws PatchException {
 
-        int insertAfterPos;
+    int insertAfterPos;
 
-        if (im.afterMethod() != null) {
-            List<int[]> matches = findMethodExtents(code, im.afterMethod(), null);
-            if (matches.isEmpty()) {
-                throw new PatchException(
-                        "@@AFTER_METHOD: anchor '" + im.afterMethod() + "' not found in " + im.fileName(),
-                        im.fileName());
-            }
-            if (matches.size() > 1) {
-                throw new PatchException(
-                        "@@AFTER_METHOD: anchor '" + im.afterMethod() + "' is ambiguous ("
-                        + matches.size() + " matches) in " + im.fileName()
-                        + " — use the explicit overload name to target one.",
-                        im.fileName());
-            }
-            insertAfterPos = matches.get(0)[1];
-        } else {
-            insertAfterPos = findLastClassBrace(code);
-            if (insertAfterPos < 0) {
-                throw new PatchException(
-                        "Could not locate the closing brace of the class in " + im.fileName(),
-                        im.fileName());
-            }
+    if (im.afterMethod() != null) {
+        List<int[]> matches = findMethodExtents(code, im.afterMethod(), null);
+        if (matches.isEmpty()) {
+            throw new PatchException(
+                    "@@AFTER_METHOD: anchor '" + im.afterMethod() + "' not found in " + im.fileName(),
+                    im.fileName());
         }
-
-        String before = code.substring(0, insertAfterPos).stripTrailing();
-        String newMethod = im.code().strip();
-        String after = code.substring(insertAfterPos).stripLeading();
-
-        return before + "\n\n" + newMethod + "\n\n" + after;
+        // When the anchor name is overloaded, insert after the last occurrence.
+        // For INSERT the anchor is only a position hint — ambiguity is not an error.
+        insertAfterPos = matches.get(matches.size() - 1)[1];
+    } else {
+        insertAfterPos = findLastClassBrace(code);
+        if (insertAfterPos < 0) {
+            throw new PatchException(
+                    "Could not locate the closing brace of the class in " + im.fileName(),
+                    im.fileName());
+        }
     }
+
+    // --- Duplicate detection ---
+    String incomingCode   = im.code().strip();
+    String incomingName   = extractMethodNameFromCode(incomingCode);
+    String incomingParams = extractParamTypesFromCode(incomingCode);
+
+    if (incomingName != null) {
+        List<int[]> existingMatches = findMethodExtents(code, incomingName, null);
+        for (int[] ext : existingMatches) {
+            String existingCode = code.substring(ext[0], ext[1]).strip();
+
+            // Verify param types actually match before treating as duplicate
+            String existingParams = extractParamTypesFromCode(existingCode);
+            List<String> expectedTypes = parseTypeList(incomingParams);
+            List<String> actualTypes   = parseTypeList(existingParams);
+            if (!paramTypesMatch(expectedTypes, actualTypes)) {
+                continue; // Different overload — not a duplicate, allow insert
+            }
+
+            if (normalizeForComparison(existingCode).equals(normalizeForComparison(incomingCode))) {
+                // Bodies are identical — silently skip, nothing to do
+                return code;
+            }
+
+            // Same signature, different body — delegate to resolver
+            boolean doReplace = conflictResolver != null
+                    && conflictResolver.shouldReplace(incomingName, existingCode, incomingCode);
+
+            if (doReplace) {
+                PatchChange.MethodReplace mr = new PatchChange.MethodReplace(
+                        im.fileName(), incomingName, incomingParams, incomingCode);
+                return applyMethodReplace(mr, code);
+            }
+            // Keep existing — return unchanged, no error
+            return code;
+        }
+    }
+
+    // No duplicate found — normal insert
+    String before = code.substring(0, insertAfterPos).stripTrailing();
+    String after  = code.substring(insertAfterPos).stripLeading();
+    return before + "\n\n" + incomingCode + "\n\n" + after;
+}
+
+/** Extracts the method name from a complete method block. */
+private String extractMethodNameFromCode(String code) {
+    if (code == null || code.isBlank()) return null;
+    for (String line : code.lines().toList()) {
+        String t = line.trim();
+        if (t.isEmpty() || t.startsWith("//") || t.startsWith("*") || t.startsWith("@")) continue;
+        boolean hasKeyword = t.contains("public ") || t.contains("private ")
+                || t.contains("protected ") || t.contains("static ") || t.contains("void ");
+        if (!hasKeyword) continue;
+        int paren = t.indexOf('(');
+        if (paren <= 0) continue;
+        String[] tokens = t.substring(0, paren).trim().split("\\s+");
+        if (tokens.length == 0) continue;
+        String name = tokens[tokens.length - 1];
+        int angle = name.indexOf('<');
+        if (angle > 0) name = name.substring(0, angle);
+        if (name.matches("[a-zA-Z_][a-zA-Z0-9_]*")) return name;
+    }
+    return null;
+}
+
+/** Extracts the raw param-types string (content between first parens) from a method block. */
+private String extractParamTypesFromCode(String code) {
+    if (code == null || code.isBlank()) return null;
+    for (String line : code.lines().toList()) {
+        String t = line.trim();
+        if (t.isEmpty() || t.startsWith("//") || t.startsWith("*") || t.startsWith("@")) continue;
+        int open  = t.indexOf('(');
+        int close = t.lastIndexOf(')');
+        if (open >= 0 && close > open) return t.substring(open + 1, close).trim();
+    }
+    return null;
+}
+
+/**
+ * Normalizes a method body for semantic equality comparison.
+ * Strips all whitespace variation so only structural differences matter.
+ */
+private String normalizeForComparison(String code) {
+    if (code == null) return "";
+    return code.replaceAll("\\r\\n|\\r", "\n")
+               .replaceAll("[ \\t]+", " ")
+               .replaceAll("(?m)^[ \\t]+", "")
+               .replaceAll("(?m)[ \\t]+$", "")
+               .replaceAll("\n{2,}", "\n")
+               .strip();
+}
 
 /**
      * Finds the position of the last top-level closing brace in the source,
