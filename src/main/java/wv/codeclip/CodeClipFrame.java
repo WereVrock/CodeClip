@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.List;
 import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.io.PasteClassHandler;
+import wv.codeclip.modecontext.ModeColors;
 import wv.codeclip.patch.InsertMethodConflictDialog;
 import wv.codeclip.ui.ClassActions;
 import wv.codeclip.ui.SimpleDocumentListener;
@@ -23,6 +24,7 @@ import wv.codeclip.ui.SmartPasteSettings;
 import wv.codeclip.ui.SmartPasteSettingsDialog;
 import wv.codeclip.patch.PatchApplier;
 import wv.codeclip.patch.PatchErrorDialog;
+import wv.codeclip.ui.ClassTreePanel;
 
 public class CodeClipFrame extends JFrame implements java.awt.event.FocusListener {
 
@@ -49,6 +51,8 @@ private boolean internalUpdate = false;
 private boolean logClearLocked = false;
 
 private final JPanel classPanel = new JPanel();
+private ClassTreePanel classTreePanel;
+private boolean treeViewActive = false;
 private JSplitPane split;
 
 private final JCheckBox showMissingFileMessages =
@@ -454,6 +458,35 @@ classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
 JScrollPane classScroll = new JScrollPane(classPanel);
 classScroll.getVerticalScrollBar().setUnitIncrement(16);
 
+classTreePanel = new ClassTreePanel(
+        repo,
+        () -> { refreshText(); classTreePanel.refresh(); },
+        () -> classSearch.getText()
+);
+JScrollPane treeScroll = new JScrollPane(classTreePanel);
+treeScroll.getVerticalScrollBar().setUnitIncrement(16);
+
+JPanel classViewStack = new JPanel(new CardLayout());
+classViewStack.add(classScroll, "list");
+classViewStack.add(treeScroll,  "tree");
+
+JToggleButton treeToggleBtn = new JToggleButton("☰ List");
+treeToggleBtn.setFont(treeToggleBtn.getFont().deriveFont(Font.PLAIN, 12f));
+treeToggleBtn.setFocusable(false);
+treeToggleBtn.setToolTipText("Switch between list view and tree view");
+treeToggleBtn.addActionListener(e -> {
+    treeViewActive = treeToggleBtn.isSelected();
+    CardLayout cl = (CardLayout) classViewStack.getLayout();
+    if (treeViewActive) {
+        classTreePanel.refresh();
+        cl.show(classViewStack, "tree");
+        treeToggleBtn.setText("⊞ Tree");
+    } else {
+        cl.show(classViewStack, "list");
+        treeToggleBtn.setText("☰ List");
+    }
+});
+
 JButton enableAllBtn  = new JButton("Enable All");
 JButton disableAllBtn = new JButton("Disable All");
 enableAllBtn.addActionListener(e -> {
@@ -500,9 +533,13 @@ clearButton.addActionListener(e -> classSearch.setText(""));
 searchPanel.add(clearButton, BorderLayout.WEST);
 searchPanel.add(classSearch, BorderLayout.CENTER);
 
+JPanel searchAndToggleRow = new JPanel(new BorderLayout(4, 0));
+searchAndToggleRow.add(treeToggleBtn, BorderLayout.WEST);
+searchAndToggleRow.add(searchPanel,   BorderLayout.CENTER);
+
 JPanel classListPanel = new JPanel(new BorderLayout(0, 2));
-classListPanel.add(searchPanel, BorderLayout.NORTH);
-classListPanel.add(classScroll, BorderLayout.CENTER);
+classListPanel.add(searchAndToggleRow, BorderLayout.NORTH);
+classListPanel.add(classViewStack,     BorderLayout.CENTER);
 classListPanel.add(enableDisablePanel, BorderLayout.SOUTH);
 
 persistentLogArea = new JTextArea();
@@ -1128,57 +1165,61 @@ charCountLabel.setText("Code Characters: " + totalChars);
 }
 
 private void refreshPanels() {
-List<PanelEntry> entries = new ArrayList<>();
-List<String> insertionOrder = new ArrayList<>(repo.getClassCodeMap().keySet());
+    List<PanelEntry> entries = new ArrayList<>();
+    List<String> insertionOrder = new ArrayList<>(repo.getClassCodeMap().keySet());
 
-for (Component c : classPanel.getComponents()) {
-if (c instanceof JPanel panel) {
-Object storedPath = panel.getClientProperty("path");
-if (storedPath instanceof String path) {
-boolean disabled = repo.getDisabledClasses().contains(path);
-File file = repo.getClassFileMap().get(path);
-String name = (file != null) ? file.getName() : path;
-int insertionIdx = insertionOrder.indexOf(path);
-entries.add(new PanelEntry(panel, path, name, disabled, insertionIdx));
+    for (Component c : classPanel.getComponents()) {
+        if (c instanceof JPanel panel) {
+            Object storedPath = panel.getClientProperty("path");
+            if (storedPath instanceof String path) {
+                boolean disabled = repo.getDisabledClasses().contains(path);
+                File file = repo.getClassFileMap().get(path);
+                String name = (file != null) ? file.getName() : path;
+                int insertionIdx = insertionOrder.indexOf(path);
+                entries.add(new PanelEntry(panel, path, name, disabled, insertionIdx));
 
-panel.setBackground(disabled
-? wv.codeclip.modecontext.ModeColors.getDisabledBackground()
-: wv.codeclip.modecontext.ModeColors.getEnabledBackground());
-boolean unsynced = isUnsynced(path);
-Object labelObj = panel.getClientProperty("label");
-if (labelObj instanceof JLabel lbl) {
-lbl.setForeground(unsynced ? UNSYNCED_COLOR : UIManager.getColor("Label.foreground"));
-lbl.setToolTipText(unsynced ? "Modified since last checkpoint" : "In sync with checkpoint");
-}
-for (Component child : panel.getComponents()) {
-if (child instanceof JButton btn
-&& (btn.getText().equals("Enable") || btn.getText().equals("Disable"))) {
-btn.setText(disabled ? "Enable" : "Disable");
-}
-}
-}
-}
-}
+                panel.setBackground(disabled
+                        ? ModeColors.getDisabledBackground()
+                        : ModeColors.getEnabledBackground());
+                boolean unsynced = isUnsynced(path);
+                Object labelObj = panel.getClientProperty("label");
+                if (labelObj instanceof JLabel lbl) {
+                    lbl.setForeground(unsynced ? UNSYNCED_COLOR : UIManager.getColor("Label.foreground"));
+                    lbl.setToolTipText(unsynced ? "Modified since last checkpoint" : "In sync with checkpoint");
+                }
+                for (Component child : panel.getComponents()) {
+                    if (child instanceof JButton btn
+                            && (btn.getText().equals("Enable") || btn.getText().equals("Disable"))) {
+                        btn.setText(disabled ? "Enable" : "Disable");
+                    }
+                }
+            }
+        }
+    }
 
-Comparator<PanelEntry> comparator = switch (sortMode) {
-case 0 -> Comparator.comparingInt(PanelEntry::insertionIdx);
-case 1 -> Comparator.comparing(e -> e.name().toLowerCase());
-case 2 -> Comparator
-.comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
-.thenComparingInt(PanelEntry::insertionIdx);
-case 3 -> Comparator
-.comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
-.thenComparing(e -> e.name().toLowerCase());
-default -> Comparator.comparingInt(PanelEntry::insertionIdx);
-};
-entries.sort(comparator);
+    Comparator<PanelEntry> comparator = switch (sortMode) {
+        case 0 -> Comparator.comparingInt(PanelEntry::insertionIdx);
+        case 1 -> Comparator.comparing(e -> e.name().toLowerCase());
+        case 2 -> Comparator
+                .comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
+                .thenComparingInt(PanelEntry::insertionIdx);
+        case 3 -> Comparator
+                .comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
+                .thenComparing(e -> e.name().toLowerCase());
+        default -> Comparator.comparingInt(PanelEntry::insertionIdx);
+    };
+    entries.sort(comparator);
 
-classPanel.removeAll();
-for (PanelEntry entry : entries) {
-classPanel.add(entry.panel());
-}
-classPanel.revalidate();
-classPanel.repaint();
+    classPanel.removeAll();
+    for (PanelEntry entry : entries) {
+        classPanel.add(entry.panel());
+    }
+    classPanel.revalidate();
+    classPanel.repaint();
+
+    if (treeViewActive && classTreePanel != null) {
+        classTreePanel.refresh();
+    }
 }
 
 private record PanelEntry(JPanel panel, String path, String name,
