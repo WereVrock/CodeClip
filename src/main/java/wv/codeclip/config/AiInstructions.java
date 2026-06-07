@@ -132,4 +132,4 @@ public final class AiInstructions {
         Smart Paste extracts and applies them in document order together with any @@PATCH blocks.
         ================================================================
         """;
-}
+} 
