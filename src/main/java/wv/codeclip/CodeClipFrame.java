@@ -7,6 +7,8 @@ import wv.codeclip.model.ClassRepository;
 import javax.swing.*;
 import javax.swing.text.*;
 import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.KeyEvent;
 import java.io.File;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -421,17 +423,32 @@ JScrollPane notesScroll = new JScrollPane(notesTextPane);
 JTextField classSearch = new JTextField();
 classSearch.setToolTipText("Filter classes…");
 classSearch.getDocument().addDocumentListener(new SimpleDocumentListener(() -> {
-String q = classSearch.getText().trim().toLowerCase();
-for (Component c : classPanel.getComponents()) {
-if (c instanceof JPanel p) {
-Object nameObj = p.getClientProperty("name");
-String n = nameObj instanceof String s ? s.toLowerCase() : "";
-c.setVisible(q.isEmpty() || n.contains(q));
-}
-}
-classPanel.revalidate();
-classPanel.repaint();
+    String q = classSearch.getText().trim().toLowerCase();
+    for (Component c : classPanel.getComponents()) {
+        if (c instanceof JPanel p) {
+            Object nameObj = p.getClientProperty("name");
+            String n = nameObj instanceof String s ? s.toLowerCase() : "";
+            c.setVisible(q.isEmpty() || n.contains(q));
+        }
+    }
+    classPanel.revalidate();
+    classPanel.repaint();
 }));
+// Clear + refresh helper and key bindings (Esc / Enter)
+Runnable clearAndRefresh = () -> {
+    classSearch.setText("");
+    classSearch.requestFocus();
+};
+InputMap im = classSearch.getInputMap(JComponent.WHEN_FOCUSED);
+ActionMap am = classSearch.getActionMap();
+im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "clearSearch");
+im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "clearSearch");
+am.put("clearSearch", new AbstractAction() {
+    @Override
+    public void actionPerformed(ActionEvent e) {
+        clearAndRefresh.run();
+    }
+});
 
 classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
 JScrollPane classScroll = new JScrollPane(classPanel);
@@ -473,8 +490,18 @@ enableDisableRow.add(disableAllBtn);
 enableDisablePanel.add(enableDisableRow);
 enableDisablePanel.add(sortOrder);
 
+JPanel searchPanel = new JPanel(new BorderLayout(4, 0));
+JButton clearButton = new JButton("✕");
+clearButton.setFocusable(false);
+clearButton.setMargin(new Insets(0, 0, 0, 0));
+clearButton.setPreferredSize(new Dimension(28, 26));
+clearButton.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
+clearButton.addActionListener(e -> classSearch.setText(""));
+searchPanel.add(clearButton, BorderLayout.WEST);
+searchPanel.add(classSearch, BorderLayout.CENTER);
+
 JPanel classListPanel = new JPanel(new BorderLayout(0, 2));
-classListPanel.add(classSearch, BorderLayout.NORTH);
+classListPanel.add(searchPanel, BorderLayout.NORTH);
 classListPanel.add(classScroll, BorderLayout.CENTER);
 classListPanel.add(enableDisablePanel, BorderLayout.SOUTH);
 
