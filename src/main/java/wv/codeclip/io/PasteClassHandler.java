@@ -132,10 +132,11 @@ private void handlePasteFromClipboardInternal() {
         return;
     }
 
-    if (text.trim().startsWith("@@Copy")) {
-        copierCommand.handle(text.trim());
+    if (text.trim().startsWith("@@Copy") || isFencedCopyCommand(text.trim())) {
+        copierCommand.handle(stripFence(text.trim()));
         return;
     }
+
 
     if (Boolean.TRUE.equals(multiPatchMode.get()) &&
         (PatchParser.containsPatch(text) || looksLikePatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
@@ -711,7 +712,28 @@ public void clearDuplicateHistory() {
     duplicateDetector.clearHistory();
 }
 
+private static boolean isFencedCopyCommand(String text) {
+    String lower = text.toLowerCase();
+    if (!lower.startsWith("```")) return false;
+    // strip opening fence line
+    int nl = text.indexOf('\n');
+    if (nl < 0) return false;
+    String body = text.substring(nl + 1).stripLeading();
+    return body.startsWith("@@Copy");
 }
+
+private static String stripFence(String text) {
+    if (!text.startsWith("```")) return text;
+    int nl = text.indexOf('\n');
+    if (nl < 0) return text;
+    String body = text.substring(nl + 1);
+    // strip trailing ```
+    if (body.endsWith("```")) body = body.substring(0, body.length() - 3);
+    return body.strip();
+}}
+
+
+
 
 
 
