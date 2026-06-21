@@ -30,7 +30,7 @@ public class PasteClassHandler {
 
 private final ClassRepository repo;
 private final JFrame parent;
-private java.util.function.Consumer<PatchApplier.PatchResult> errorCallback;
+private java.util.function.Consumer<List<PatchApplier.PatchResult>> errorCallback;
 private final Runnable refreshCallback;
 private final java.util.function.Consumer<String> statusLogger;
 private final BiConsumer<String, String> addPanelCallback;
@@ -171,7 +171,7 @@ private void handlePasteFromClipboardInternal() {
 // Patch handling
 // ------------------------------------------------------------------
 
-public void setErrorCallback(java.util.function.Consumer<PatchApplier.PatchResult> errorCallback) {
+public void setErrorCallback(java.util.function.Consumer<List<PatchApplier.PatchResult>> errorCallback) {
 this.errorCallback = errorCallback;
 }
 
@@ -188,8 +188,13 @@ if (postPasteCallback != null) postPasteCallback.accept(changed);
 }
 
 private void reportError(PatchApplier.PatchResult result) {
-if (errorCallback != null) errorCallback.accept(result);
-PatchErrorDialog.show((JFrame) parent, result, repo);
+reportBatchErrors(List.of(result));
+}
+
+private void reportBatchErrors(List<PatchApplier.PatchResult> results) {
+if (results.isEmpty()) return;
+if (errorCallback != null) errorCallback.accept(results);
+PatchErrorDialog.show((JFrame) parent, results, repo);
 }
 
 private boolean handleSmartPaste(String text) {
@@ -208,14 +213,17 @@ return false;
 List<String> logLines = new ArrayList<>();
 Map<String, String> combinedSnapshot = new java.util.LinkedHashMap<>();
 List<String> titles = new ArrayList<>();
+List<PatchApplier.PatchResult> failedResults = new ArrayList<>();
 
 for (SmartPasteExtractor.Entry entry : entries) {
 if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
-handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles);
+handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles, failedResults);
 } else if (entry instanceof SmartPasteExtractor.ClassEntry ce) {
 handlePasteInternal(ce.text(), logLines, combinedSnapshot, titles);
 }
 }
+
+reportBatchErrors(failedResults);
 
 if (!combinedSnapshot.isEmpty()) {
 String combinedTitle = titles.isEmpty() ? "Smart Paste"
@@ -248,7 +256,8 @@ return !combinedSnapshot.isEmpty();
 }
 
 private void handleSmartPatchEntry(String patchText, List<String> logLines,
-Map<String, String> combinedSnapshot, List<String> titles) {
+Map<String, String> combinedSnapshot, List<String> titles,
+List<PatchApplier.PatchResult> failedResults) {
 if (duplicateDetector.check(patchText) == PatchDuplicateDetector.Result.DUPLICATE) {
 String t = PatchParser.extractTitle(patchText);
 String d = PatchParser.extractDesc(patchText);
@@ -279,7 +288,7 @@ return;
 PatchApplier applier = new PatchApplier(repo);
 applier.setConflictResolver(conflictResolver);
 PatchApplier.PatchResult result = applier.apply(changes);
-if (result.hasFailures()) reportError(result);
+if (result.hasFailures()) failedResults.add(result);
 if (result.hasSuccesses()) {
 duplicateDetector.record(patchText);
 // Merge into combined snapshot — don't overwrite earlier entries for same path

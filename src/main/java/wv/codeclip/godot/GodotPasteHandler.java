@@ -40,7 +40,7 @@ public class GodotPasteHandler {
     private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
     private wv.codeclip.commands.CopierCommand copierCommand;
 
-    private Consumer<PatchApplier.PatchResult> errorCallback;
+    private Consumer<List<PatchApplier.PatchResult>> errorCallback;
     private Consumer<Boolean> postPasteCallback;
 
     public GodotPasteHandler(
@@ -64,7 +64,7 @@ public class GodotPasteHandler {
         this.copierCommand = new wv.codeclip.commands.CopierCommand(repo, statusLogger);
     }
 
-    public void setErrorCallback(Consumer<PatchApplier.PatchResult> errorCallback) {
+    public void setErrorCallback(Consumer<List<PatchApplier.PatchResult>> errorCallback) {
         this.errorCallback = errorCallback;
     }
 
@@ -260,12 +260,15 @@ private boolean handleSmartPaste(String text) {
     List<String> logLines = new ArrayList<>();
     Map<String, String> combinedSnapshot = new LinkedHashMap<>();
     List<String> titles = new ArrayList<>();
+    List<PatchApplier.PatchResult> failedResults = new ArrayList<>();
 
     for (SmartPasteExtractor.Entry entry : patchEntries) {
         if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
-            handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles);
+            handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles, failedResults);
         }
     }
+
+    reportBatchErrors(failedResults);
 
     for (GodotScriptExtractor.ScriptEntry script : scriptEntries) {
         boolean ok = handleGdScriptPaste(script.code(), script.fileName());
@@ -294,7 +297,8 @@ private boolean handleSmartPaste(String text) {
 }
 
 private void handleSmartPatchEntry(String patchText, List<String> logLines,
-            Map<String, String> combinedSnapshot, List<String> titles) {
+            Map<String, String> combinedSnapshot, List<String> titles,
+            List<PatchApplier.PatchResult> failedResults) {
         if (duplicateDetector.check(patchText) == PatchDuplicateDetector.Result.DUPLICATE) {
             String t = PatchParser.extractTitle(patchText);
             String d = PatchParser.extractDesc(patchText);
@@ -318,7 +322,7 @@ private void handleSmartPatchEntry(String patchText, List<String> logLines,
         }
 
         PatchApplier.PatchResult result = new PatchApplier(repo).apply(changes);
-        if (result.hasFailures()) reportError(result);
+        if (result.hasFailures()) failedResults.add(result);
         if (result.hasSuccesses()) {
             duplicateDetector.record(patchText);
             for (Map.Entry<String, String> e : result.undoSnapshot().entrySet()) {
@@ -381,8 +385,13 @@ private void handleSmartPatchEntry(String patchText, List<String> logLines,
     }
 
     private void reportError(PatchApplier.PatchResult result) {
-        if (errorCallback != null) errorCallback.accept(result);
-        PatchErrorDialog.show(parent, result, repo);
+        reportBatchErrors(List.of(result));
+    }
+
+    private void reportBatchErrors(List<PatchApplier.PatchResult> results) {
+        if (results.isEmpty()) return;
+        if (errorCallback != null) errorCallback.accept(results);
+        PatchErrorDialog.show(parent, results, repo);
     }
 
     private void firePostPaste(boolean changed) {

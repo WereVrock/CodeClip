@@ -79,7 +79,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private final SettingsManager settings = new SettingsManager();
     private JCheckBoxMenuItem autoReplaceInsertConflictItem;
     private CheckpointDialog checkpointDialog = null;
-    private PatchApplier.PatchResult lastPatchError = null;
+    private List<PatchApplier.PatchResult> lastPatchErrors = null;
     private JButton lastErrorBtn;
     private JMenuItem lastErrorMenuItem;
     private Runnable syncUndoRedo;
@@ -366,8 +366,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         lastErrorMenuItem = new JMenuItem("Last Error");
         lastErrorMenuItem.setEnabled(false);
         lastErrorMenuItem.addActionListener(e -> {
-            if (lastPatchError != null) {
-                PatchErrorDialog.show(this, lastPatchError, repo);
+            if (lastPatchErrors != null) {
+                PatchErrorDialog.show(this, lastPatchErrors, repo);
             }
         });
         systemMenu.add(lastErrorMenuItem);
@@ -1715,11 +1715,12 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         checkpointDialog.setVisible(true);
     }
 
-    public void setLastPatchError(PatchApplier.PatchResult result) {
-        lastPatchError = result;
-        lastErrorBtn.setEnabled(result != null);
+    public void setLastPatchError(List<PatchApplier.PatchResult> results) {
+        lastPatchErrors = (results != null && !results.isEmpty()) ? results : null;
+        boolean hasError = lastPatchErrors != null;
+        lastErrorBtn.setEnabled(hasError);
         if (lastErrorMenuItem != null) {
-            lastErrorMenuItem.setEnabled(result != null);
+            lastErrorMenuItem.setEnabled(hasError);
         }
     }
 
