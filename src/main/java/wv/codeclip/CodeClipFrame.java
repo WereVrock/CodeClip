@@ -2263,6 +2263,10 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
 
         dlg.pack();
         dlg.setMinimumSize(new Dimension(400, 300));
+        int frameWidth = CodeClipFrame.this.getWidth();
+        if (dlg.getWidth() > frameWidth) {
+            dlg.setSize(frameWidth, dlg.getHeight());
+        }
         dlg.setLocationRelativeTo(this);
         dlg.setVisible(true);
     }
