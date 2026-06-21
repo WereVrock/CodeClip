@@ -1291,8 +1291,22 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
     }
 
-    private record VersionEvent(String title, String files, String timestamp) {
+    // Converted from record to mutable class so the title can be renamed
+    private static class VersionEvent {
+        private String title;
+        private final String files;
+        private final String timestamp;
 
+        VersionEvent(String title, String files, String timestamp) {
+            this.title = title;
+            this.files = files;
+            this.timestamp = timestamp;
+        }
+
+        String title() { return title; }
+        void setTitle(String title) { this.title = title; }
+        String files() { return files; }
+        String timestamp() { return timestamp; }
     }
 
     private String describeEntry(wv.codeclip.patch.PatchUndoManager.Entry entry) {
@@ -1926,7 +1940,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         versionPanel.repaint();
     }
 
-    private JPanel createVersionRow(VersionEvent ev, boolean active) {
+private JPanel createVersionRow(VersionEvent ev, boolean active) {
         Color sepColor = UIManager.getColor("Separator.foreground");
         if (sepColor == null) {
             sepColor = Color.LIGHT_GRAY;
@@ -1950,7 +1964,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         row.setBackground(bg);
         row.setOpaque(true);
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 120)); // allow variable height
         row.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createMatteBorder(0, 0, 1, 0, sepColor),
                 BorderFactory.createEmptyBorder(5, 8, 5, 8)));
@@ -1993,11 +2007,16 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         content.add(header);
 
         if (ev.files() != null && !ev.files().isBlank()) {
-            JLabel filesLbl = new JLabel(ev.files());
-            filesLbl.setFont(filesLbl.getFont().deriveFont(Font.PLAIN, 11f));
-            filesLbl.setForeground(active ? new Color(70, 70, 200) : new Color(170, 170, 170));
-            filesLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-            content.add(filesLbl);
+            // Word-wrapping file list (no truncation)
+            JTextArea filesArea = new JTextArea(ev.files());
+            filesArea.setFont(baseFont.deriveFont(Font.PLAIN, 11f));
+            filesArea.setForeground(active ? new Color(70, 70, 200) : new Color(170, 170, 170));
+            filesArea.setEditable(false);
+            filesArea.setLineWrap(true);
+            filesArea.setWrapStyleWord(true);
+            filesArea.setOpaque(false);
+            filesArea.setAlignmentX(Component.LEFT_ALIGNMENT);
+            content.add(filesArea);
         }
 
         row.add(icon, BorderLayout.WEST);
@@ -2014,7 +2033,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         return row;
     }
 
-    /**
+/**
      * Inserts a single styled line at the top of the persistent log pane.
      */
     private void insertPersistentLogLine(String message, boolean isSeparator) {
@@ -2108,7 +2127,7 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
         dlg.setLayout(new BorderLayout(10, 10));
         dlg.getRootPane().setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
 
-        // Use JTextPane for selectable styled text
+        // Selectable styled text
         JTextPane detailPane = new JTextPane();
         detailPane.setEditable(false);
         detailPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -2172,8 +2191,21 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
 
         dlg.add(new JScrollPane(detailPane), BorderLayout.CENTER);
 
-        // Button row
+        // Button row with rename title
         JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+
+        JButton renameBtn = new JButton("Rename Title");
+        renameBtn.addActionListener(e -> {
+            String newTitle = JOptionPane.showInputDialog(dlg, 
+                "Enter new title:", ev.title());
+            if (newTitle != null && !newTitle.trim().isEmpty()) {
+                ev.setTitle(newTitle.trim());
+                refreshVersionPanel();
+                dlg.dispose();
+            }
+        });
+        btnRow.add(renameBtn);
+
         JButton enableOnlyBtn = new JButton("Enable Only These");
         enableOnlyBtn.addActionListener(e -> {
             String filesStr = ev.files();
@@ -2222,9 +2254,11 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
             dlg.dispose();
         });
         btnRow.add(enableOnlyBtn);
+
         JButton closeBtn = new JButton("Close");
         closeBtn.addActionListener(e -> dlg.dispose());
         btnRow.add(closeBtn);
+
         dlg.add(btnRow, BorderLayout.SOUTH);
 
         dlg.pack();
