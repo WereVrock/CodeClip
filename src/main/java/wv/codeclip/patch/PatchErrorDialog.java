@@ -416,7 +416,8 @@ private void refreshBatchContent() {
     }
 
 // Enhanced reconstructPatch that marks each offending change with its error
-    private String reconstructPatch(List<PatchChange> changes, String errorReport, Map<String, String> errorsByFile) {
+
+private String reconstructPatch(List<PatchChange> changes, String errorReport, Map<String, String> errorsByFile) {
         StringBuilder sb = new StringBuilder();
         sb.append("@@PATCH\n");
         sb.append("@@TITLE: Retry failed/skipped patch\n");
@@ -464,16 +465,11 @@ private void refreshBatchContent() {
             }
         }
 
-        sb.append("@@END\n\n");
-        sb.append("// === PATCH FAILURE REPORT ===\n");
-        for (String line : errorReport.split("\n")) {
-            sb.append("// ").append(line).append("\n");
-        }
-
+        sb.append("@@END");
         return sb.toString();
     }
 
-    private String findClassCode(ClassRepository repo, String fileName) {
+private String findClassCode(ClassRepository repo, String fileName) {
         String bareName = fileName;
         int lastSlash = fileName.lastIndexOf('/');
         if (lastSlash < 0) lastSlash = fileName.lastIndexOf('\\');

@@ -2,8 +2,8 @@ package wv.codeclip.patch;
 
 public class TestClass {
 
-public static String greet() {
-        return "Hello, beautiful World! 🌟";
+    public static String greet() {
+        return "This will never match";
     }
 
 /**
@@ -19,7 +19,7 @@ public static String greet() {
      */
 
 public static String farewell() {
-        return "Goodbye, and thanks for the wonderful journey!";
+        return "Farewell, until we meet again!";
     }
 
 private static final String VERY_LONG_CONSTANT_NAME_THAT_EXCEEDS_NORMAL_WIDTH = 
@@ -32,5 +32,9 @@ public static String getConstantValue() {
 public static String getGreetingWithTime(String timeOfDay) {
         return "Good " + timeOfDay + ", wonderful person!";
     }
+
+public static String getAppName() {
+    return "CodeClip Patch Tester";
+}
 
 }
