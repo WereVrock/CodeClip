@@ -45,6 +45,7 @@ private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetec
 private final java.util.concurrent.atomic.AtomicBoolean pasting = new java.util.concurrent.atomic.AtomicBoolean(false);
 private final wv.codeclip.patch.PatchUndoManager undoManager;
 private final wv.codeclip.commands.CopierCommand copierCommand;
+private final wv.codeclip.commands.EnablerCommand enablerCommand;
 private java.util.function.Consumer<Boolean> postPasteCallback;
 private PatchApplier.InsertConflictResolver conflictResolver;
 
@@ -91,6 +92,7 @@ this.multiPatchMode = multiPatchMode;
 this.errorCallback = null;
 this.undoManager = undoManager;
 this.copierCommand = new wv.codeclip.commands.CopierCommand(repo, statusLogger);
+this.enablerCommand = new wv.codeclip.commands.EnablerCommand(repo, refreshCallback, statusLogger);
 
 this.clipboard = new ClipboardService();
 this.parser = new JavaSourceParser();
@@ -128,7 +130,7 @@ private void handlePasteFromClipboardInternal() {
 
     if (text.trim().startsWith("@@Enable")) {
         boolean changed = handleEnable(text.trim());
-        firePostPaste(changed);
+        firePostPaste(false);
         return;
     }
 
@@ -604,40 +606,7 @@ return choice == JOptionPane.OK_OPTION;
 // ------------------------------------------------------------------
 
 private boolean handleEnable(String text) {
-// Parse: @@Enable Foo.java, Bar.java
-String arg = text.substring("@@Enable".length()).trim();
-if (arg.isEmpty()) return false;
-
-String[] parts = arg.split("[,\\s]+");
-List<String> targets = new ArrayList<>();
-for (String p : parts) {
-String trimmed = p.trim();
-if (!trimmed.isEmpty()) targets.add(trimmed.toLowerCase());
-}
-if (targets.isEmpty()) return false;
-
-// Disable all
-repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
-
-// Enable matched
-List<String> enabled = new ArrayList<>();
-for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
-if (entry.getValue() == null) continue;
-String name = entry.getValue().getName().toLowerCase();
-for (String target : targets) {
-if (name.equals(target) || name.equals(target + ".java")) {
-repo.getDisabledClasses().remove(entry.getKey());
-enabled.add(entry.getValue().getName());
-break;
-}
-}
-}
-
-refreshCallback.run();
-if (statusLogger != null) {
-statusLogger.accept("@@Enable: " + String.join(", ", enabled));
-}
-return true;
+    return enablerCommand.handle(text);
 }
 
 private boolean looksLikeJavaSource(String text) {
