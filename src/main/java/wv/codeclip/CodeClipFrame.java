@@ -2103,93 +2103,137 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         logRawLines.add(0, new RawLogLine(text, isSep));
     }
 
-    private void showVersionDetail(VersionEvent ev, boolean active) {
+private void showVersionDetail(VersionEvent ev, boolean active) {
         JDialog dlg = new JDialog(this, "Version Detail", true);
         dlg.setLayout(new BorderLayout(10, 10));
         dlg.getRootPane().setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
 
-        JPanel info = new JPanel();
-        info.setLayout(new BoxLayout(info, BoxLayout.Y_AXIS));
+        // Use JTextPane for selectable styled text
+        JTextPane detailPane = new JTextPane();
+        detailPane.setEditable(false);
+        detailPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        detailPane.setBackground(UIManager.getColor("Panel.background"));
+        detailPane.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
 
-        Font bold = UIManager.getFont("Label.font").deriveFont(Font.BOLD, 13f);
-        Font plain = UIManager.getFont("Label.font").deriveFont(Font.PLAIN, 12f);
-        Font small = UIManager.getFont("Label.font").deriveFont(Font.PLAIN, 11f);
+        StyledDocument doc = detailPane.getStyledDocument();
+        Style base = detailPane.addStyle("base", null);
+        StyleConstants.setFontFamily(base, Font.MONOSPACED);
+        StyleConstants.setFontSize(base, 12);
+        StyleConstants.setForeground(base, UIManager.getColor("TextArea.foreground") != null 
+            ? UIManager.getColor("TextArea.foreground") : Color.BLACK);
 
-        JLabel titleLbl = new JLabel(ev.title());
-        titleLbl.setFont(bold);
-        titleLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-        info.add(titleLbl);
-        info.add(Box.createVerticalStrut(6));
+        Style titleStyle = detailPane.addStyle("title", base);
+        StyleConstants.setBold(titleStyle, true);
+        StyleConstants.setFontSize(titleStyle, 13);
 
-        JLabel timeLbl = new JLabel("Time: " + ev.timestamp());
-        timeLbl.setFont(plain);
-        timeLbl.setForeground(new Color(80, 80, 80));
-        timeLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-        info.add(timeLbl);
-        info.add(Box.createVerticalStrut(6));
+        Style smallStyle = detailPane.addStyle("small", base);
+        StyleConstants.setFontSize(smallStyle, 11);
+        StyleConstants.setForeground(smallStyle, new Color(80, 80, 80));
 
-        JLabel statusLbl = new JLabel("Status: " + (active ? "Active" : "Undone"));
-        statusLbl.setFont(plain);
-        statusLbl.setForeground(active ? new Color(30, 130, 30) : new Color(160, 40, 40));
-        statusLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-        info.add(statusLbl);
-        info.add(Box.createVerticalStrut(10));
+        Style activeStatusStyle = detailPane.addStyle("activeStatus", base);
+        StyleConstants.setForeground(activeStatusStyle, new Color(30, 130, 30));
+        StyleConstants.setBold(activeStatusStyle, true);
 
-        if (ev.files() != null && !ev.files().isBlank()) {
-            JLabel filesHeader = new JLabel("Altered files:");
-            filesHeader.setFont(bold.deriveFont(Font.BOLD, 12f));
-            filesHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
-            info.add(filesHeader);
-            info.add(Box.createVerticalStrut(3));
+        Style undoneStatusStyle = detailPane.addStyle("undoneStatus", base);
+        StyleConstants.setForeground(undoneStatusStyle, new Color(160, 40, 40));
+        StyleConstants.setBold(undoneStatusStyle, true);
 
-            for (String file : ev.files().split(",")) {
-                String f = file.trim();
-                if (f.isEmpty()) {
-                    continue;
-                }
-                // Determine if it was a whole-class paste or patch
-                boolean isWhole = isWholeClassFile(f);
-                String marker = isWhole ? "  ● whole class" : "  ⚡ patch";
-                Color mc = isWhole ? new Color(40, 100, 200) : new Color(150, 80, 0);
+        Style wholeClassStyle = detailPane.addStyle("wholeClass", base);
+        StyleConstants.setForeground(wholeClassStyle, new Color(40, 100, 200));
 
-                JPanel fileRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-                fileRow.setOpaque(false);
-                fileRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        Style patchStyle = detailPane.addStyle("patchStyle", base);
+        StyleConstants.setForeground(patchStyle, new Color(150, 80, 0));
 
-                JLabel nameLbl = new JLabel(f);
-                nameLbl.setFont(plain);
-
-                JLabel typeLbl = new JLabel(marker);
-                typeLbl.setFont(small);
-                typeLbl.setForeground(mc);
-
-                fileRow.add(nameLbl);
-                fileRow.add(typeLbl);
-                info.add(fileRow);
+        try {
+            doc.insertString(doc.getLength(), ev.title() + "\n", titleStyle);
+            doc.insertString(doc.getLength(), "Time: " + ev.timestamp() + "\n", smallStyle);
+            if (active) {
+                doc.insertString(doc.getLength(), "Status: Active\n", activeStatusStyle);
+            } else {
+                doc.insertString(doc.getLength(), "Status: Undone\n", undoneStatusStyle);
             }
-        } else {
-            JLabel noFiles = new JLabel("No file info recorded.");
-            noFiles.setFont(plain);
-            noFiles.setForeground(Color.GRAY);
-            noFiles.setAlignmentX(Component.LEFT_ALIGNMENT);
-            info.add(noFiles);
-        }
+            doc.insertString(doc.getLength(), "\n", base);
 
-        dlg.add(new JScrollPane(info), BorderLayout.CENTER);
+            if (ev.files() != null && !ev.files().isBlank()) {
+                doc.insertString(doc.getLength(), "Altered files:\n", base);
+                for (String file : ev.files().split(",")) {
+                    String f = file.trim();
+                    if (f.isEmpty()) continue;
+                    boolean isWhole = isWholeClassFile(f);
+                    String marker = isWhole ? "  ● whole class" : "  ⚡ patch";
+                    doc.insertString(doc.getLength(), "  " + f, base);
+                    doc.insertString(doc.getLength(), marker + "\n", isWhole ? wholeClassStyle : patchStyle);
+                }
+            } else {
+                doc.insertString(doc.getLength(), "No file info recorded.\n", base);
+            }
+            detailPane.setCaretPosition(0);
+        } catch (BadLocationException ignored) {}
 
-        JButton close = new JButton("Close");
-        close.addActionListener(e -> dlg.dispose());
-        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        btnRow.add(close);
+        dlg.add(new JScrollPane(detailPane), BorderLayout.CENTER);
+
+        // Button row
+        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        JButton enableOnlyBtn = new JButton("Enable Only These");
+        enableOnlyBtn.addActionListener(e -> {
+            String filesStr = ev.files();
+            if (filesStr == null || filesStr.isBlank()) {
+                JOptionPane.showMessageDialog(dlg, "No files recorded for this version event.");
+                return;
+            }
+            java.util.List<String> targetNames = new java.util.ArrayList<>();
+            for (String f : filesStr.split(",")) {
+                String trimmed = f.trim();
+                if (!trimmed.isEmpty()) targetNames.add(trimmed.toLowerCase());
+            }
+            if (targetNames.isEmpty()) return;
+
+            // Disable all, then re-enable matched files
+            repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
+            java.util.List<String> enabled = new java.util.ArrayList<>();
+            java.util.List<String> notFound = new java.util.ArrayList<>();
+
+            for (String target : targetNames) {
+                boolean found = false;
+                for (java.util.Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+                    java.io.File file = entry.getValue();
+                    if (file == null) continue;
+                    String name = file.getName().toLowerCase();
+                    if (name.equals(target) || name.equals(target + ".java") || name.equals(target + ".gd")) {
+                        repo.getDisabledClasses().remove(entry.getKey());
+                        enabled.add(file.getName());
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    notFound.add(target);
+                }
+            }
+
+            refreshText();
+            refreshPanels();
+            if (!enabled.isEmpty()) {
+                appendTempLog("Enabled only version files: " + String.join(", ", enabled));
+            }
+            if (!notFound.isEmpty()) {
+                appendTempLog("Warning: not found in loaded classes: " + String.join(", ", notFound));
+            }
+            dlg.dispose();
+        });
+        btnRow.add(enableOnlyBtn);
+        JButton closeBtn = new JButton("Close");
+        closeBtn.addActionListener(e -> dlg.dispose());
+        btnRow.add(closeBtn);
         dlg.add(btnRow, BorderLayout.SOUTH);
 
         dlg.pack();
-        dlg.setMinimumSize(new Dimension(360, 240));
+        dlg.setMinimumSize(new Dimension(400, 300));
         dlg.setLocationRelativeTo(this);
         dlg.setVisible(true);
     }
 
-    /**
+/**
      * Heuristic: if the entry's title starts with "Class" it was a whole-class
      * paste; otherwise it was a patch. Falls back to checking the undo manager
      * top entry title.
