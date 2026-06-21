@@ -1296,17 +1296,20 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         private String title;
         private final String files;
         private final String timestamp;
+        private final String targetBuild;      // BUILD_NO at the time of this version
 
-        VersionEvent(String title, String files, String timestamp) {
+        VersionEvent(String title, String files, String timestamp, String targetBuild) {
             this.title = title;
             this.files = files;
             this.timestamp = timestamp;
+            this.targetBuild = targetBuild;
         }
 
         String title() { return title; }
         void setTitle(String title) { this.title = title; }
         String files() { return files; }
         String timestamp() { return timestamp; }
+        String targetBuild() { return targetBuild; }
     }
 
     private String describeEntry(wv.codeclip.patch.PatchUndoManager.Entry entry) {
@@ -1377,6 +1380,9 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             repo.getClassCodeMap().put(path, content);
             repo.getClassFileMap().put(path, file);
             repo.setCheckpoint(path, content);
+            // Extract build number from the restored content to display in version event
+            String oldBuild = extractBuildNoFromContent(content);
+            pendingTargetBuild = oldBuild != null ? oldBuild : "?";
             refreshText();
             refreshTitle();
         } catch (java.io.IOException ex) {
@@ -1613,9 +1619,13 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         }
         String buildNo36 = Integer.toString(nextBuildNo, 36);
         String content = "LAST_UPDATED=" + timestamp + "\nBUILD_NO=" + buildNo36 + "\n";
+        // For the case where stampBuildInfoWithContent is called instead,
+        // we also need to extract the build number from the old content if applicable
+        pendingTargetBuild = buildNo36;
 
-// Log target build info
+        // Log target build info
         appendTempLog("Target Build: #" + buildNo36 + " --- " + timestamp);
+        pendingTargetBuild = buildNo36;   // for the version event about to be created
 
         String path = file.getAbsolutePath();
         String oldContent = repo.getClassCodeMap().get(path);
@@ -1883,6 +1893,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         });
     }
 
+    private String pendingTargetBuild = null;  // set by stampBuildInfo before version event created
+
     private void addVersionEventFromUndoTop() {
         wv.codeclip.patch.PatchUndoManager.Entry top = undoManager.peekUndo();
         if (top == null) {
@@ -1901,8 +1913,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         }
         String time = java.time.LocalTime.now()
                 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
-        versionHistory.add(new VersionEvent(title, files, time));
+        String build = pendingTargetBuild != null ? pendingTargetBuild : "?";
+        versionHistory.add(new VersionEvent(title, files, time, build));
         versionCurrentIdx = versionHistory.size() - 1;
+        pendingTargetBuild = null;
         refreshVersionPanel();
     }
 
@@ -2166,6 +2180,7 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
         try {
             doc.insertString(doc.getLength(), ev.title() + "\n", titleStyle);
             doc.insertString(doc.getLength(), "Time: " + ev.timestamp() + "\n", smallStyle);
+            doc.insertString(doc.getLength(), "Target Build: #" + ev.targetBuild() + "\n", smallStyle);
             if (active) {
                 doc.insertString(doc.getLength(), "Status: Active\n", activeStatusStyle);
             } else {
