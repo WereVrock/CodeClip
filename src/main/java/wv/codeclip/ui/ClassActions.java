@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import wv.codeclip.config.AiInstructions;
+import wv.codeclip.modecontext.ModeContext;
 import wv.codeclip.ui.ArchitectureBuilder;
 
 public class ClassActions {
@@ -62,7 +62,7 @@ public class ClassActions {
         sb.append(classTextArea.getText());
 
         if (Boolean.TRUE.equals(includeInstructions.get())) {
-            sb.append("\n\n").append(AiInstructions.TEXT);
+            sb.append("\n\n").append(ModeContext.getMode().getInstructions());
         }
 
         sb.append("\n\n// === Notes ===\n")

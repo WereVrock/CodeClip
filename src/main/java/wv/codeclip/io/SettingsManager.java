@@ -136,6 +136,14 @@ public void saveGodotDirectory(String path) {
     properties.setProperty("godot.directory", path);
 }
 
+public String loadHtmlDirectory() {
+    return properties.getProperty("html.directory", "");
+}
+
+public void saveHtmlDirectory(String path) {
+    properties.setProperty("html.directory", path);
+}
+
 public boolean loadAutoReplaceOnInsertConflict() {
     return Boolean.parseBoolean(properties.getProperty("autoReplaceOnInsertConflict", "false"));
 }

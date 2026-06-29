@@ -36,4 +36,8 @@ public final class ModeContext {
     public static boolean isGodotMode() {
         return currentMode == AppMode.GODOT;
     }
+
+    public static boolean isHtmlMode() {
+        return currentMode == AppMode.HTML;
+    }
 }

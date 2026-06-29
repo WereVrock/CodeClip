@@ -73,8 +73,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private final ClassActions actions;
     private PasteClassHandler pasteHandler;
     private wv.codeclip.godot.GodotPasteHandler godotPasteHandler;
+    private wv.codeclip.html.HtmlPasteHandler htmlPasteHandler;
     private wv.codeclip.patch.PatchUndoManager undoManager;
     private JMenuItem godotDirMenuItem;
+    private JMenuItem htmlDirMenuItem;
     private JMenuItem copyMetaItem;
     private final SettingsManager settings = new SettingsManager();
     private JCheckBoxMenuItem autoReplaceInsertConflictItem;
@@ -123,6 +125,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
         wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
         wv.codeclip.godot.GodotDirectory.load(settings);
+        wv.codeclip.html.HtmlDirectory.load(settings);
         undoManager = new wv.codeclip.patch.PatchUndoManager();
         pasteHandler = new PasteClassHandler(
                 repo,
@@ -151,6 +154,17 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 undoManager
         );
         godotPasteHandler.setErrorCallback(this::setLastPatchError);
+        htmlPasteHandler = new wv.codeclip.html.HtmlPasteHandler(
+                repo, this,
+                () -> {
+                    refreshText();
+                    refreshPanels();
+                },
+                this::appendTempLog,
+                this::addClassPanel,
+                this::onCodeChanged,
+                undoManager
+        );
         undoManager.setPanelRemovalCallback(this::removeClassPanel);
         undoManager.setPanelAddCallback(this::addClassPanel);
 
@@ -244,7 +258,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 })
         );
 
-        addWindowListener(new java.awt.event.WindowAdapter() {
+                addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosing(java.awt.event.WindowEvent e) {
                 clearTempLogs();
@@ -256,6 +270,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 settings.saveAutoReplaceOnInsertConflict(autoReplaceInsertConflictItem.isSelected());
                 SmartPasteSettings.save(settings);
                 wv.codeclip.godot.GodotDirectory.save(settings);
+                wv.codeclip.html.HtmlDirectory.save(settings);
                 settings.saveMode(currentMode.name());
                 settings.saveClassPaths(
                         repo.getClassCodeMap().keySet().toArray(new String[0])
@@ -311,6 +326,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         godotDirMenuItem.addActionListener(e -> openGodotDirectoryDialog());
         godotDirMenuItem.setVisible(false);
         settingsMenu.add(godotDirMenuItem);
+        htmlDirMenuItem = new JMenuItem("HTML Directory…");
+        htmlDirMenuItem.addActionListener(e -> openHtmlDirectoryDialog());
+        htmlDirMenuItem.setVisible(false);
+        settingsMenu.add(htmlDirMenuItem);
         menuBar.add(settingsMenu);
 
         JMenu extraMenu = new JMenu("Extra");
@@ -428,6 +447,13 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             }
         });
         godotPasteHandler.setPostPasteCallback((changed) -> {
+            syncUndoRedo.run();
+            if (changed) {
+                stampBuildInfo();
+                addVersionEventFromUndoTop();
+            }
+        });
+        htmlPasteHandler.setPostPasteCallback((changed) -> {
             syncUndoRedo.run();
             if (changed) {
                 stampBuildInfo();
@@ -621,7 +647,16 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
         pasteClass.addActionListener(e -> {
             if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
+                // Godot mode has no Smart Paste — always single-block.
                 godotPasteHandler.handlePasteFromClipboard();
+            } else if (wv.codeclip.modecontext.ModeContext.isHtmlMode()) {
+                // HTML mode has its own Smart Paste, fully separate from
+                // PasteClassHandler's Java-oriented Smart Paste.
+                if (smartPasteCheck.isSelected()) {
+                    htmlPasteHandler.handleSmartPasteFromClipboard();
+                } else {
+                    htmlPasteHandler.handlePasteFromClipboard();
+                }
             } else {
                 pasteHandler.handlePasteFromClipboard();
             }
@@ -1740,12 +1775,16 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             return;
         }
         boolean godot = wv.codeclip.modecontext.ModeContext.isGodotMode();
+        boolean html = wv.codeclip.modecontext.ModeContext.isHtmlMode();
         godotDirMenuItem.setVisible(godot);
+        if (htmlDirMenuItem != null) {
+            htmlDirMenuItem.setVisible(html);
+        }
         if (copyMetaItem != null) {
-            copyMetaItem.setVisible(!godot);
+            copyMetaItem.setVisible(!godot && !html);
         }
         if (autoReplaceInsertConflictItem != null) {
-            autoReplaceInsertConflictItem.setVisible(!godot);
+            autoReplaceInsertConflictItem.setVisible(!godot && !html);
         }
     }
 
@@ -1832,7 +1871,67 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         dialog.setVisible(true);
     }
 
-    /**
+private void openHtmlDirectoryDialog() {
+        java.io.File current = wv.codeclip.html.HtmlDirectory.get();
+
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+
+        JLabel titleLabel = new JLabel("HTML Project Directory");
+        titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 13f));
+        panel.add(titleLabel, BorderLayout.NORTH);
+
+        JTextArea dirDisplay = new JTextArea(current != null ? current.getAbsolutePath() : "(not set)");
+        dirDisplay.setEditable(false);
+        dirDisplay.setLineWrap(true);
+        dirDisplay.setWrapStyleWord(false);
+        dirDisplay.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        dirDisplay.setBackground(UIManager.getColor("Panel.background"));
+        dirDisplay.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(UIManager.getColor("Separator.foreground"), 1, true),
+                BorderFactory.createEmptyBorder(6, 8, 6, 8)));
+        dirDisplay.setRows(3);
+        dirDisplay.setColumns(40);
+        panel.add(new JScrollPane(dirDisplay), BorderLayout.CENTER);
+
+        JButton setNewBtn = new JButton("Set New Directory…");
+        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        btnRow.add(setNewBtn);
+        panel.add(btnRow, BorderLayout.SOUTH);
+
+        JDialog dialog = new JDialog(this, "HTML Directory", true);
+        dialog.setLayout(new BorderLayout(8, 8));
+        dialog.getRootPane().setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+        dialog.add(panel, BorderLayout.CENTER);
+
+        JButton closeBtn = new JButton("Close");
+        closeBtn.addActionListener(e -> dialog.dispose());
+        JPanel footerRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        footerRow.add(closeBtn);
+        dialog.add(footerRow, BorderLayout.SOUTH);
+
+        setNewBtn.addActionListener(e -> {
+            JFileChooser chooser = new JFileChooser();
+            chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            chooser.setDialogTitle("Select HTML Project Directory");
+            if (current != null) {
+                chooser.setCurrentDirectory(current);
+            }
+            int result = chooser.showOpenDialog(dialog);
+            if (result == JFileChooser.APPROVE_OPTION) {
+                java.io.File chosen = chooser.getSelectedFile();
+                wv.codeclip.html.HtmlDirectory.set(chosen);
+                dirDisplay.setText(chosen.getAbsolutePath());
+            }
+        });
+
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(420, 200));
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+    }
+
+/**
      * Sets the Godot directory from loaded files if not already set. Prefers
      * the most common parent directory among .gd files. hint: files from the
      * current DnD batch (may be null to scan repo).
@@ -1935,7 +2034,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         }
     }
 
-    private void refreshVersionPanel() {
+private void refreshVersionPanel() {
         if (versionPanel == null) {
             return;
         }
@@ -1953,6 +2052,12 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         }
         versionPanel.revalidate();
         versionPanel.repaint();
+        SwingUtilities.invokeLater(() -> {
+            Container parent = versionPanel.getParent();
+            if (parent instanceof JViewport vp) {
+                vp.setViewPosition(new Point(0, 0));
+            }
+        });
     }
 
 private JPanel createVersionRow(VersionEvent ev, boolean active) {
@@ -2051,7 +2156,8 @@ private JPanel createVersionRow(VersionEvent ev, boolean active) {
 /**
      * Inserts a single styled line at the top of the persistent log pane.
      */
-    private void insertPersistentLogLine(String message, boolean isSeparator) {
+
+private void insertPersistentLogLine(String message, boolean isSeparator) {
         StyledDocument doc = persistentLogPane.getStyledDocument();
         try {
             SimpleAttributeSet attrs = new SimpleAttributeSet();
@@ -2062,6 +2168,7 @@ private JPanel createVersionRow(VersionEvent ev, boolean active) {
                 StyleConstants.setForeground(attrs, LOG_SEP_COLOR);
                 StyleConstants.setBold(attrs, false);
                 doc.insertString(0, message + "\n", attrs);
+                SwingUtilities.invokeLater(() -> persistentLogPane.setCaretPosition(0));
                 return;
             }
 
@@ -2072,11 +2179,12 @@ private JPanel createVersionRow(VersionEvent ev, boolean active) {
                     ? UIManager.getColor("TextArea.foreground") : Color.BLACK));
             StyleConstants.setBold(attrs, bold);
             doc.insertString(0, message + "\n", attrs);
+            SwingUtilities.invokeLater(() -> persistentLogPane.setCaretPosition(0));
         } catch (BadLocationException ignored) {
         }
     }
 
-    private Color resolveLogLineColor(String line) {
+private Color resolveLogLineColor(String line) {
         if (line.startsWith("Copy ERROR:")) {
             return LOG_ERROR_COLOR;
         }

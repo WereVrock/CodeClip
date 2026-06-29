@@ -9,6 +9,10 @@ public enum AppMode {
     GODOT(
         new String[]{".gd"},
         wv.codeclip.godot.GodotInstructions.TEXT
+    ),
+    HTML(
+        wv.codeclip.html.HtmlExtensions.EXTENSIONS,
+        wv.codeclip.html.HtmlInstructions.TEXT
     );
 
     private final String[] extensions;
