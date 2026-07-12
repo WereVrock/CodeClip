@@ -41,13 +41,40 @@ public class PatchApplier {
         Map<String, List<FailedChange>> fileFailures = new LinkedHashMap<>();
 
         for (PatchChange change : changes) {
-            String path = resolveFilePath(change.fileName());
-            if (path == null) {
+            String bareName = bareFileName(change.fileName());
+            List<String> matchingPaths = new ArrayList<>();
+            for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
+                if (entry.getValue() != null && entry.getValue().getName().equalsIgnoreCase(bareName)) {
+                    matchingPaths.add(entry.getKey());
+                }
+            }
+
+            String path;
+            if (matchingPaths.isEmpty()) {
                 fileFailures
                         .computeIfAbsent(change.fileName(), k -> new ArrayList<>())
                         .add(new FailedChange(change.fileName(),
-                                "File not found in loaded classes: " + change.fileName()));
+                                "File not found in loaded classes: " + change.fileName()
+                                + "\n\nThis usually means the referenced file name doesn't match any loaded "
+                                + "file — worth checking whether this block is actually AI commentary rather "
+                                + "than an intended change. The content that failed to apply was:\n\n"
+                                + change.preview()));
                 continue;
+            } else if (matchingPaths.size() > 1) {
+                List<String> sortedMatchingPaths = new ArrayList<>(matchingPaths);
+                sortedMatchingPaths.sort(null);
+                StringBuilder dupMsg = new StringBuilder();
+                dupMsg.append("Duplicate class detected — ").append(matchingPaths.size())
+                        .append(" loaded files are named \"").append(bareName)
+                        .append("\". Refusing to guess which one to patch:\n");
+                appendDuplicatePathList(dupMsg, sortedMatchingPaths, 8);
+                dupMsg.append("Remove or consolidate the duplicate file(s) and try again.");
+                fileFailures
+                        .computeIfAbsent(change.fileName(), k -> new ArrayList<>())
+                        .add(new FailedChange(change.fileName(), dupMsg.toString()));
+                continue;
+            } else {
+                path = matchingPaths.get(0);
             }
 
             String code = workingCode.getOrDefault(path, repo.getClassCodeMap().get(path));
@@ -113,6 +140,7 @@ public class PatchApplier {
                 Files.writeString(file.toPath(), finalCode);
                 repo.getClassCodeMap().put(path, finalCode);
                 repo.getDisabledClasses().remove(path);
+                repo.recordChange(path, ClassRepository.ChangeKind.PATCH_UPDATE);
                 applied.add(file.getName());
             } catch (IOException e) {
                 writeErrors.add(file.getName() + ": " + e.getMessage());
@@ -900,7 +928,24 @@ private String normalizeForComparison(String code) {
         return null;
     }
 
-    private record ResolvedChange(String path, String newCode, String description) {
+private String bareFileName(String fileName) {
+String bareName = fileName;
+int lastSlash = fileName.lastIndexOf('/');
+if (lastSlash < 0) {
+lastSlash = fileName.lastIndexOf('\\');
+}
+if (lastSlash >= 0) {
+bareName = fileName.substring(lastSlash + 1);
+} else if (fileName.contains(".") && fileName.endsWith(".java")) {
+String[] parts = fileName.split("\\.");
+if (parts.length >= 2) {
+bareName = parts[parts.length - 2] + ".java";
+}
+}
+return bareName;
+}
+
+private record ResolvedChange(String path, String newCode, String description) {
 
     }
 
@@ -964,4 +1009,16 @@ private String normalizeForComparison(String code) {
             return result;
         }
     }
+
+private static void appendDuplicatePathList(StringBuilder sb, List<String> paths, int max) {
+        int shown = Math.min(paths.size(), max);
+        for (int i = 0; i < shown; i++) {
+            sb.append("  • ").append(paths.get(i)).append("\n");
+        }
+        int remaining = paths.size() - shown;
+        if (remaining > 0) {
+            sb.append("  ... and ").append(remaining).append(" more\n");
+        }
+    }
+
 }

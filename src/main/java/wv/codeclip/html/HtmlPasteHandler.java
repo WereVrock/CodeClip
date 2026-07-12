@@ -85,7 +85,7 @@ public class HtmlPasteHandler {
     // Entry point 1: single-block paste (Smart Paste checkbox OFF)
     // ------------------------------------------------------------------
 
-    public void handlePasteFromClipboard() {
+public void handlePasteFromClipboard() {
         String text = clipboard.read();
         if (text == null || text.isBlank()) {
             JOptionPane.showMessageDialog(parent,
@@ -111,8 +111,9 @@ public class HtmlPasteHandler {
             applyPatchBlock(text, outcome);
         }
         if (hasFileMarkers) {
+            boolean allowNewFiles = confirmRootForNewFilesIfNeeded();
             for (HtmlScriptExtractor.FileEntry entry : HtmlScriptExtractor.extract(text)) {
-                applyFileEntry(entry, outcome);
+                applyFileEntry(entry, outcome, allowNewFiles);
             }
         }
 
@@ -120,11 +121,11 @@ public class HtmlPasteHandler {
         firePostPaste(outcome.anySuccess());
     }
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // Entry point 2: HTML mode's own Smart Paste (Smart Paste checkbox ON)
     // ------------------------------------------------------------------
 
-    public void handleSmartPasteFromClipboard() {
+public void handleSmartPasteFromClipboard() {
         String text = clipboard.read();
         if (text == null || text.isBlank()) {
             JOptionPane.showMessageDialog(parent,
@@ -143,12 +144,14 @@ public class HtmlPasteHandler {
         }
 
         PasteOutcome outcome = new PasteOutcome();
+        boolean hasFileEntries = entries.stream().anyMatch(e -> e instanceof HtmlSmartPasteExtractor.FileEntry);
+        boolean allowNewFiles = hasFileEntries && confirmRootForNewFilesIfNeeded();
 
         for (HtmlSmartPasteExtractor.Entry entry : entries) {
             if (entry instanceof HtmlSmartPasteExtractor.PatchEntry pe) {
                 applyPatchBlock(pe.text(), outcome);
             } else if (entry instanceof HtmlSmartPasteExtractor.FileEntry fe) {
-                applyFileEntry(new HtmlScriptExtractor.FileEntry(fe.relativePath(), fe.code()), outcome);
+                applyFileEntry(new HtmlScriptExtractor.FileEntry(fe.relativePath(), fe.code()), outcome, allowNewFiles);
             }
         }
 
@@ -161,7 +164,7 @@ public class HtmlPasteHandler {
         firePostPaste(outcome.anySuccess());
     }
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // Shared outcome bookkeeping — collects per-block results so multiple
     // independent blocks (and independent files within one @@PATCH) never
     // get conflated, and every failure surfaces while every success still
@@ -209,7 +212,7 @@ public class HtmlPasteHandler {
         return !target.exists();
     }
 
-    private void applyFileEntry(HtmlScriptExtractor.FileEntry entry, PasteOutcome outcome) {
+private void applyFileEntry(HtmlScriptExtractor.FileEntry entry, PasteOutcome outcome, boolean allowNewFiles) {
         if (!HtmlDirectory.isSet()) {
             JOptionPane.showMessageDialog(parent,
                     "No HTML project directory set.\nUse the directory button to set one.",
@@ -218,7 +221,10 @@ public class HtmlPasteHandler {
         }
 
         File root = HtmlDirectory.get();
-        File targetFile = new File(root, entry.relativePath());
+        File targetFile = resolveTargetFile(root, entry.relativePath(), allowNewFiles, outcome);
+        if (targetFile == null) {
+            return;
+        }
         File parentDir = targetFile.getParentFile();
         boolean isNew = !targetFile.exists();
 
@@ -248,6 +254,8 @@ public class HtmlPasteHandler {
             if (!repo.hasCheckpoint(path)) {
                 repo.setCheckpoint(path, entry.code());
             }
+            repo.recordChange(path,
+                    isNew ? ClassRepository.ChangeKind.NEW : ClassRepository.ChangeKind.WHOLE_UPDATE);
 
             refreshCallback.run();
 
@@ -265,7 +273,7 @@ public class HtmlPasteHandler {
         }
     }
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // Patch handling — @@FIND/@@REPLACE (strict) and @@METHOD:/@@AFTER_METHOD:/
     // @@INSERT_METHOD: (structural, strict).
     // ------------------------------------------------------------------
@@ -359,6 +367,7 @@ public class HtmlPasteHandler {
                 outcome.combinedSnapshot.putIfAbsent(path, previous);
                 repo.getClassCodeMap().put(path, finalCode);
                 repo.getDisabledClasses().remove(path);
+                repo.recordChange(path, ClassRepository.ChangeKind.PATCH_UPDATE);
                 refreshCallback.run();
                 if (codeChangedCallback != null) {
                     codeChangedCallback.accept(path, finalCode);
@@ -384,10 +393,11 @@ public class HtmlPasteHandler {
      * its directive type. @@FIND/@@REPLACE goes through StrictPatchApplier;
      * @@METHOD:/@@AFTER_METHOD:/@@INSERT_METHOD: go through HtmlStructuralPatcher.
      */
-    private String applyOneChange(String actualFileName, PatchChange change, String code) throws PatchException {
+
+private String applyOneChange(String actualFileName, PatchChange change, String code) throws PatchException {
         return switch (change) {
             case PatchChange.FindReplace fr ->
-                StrictPatchApplier.applyFindReplace(fr, code);
+                applyFindReplaceWithFuzzyFeedback(actualFileName, fr, code);
 
             case PatchChange.MethodReplace mr ->
                 HtmlStructuralPatcher.applyMethodReplace(actualFileName, code, mr.methodName(), mr.replace());
@@ -415,7 +425,62 @@ public class HtmlPasteHandler {
         };
     }
 
-    private String describeChange(PatchChange change) {
+/**
+     * Applies a strict-then-fuzzy @@FIND/@@REPLACE and surfaces the outcome:
+     * a high-confidence fuzzy match (>=95%) is just logged, while a
+     * lower-confidence one (30%-95%) also pops an informational dialog so
+     * the user can double-check what was actually matched before trusting it.
+     */
+
+private String applyFindReplaceWithFuzzyFeedback(String actualFileName, PatchChange.FindReplace fr, String code)
+            throws PatchException {
+        StrictPatchApplier.FindReplaceResult result = StrictPatchApplier.applyFindReplace(parent, fr, code);
+
+        switch (result.tier()) {
+            case FUZZY_HIGH -> {
+                if (HtmlFuzzySettings.isConfirmHighConfidenceMatches()) {
+                    FuzzyMatchDialog.Decision decision = FuzzyMatchDialog.show(
+                            parent, actualFileName, result.similarityPercent(), fr.find(), result.matchedText(), true);
+                    if (decision == FuzzyMatchDialog.Decision.REJECT) {
+                        throw new PatchException(
+                                "@@FIND fuzzy match in " + actualFileName + " ("
+                                + HtmlFuzzyMatcher.formatPercent(result.similarityPercent())
+                                + "%) was rejected by the user.",
+                                actualFileName);
+                    }
+                    if (statusLogger != null) {
+                        statusLogger.accept("Fuzzy matched @@FIND in " + actualFileName + " at "
+                                + HtmlFuzzyMatcher.formatPercent(result.similarityPercent()) + "% — accepted by user");
+                    }
+                } else if (statusLogger != null) {
+                    statusLogger.accept("Fuzzy matched @@FIND in " + actualFileName
+                            + " at " + HtmlFuzzyMatcher.formatPercent(result.similarityPercent()) + "% (no exact match)");
+                }
+            }
+            case FUZZY_LOW -> {
+                FuzzyMatchDialog.Decision decision = FuzzyMatchDialog.show(
+                        parent, actualFileName, result.similarityPercent(), fr.find(), result.matchedText(), false);
+                if (decision == FuzzyMatchDialog.Decision.REJECT) {
+                    throw new PatchException(
+                            "@@FIND fuzzy match in " + actualFileName + " ("
+                            + HtmlFuzzyMatcher.formatPercent(result.similarityPercent())
+                            + "%) was rejected by the user.",
+                            actualFileName);
+                }
+                if (statusLogger != null) {
+                    statusLogger.accept("Fuzzy matched @@FIND in " + actualFileName + " at "
+                            + HtmlFuzzyMatcher.formatPercent(result.similarityPercent()) + "% — accepted by user");
+                }
+            }
+            case EXACT -> {
+                // Exact match — nothing extra to report.
+            }
+        }
+
+        return result.newCode();
+    }
+
+private String describeChange(PatchChange change) {
         return switch (change) {
             case PatchChange.FindReplace fr -> "FindReplace";
             case PatchChange.MethodReplace mr -> "MethodReplace '" + mr.methodName() + "'";
@@ -482,5 +547,169 @@ public class HtmlPasteHandler {
 
     private void firePostPaste(boolean changed) {
         if (postPasteCallback != null) postPasteCallback.accept(changed);
+        if (changed) {
+            wv.codeclip.patch.PostPatchVerifier.verify(repo, parent, statusLogger);
+        }
     }
+
+/**
+     * Resolves the on-disk target for a #@FileStart:/#@FileEnd write.
+     * Prefers a file that is already tracked in the repo and whose path ends
+     * with this relative path (so an existing file gets updated in place even
+     * if HtmlDirectory's root has drifted from where the project was actually
+     * loaded), falling back to root + relativePath only when no such file is
+     * already tracked. Returns null (after showing a warning) if the relative
+     * path matches more than one already-loaded file and can't be disambiguated —
+     * mirrors resolveRelativePath's logic but is also usable for genuinely-new files.
+     */
+    private File resolveTargetFile(File root, String relativePath) {
+        String bareName = relativePath.contains("/")
+                ? relativePath.substring(relativePath.lastIndexOf('/') + 1)
+                : relativePath;
+
+        List<Map.Entry<String, File>> bareMatches = new ArrayList<>();
+        for (Map.Entry<String, File> e : repo.getClassFileMap().entrySet()) {
+            File f = e.getValue();
+            if (f != null && f.getName().equalsIgnoreCase(bareName)) {
+                bareMatches.add(e);
+            }
+        }
+
+        if (bareMatches.isEmpty()) {
+            return new File(root, relativePath);
+        }
+
+        if (bareMatches.size() == 1) {
+            return bareMatches.get(0).getValue();
+        }
+
+        String suffix = "/" + relativePath;
+        List<Map.Entry<String, File>> suffixMatches = new ArrayList<>();
+        for (Map.Entry<String, File> e : bareMatches) {
+            String abs = e.getKey().replace('\\', '/');
+            if (abs.toLowerCase().endsWith(suffix.toLowerCase())) {
+                suffixMatches.add(e);
+            }
+        }
+
+        if (suffixMatches.size() == 1) {
+            return suffixMatches.get(0).getValue();
+        }
+
+        StringBuilder msg = new StringBuilder();
+        msg.append("\"").append(relativePath)
+           .append("\" matches ").append(bareMatches.size())
+           .append(" already-loaded files at different locations:\n\n");
+        for (Map.Entry<String, File> e : bareMatches) {
+            msg.append("  \u2022 ").append(e.getKey()).append("\n");
+        }
+        msg.append("\nCodeClip can't safely tell which one to update, ")
+           .append("so this file write was skipped to avoid creating another copy.\n")
+           .append("Remove or consolidate the duplicates and try again.");
+        JOptionPane.showMessageDialog(parent, msg.toString(),
+                "Duplicate File Detected", JOptionPane.WARNING_MESSAGE);
+        return null;
+    }
+
+/**
+     * If the HTML project directory doesn't contain any file already loaded
+     * in this session, that's a strong signal the directory has drifted from
+     * the project that's actually open — creating a brand-new file there
+     * would silently write it to the wrong place while still reporting
+     * success. Asked once per paste operation; has no effect on updates to
+     * already-tracked files, which resolve by tracked path regardless of
+     * root correctness.
+     */
+    private boolean confirmRootForNewFilesIfNeeded() {
+        if (!HtmlDirectory.isSet()) return true;
+        if (repo.getClassFileMap().isEmpty()) return true;
+
+        File root = HtmlDirectory.get();
+        String rootPath = root.getAbsolutePath();
+        for (File f : repo.getClassFileMap().values()) {
+            if (f == null) continue;
+            File parentDir = f.getParentFile();
+            String parentPath = parentDir != null ? parentDir.getAbsolutePath() : null;
+            if (parentPath != null && (parentPath.equals(rootPath) || parentPath.startsWith(rootPath + File.separator))) {
+                return true;
+            }
+        }
+
+        int choice = JOptionPane.showConfirmDialog(parent,
+                "The current HTML project directory is:\n" + rootPath + "\n\n" +
+                "None of the files already loaded in this session live under that directory — " +
+                "it may be stale (set from a different project, or changed since these files were loaded).\n\n" +
+                "If you continue, any brand-new files in this paste will be written under that directory, " +
+                "which may not be where you expect.\n\n" +
+                "Continue and create new files there anyway?",
+                "Project Directory May Be Stale",
+                JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        return choice == JOptionPane.YES_OPTION;
+    }
+
+    /**
+     * Resolves the on-disk target for a #@FileStart:/#@FileEnd write.
+     *
+     * Prefers a file already tracked in the repo whose path ends with this
+     * relative path, so an existing file gets updated in place even if
+     * HtmlDirectory's root has drifted. Falls back to root + relativePath
+     * only for a genuinely new file — and when falling back, honors
+     * allowNewFiles so a stale/unconfirmed root can't silently create files
+     * in the wrong place while still reporting success.
+     */
+    private File resolveTargetFile(File root, String relativePath, boolean allowNewFiles, PasteOutcome outcome) {
+        String bareName = relativePath.contains("/")
+                ? relativePath.substring(relativePath.lastIndexOf('/') + 1)
+                : relativePath;
+
+        List<Map.Entry<String, File>> bareMatches = new ArrayList<>();
+        for (Map.Entry<String, File> e : repo.getClassFileMap().entrySet()) {
+            File f = e.getValue();
+            if (f != null && f.getName().equalsIgnoreCase(bareName)) {
+                bareMatches.add(e);
+            }
+        }
+
+        if (bareMatches.isEmpty()) {
+            if (!allowNewFiles) {
+                String msg = "Skipped Creating (project directory unconfirmed): " + relativePath;
+                outcome.logLines.add(msg);
+                if (statusLogger != null) statusLogger.accept(msg);
+                return null;
+            }
+            return new File(root, relativePath);
+        }
+
+        if (bareMatches.size() == 1) {
+            return bareMatches.get(0).getValue();
+        }
+
+        String suffix = "/" + relativePath;
+        List<Map.Entry<String, File>> suffixMatches = new ArrayList<>();
+        for (Map.Entry<String, File> e : bareMatches) {
+            String abs = e.getKey().replace('\\', '/');
+            if (abs.toLowerCase().endsWith(suffix.toLowerCase())) {
+                suffixMatches.add(e);
+            }
+        }
+
+        if (suffixMatches.size() == 1) {
+            return suffixMatches.get(0).getValue();
+        }
+
+        StringBuilder msg = new StringBuilder();
+        msg.append("\"").append(relativePath)
+           .append("\" matches ").append(bareMatches.size())
+           .append(" already-loaded files at different locations:\n\n");
+        for (Map.Entry<String, File> e : bareMatches) {
+            msg.append("  \u2022 ").append(e.getKey()).append("\n");
+        }
+        msg.append("\nCodeClip can't safely tell which one to update, ")
+           .append("so this file write was skipped to avoid creating another copy.\n")
+           .append("Remove or consolidate the duplicates and try again.");
+        JOptionPane.showMessageDialog(parent, msg.toString(),
+                "Duplicate File Detected", JOptionPane.WARNING_MESSAGE);
+        return null;
+    }
+
 }

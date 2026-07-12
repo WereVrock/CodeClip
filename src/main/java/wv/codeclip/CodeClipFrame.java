@@ -77,6 +77,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private wv.codeclip.patch.PatchUndoManager undoManager;
     private JMenuItem godotDirMenuItem;
     private JMenuItem htmlDirMenuItem;
+    private JMenuItem fuzzySettingsMenuItem;
     private JMenuItem copyMetaItem;
     private final SettingsManager settings = new SettingsManager();
     private JCheckBoxMenuItem autoReplaceInsertConflictItem;
@@ -312,8 +313,18 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 "Show missing file messages", showMissingFileMessages.isSelected());
         showMissingItem.addActionListener(e
                 -> showMissingFileMessages.setSelected(showMissingItem.isSelected()));
-        settingsMenu.add(showMissingItem);
-        JMenuItem languageItem = new JMenuItem("Language…");
+settingsMenu.add(showMissingItem);
+JCheckBoxMenuItem compileCheckItem = new JCheckBoxMenuItem(
+"Verify compilation after patch (Java, requires JDK)",
+wv.codeclip.patch.PostPatchVerifierSettings.isCompileCheckEnabled());
+compileCheckItem.setToolTipText(
+"Compiles only the files currently loaded in CodeClip after each patch/paste. "
++ "Reliable for catching mistakes in your own code (wrong argument counts, syntax errors); "
++ "may show false positives for types from libraries not loaded into CodeClip.");
+compileCheckItem.addActionListener(e ->
+wv.codeclip.patch.PostPatchVerifierSettings.setCompileCheckEnabled(compileCheckItem.isSelected()));
+settingsMenu.add(compileCheckItem);
+JMenuItem languageItem = new JMenuItem("Language…");
         languageItem.addActionListener(e -> openLanguageDialog());
         settingsMenu.add(languageItem);
         autoReplaceInsertConflictItem = new JCheckBoxMenuItem("Auto-Replace Duplicate Methods");
@@ -330,6 +341,11 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         htmlDirMenuItem.addActionListener(e -> openHtmlDirectoryDialog());
         htmlDirMenuItem.setVisible(false);
         settingsMenu.add(htmlDirMenuItem);
+        fuzzySettingsMenuItem = new JMenuItem("Fuzzy Match Settings…");
+        fuzzySettingsMenuItem.addActionListener(e ->
+                new wv.codeclip.html.HtmlFuzzySettingsDialog(this).setVisible(true));
+        fuzzySettingsMenuItem.setVisible(false);
+        settingsMenu.add(fuzzySettingsMenuItem);
         menuBar.add(settingsMenu);
 
         JMenu extraMenu = new JMenu("Extra");
@@ -1515,12 +1531,33 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         info.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
         dialog.add(new JScrollPane(info), BorderLayout.CENTER);
 
-        if (tsExists && !tsValue.isEmpty()) {
-            JLabel tsLabel = new JLabel("Last recorded timestamp: " + tsValue);
-            tsLabel.setFont(tsLabel.getFont().deriveFont(Font.ITALIC));
-            tsLabel.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 4));
-            dialog.add(tsLabel, BorderLayout.NORTH);
-        }
+List<JLabel> topLabels = new ArrayList<>();
+if (tsExists && !tsValue.isEmpty()) {
+JLabel tsLabel = new JLabel("Last recorded timestamp: " + tsValue);
+tsLabel.setFont(tsLabel.getFont().deriveFont(Font.ITALIC));
+topLabels.add(tsLabel);
+}
+if (repo.getLastChangeKind() != null) {
+String kindLabel = switch (repo.getLastChangeKind()) {
+case NEW -> "Created (new file)";
+case WHOLE_UPDATE -> "Updated \u2014 whole file";
+case PATCH_UPDATE -> "Updated \u2014 surgical patch";
+};
+String fileLabel = computeChangeLabel(repo.getLastChangedPath());
+JLabel changeLabel = new JLabel("Last change: " + fileLabel + " \u2014 " + kindLabel);
+changeLabel.setFont(changeLabel.getFont().deriveFont(Font.ITALIC));
+topLabels.add(changeLabel);
+}
+if (!topLabels.isEmpty()) {
+JPanel topPanel = new JPanel();
+topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
+topPanel.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 4));
+for (JLabel lbl : topLabels) {
+lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
+topPanel.add(lbl);
+}
+dialog.add(topPanel, BorderLayout.NORTH);
+}
 
         JButton copyInstrBtn = new JButton("Copy Instructions");
         JButton copyPathBtn = new JButton("Copy File Path");
@@ -1770,7 +1807,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         updateCheckpointButtonColor(null);
     }
 
-    private void updateDirectoryButton() {
+private void updateDirectoryButton() {
         if (godotDirMenuItem == null) {
             return;
         }
@@ -1780,6 +1817,9 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         if (htmlDirMenuItem != null) {
             htmlDirMenuItem.setVisible(html);
         }
+        if (fuzzySettingsMenuItem != null) {
+            fuzzySettingsMenuItem.setVisible(html);
+        }
         if (copyMetaItem != null) {
             copyMetaItem.setVisible(!godot && !html);
         }
@@ -1788,7 +1828,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         }
     }
 
-    /**
+/**
      * Wires a shared InsertConflictResolver into both paste handlers. Called
      * once after settings are loaded, and whenever the resolver logic needs
      * updating. The resolver either shows the dialog or auto-replaces based on
@@ -2412,5 +2452,36 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
         }
         return false;
     }
+
+private String computeChangeLabel(String path) {
+if (path == null) return "";
+File f = new File(path);
+
+File htmlRoot = wv.codeclip.html.HtmlDirectory.isSet() ? wv.codeclip.html.HtmlDirectory.get() : null;
+String rel = relativizeForLabel(htmlRoot, f);
+if (rel != null) return rel;
+
+File godotDir = wv.codeclip.godot.GodotDirectory.get();
+rel = relativizeForLabel(godotDir, f);
+if (rel != null) return rel;
+
+File sourceRoot = detectSourceRoot();
+rel = relativizeForLabel(sourceRoot, f);
+if (rel != null) return rel;
+
+return f.getAbsolutePath();
+}
+
+private String relativizeForLabel(File root, File file) {
+if (root == null || file == null) return null;
+try {
+String rootPath = root.getAbsolutePath();
+String filePath = file.getAbsolutePath();
+if (filePath.startsWith(rootPath + File.separator)) {
+return filePath.substring(rootPath.length() + 1).replace(File.separatorChar, '/');
+}
+} catch (Exception ignored) {}
+return null;
+}
 
 }

@@ -19,6 +19,10 @@ public class TestClass {
      */
 
 public static String farewell() {
+        return "Goodbye, see you later!";
+    }
+
+public static String farewell2() {
         return "Farewell, until we meet again!";
     }
 

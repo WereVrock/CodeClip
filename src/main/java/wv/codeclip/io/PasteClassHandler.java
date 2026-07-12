@@ -185,6 +185,9 @@ this.postPasteCallback = callback;
 
 private void firePostPaste(boolean changed) {
 if (postPasteCallback != null) postPasteCallback.accept(changed);
+if (changed) {
+wv.codeclip.patch.PostPatchVerifier.verify(repo, parent, statusLogger);
+}
 }
 
 private void reportError(PatchApplier.PatchResult result) {
@@ -465,6 +468,29 @@ boolean smartSkipOverwrite = logCollector != null && SmartPasteSettings.isSkipOv
 
 File sourceRoot = rootDetector.detect(packageName);
 File existingFile = fileWriter.findExistingFile(packageName, className, sourceRoot);
+
+if (existingFile == null) {
+List<File> repoMatches = findAllExistingFilesInRepo(className);
+if (repoMatches.size() == 1) {
+existingFile = repoMatches.get(0);
+} else if (repoMatches.size() > 1) {
+List<String> repoMatchPaths = new ArrayList<>();
+for (File f : repoMatches) repoMatchPaths.add(f.getAbsolutePath());
+repoMatchPaths.sort(null);
+StringBuilder dupMsg = new StringBuilder();
+dupMsg.append("\"").append(className)
+.append("\" already exists at ").append(repoMatches.size())
+.append(" different locations in this project:\n\n");
+appendDuplicatePathList(dupMsg, repoMatchPaths, 8);
+dupMsg.append("\nCodeClip can't safely tell which one to update, ")
+.append("so this paste was cancelled to avoid creating another copy.\n")
+.append("Remove or consolidate the duplicates and try again.");
+JOptionPane.showMessageDialog(parent, dupMsg.toString(),
+"Duplicate Class Detected", JOptionPane.WARNING_MESSAGE);
+return;
+}
+}
+
 boolean isNewFile = existingFile == null;
 
 if (!isNewFile && !smartSkipOverwrite && !confirmOverwrite(className, existingFile, classCode)) {
@@ -477,6 +503,7 @@ if (isNewFile) {
 if (!smartSkipCreate && !confirmCreate(className, packageName, sourceRoot)) return;
 file = fileWriter.createFile(packageName, className, classCode, sourceRoot);
 fileWriter.registerInRepo(file, classCode);
+repo.recordChange(file.getAbsolutePath(), ClassRepository.ChangeKind.NEW);
 // null sentinel = file didn't exist, undo should delete it
 Map<String, String> snapshot = new java.util.LinkedHashMap<>();
 snapshot.put(file.getAbsolutePath(), null);
@@ -499,6 +526,7 @@ undoManager.pushUndo(snapshot, "Class: " + className);
 if (titles != null) titles.add("Class: " + className);
 fileWriter.updateFile(existingFile, classCode);
 fileWriter.registerInRepo(existingFile, classCode);
+repo.recordChange(existingFile.getAbsolutePath(), ClassRepository.ChangeKind.WHOLE_UPDATE);
 file = existingFile;
 }
 
@@ -708,7 +736,37 @@ private static String stripFence(String text) {
     // strip trailing ```
     if (body.endsWith("```")) body = body.substring(0, body.length() - 3);
     return body.strip();
-}}
+}
+
+private List<File> findAllExistingFilesInRepo(String className) {
+String target = (className + ".java").toLowerCase();
+List<File> matches = new ArrayList<>();
+for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
+File f = entry.getValue();
+if (f == null) continue;
+if (f.getName().toLowerCase().equals(target)) {
+boolean already = false;
+for (File m : matches) {
+if (m.getAbsolutePath().equals(f.getAbsolutePath())) { already = true; break; }
+}
+if (!already) matches.add(f);
+}
+}
+return matches;
+}
+
+private static void appendDuplicatePathList(StringBuilder sb, List<String> paths, int max) {
+int shown = Math.min(paths.size(), max);
+for (int i = 0; i < shown; i++) {
+sb.append("  • ").append(paths.get(i)).append("\n");
+}
+int remaining = paths.size() - shown;
+if (remaining > 0) {
+sb.append("  ... and ").append(remaining).append(" more\n");
+}
+}
+
+}
 
 
 

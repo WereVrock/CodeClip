@@ -35,10 +35,32 @@ public class ClassRepository {
         }
         return false;
     }
-    public void clear() {
+
+public void clear() {
         classCodeMap.clear();
         classFileMap.clear();
         disabledClasses.clear();
         checkpointCodeMap.clear();
+        lastChangedPath = null;
+        lastChangeKind = null;
     }
+
+public enum ChangeKind { NEW, WHOLE_UPDATE, PATCH_UPDATE }
+
+    private String lastChangedPath;
+    private ChangeKind lastChangeKind;
+
+    public void recordChange(String path, ChangeKind kind) {
+        this.lastChangedPath = path;
+        this.lastChangeKind = kind;
+    }
+
+    public String getLastChangedPath() {
+        return lastChangedPath;
+    }
+
+    public ChangeKind getLastChangeKind() {
+        return lastChangeKind;
+    }
+
 }
