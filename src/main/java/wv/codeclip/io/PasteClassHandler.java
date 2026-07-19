@@ -232,7 +232,7 @@ if (!combinedSnapshot.isEmpty()) {
 String combinedTitle = titles.isEmpty() ? "Smart Paste"
 : titles.size() == 1 ? titles.get(0)
 : titles.get(0) + " (+" + (titles.size() - 1) + " more)";
-undoManager.pushUndo(combinedSnapshot, combinedTitle);
+undoManager.pushUndo(combinedSnapshot, combinedTitle, new ArrayList<>(titles));
 }
 
 if (!logLines.isEmpty() && statusLogger != null) {

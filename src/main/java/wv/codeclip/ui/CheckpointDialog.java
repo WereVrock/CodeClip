@@ -32,6 +32,7 @@ public class CheckpointDialog extends JDialog {
     private static final Color OK_FG     = new Color(30, 100, 30);
 
     private Runnable refreshCallback;
+    private Runnable onCheckpointSetCallback;
 
     private final ClassRepository repo;
 
@@ -120,11 +121,15 @@ public class CheckpointDialog extends JDialog {
     // State
     // ------------------------------------------------------------------
 
-    public void setRefreshCallback(Runnable refreshCallback) {
+public void setRefreshCallback(Runnable refreshCallback) {
         this.refreshCallback = refreshCallback;
     }
 
-    /** Called by CodeClipFrame whenever something may have changed. */
+    public void setOnCheckpointSetCallback(Runnable callback) {
+        this.onCheckpointSetCallback = callback;
+    }
+
+/** Called by CodeClipFrame whenever something may have changed. */
     public void refresh() {
         boolean hasPending = !pendingRestores.isEmpty();
         boolean hasCheckpointDiff = repo.hasPendingRestores();
@@ -154,7 +159,7 @@ public class CheckpointDialog extends JDialog {
 
         boolean allInSync = !hasPending && !hasCheckpointDiff;
         restoreBtn.setEnabled(hasCheckpointDiff || hasPending);
-        commitBtn.setEnabled(hasPending);
+        commitBtn.setEnabled(true);
         setCheckBtn.setEnabled(!allInSync);
         setCheckBtn.setForeground(allInSync ? BTN_OK_FG : UIManager.getColor("Button.foreground"));
     }
@@ -199,63 +204,104 @@ private void onRestore() {
         JOptionPane.showMessageDialog(this, msg.toString(), "Restored", JOptionPane.INFORMATION_MESSAGE);
     }
 
-private void onCommit() {
-        if (pendingRestores.isEmpty()) {
-            commitCurrentState();
-            return;
+/**
+     * Reads a file straight off disk, bypassing repo.getClassCodeMap().
+     * Returns null if the file doesn't exist or can't be read.
+     */
+    private String readDiskContent(File file) {
+        if (file == null || !file.exists()) return null;
+        try {
+            return Files.readString(file.toPath());
+        } catch (IOException ex) {
+            return null;
         }
+    }
 
-        List<String> written = new ArrayList<>();
-        List<String> failed  = new ArrayList<>();
-
-        for (String path : new java.util.ArrayList<>(pendingRestores.keySet())) {
+    /**
+     * A hand-edit is a file whose on-disk content differs from BOTH the
+     * in-memory code AND the checkpoint. If disk matches memory, nothing to
+     * do. If disk matches checkpoint but memory doesn't, that's just the
+     * ordinary pending-restore case (memory has unsaved changes) — not a
+     * hand-edit, since disk hasn't diverged from the last known-good state.
+     * Only when disk has drifted to a THIRD value does it count as a hand-edit.
+     */
+    private Map<String, String> detectHandEdits() {
+        Map<String, String> handEdits = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : repo.getClassCodeMap().entrySet()) {
+            String path = entry.getKey();
+            String memoryCode = entry.getValue();
             File file = repo.getClassFileMap().get(path);
-            if (file == null) { failed.add(path); continue; }
-            String code = repo.getClassCodeMap().get(path);
-            try {
-                Files.writeString(file.toPath(), code);
-                repo.setCheckpoint(path, code);
-                pendingRestores.remove(path);
-                written.add(file.getName());
-            } catch (IOException ex) {
-                failed.add(file.getName());
+            String diskCode = readDiskContent(file);
+            if (diskCode == null) continue;
+
+            String checkpointCode = repo.getCheckpointCodeMap().get(path);
+            boolean diskMatchesMemory = diskCode.equals(memoryCode);
+            boolean diskMatchesCheckpoint = checkpointCode != null && diskCode.equals(checkpointCode);
+
+            if (!diskMatchesMemory && !diskMatchesCheckpoint) {
+                handEdits.put(path, diskCode);
+            }
+        }
+        return handEdits;
+    }
+
+    /**
+     * Commit to Disk — always available. Writes current in-memory code to
+     * disk for every file that's out of sync with disk, and re-checkpoints
+     * those files. Before writing, checks for hand-edits (disk content that
+     * diverged from both memory and checkpoint) and lets the user choose to
+     * load those changes into CodeClip instead of silently overwriting them.
+     * A lightweight confirm guards against accidental clicks when there is
+     * nothing unusual to warn about.
+     */
+    private void onCommit() {
+        Map<String, String> handEdits = detectHandEdits();
+
+        if (!handEdits.isEmpty()) {
+            StringBuilder msg = new StringBuilder();
+            msg.append(handEdits.size()).append(" file")
+               .append(handEdits.size() == 1 ? "" : "s")
+               .append(" on disk ").append(handEdits.size() == 1 ? "has" : "have")
+               .append(" changed outside CodeClip since the last checkpoint:\n\n");
+            for (String path : handEdits.keySet()) {
+                File f = repo.getClassFileMap().get(path);
+                msg.append("  • ").append(f != null ? f.getName() : path).append("\n");
+            }
+            msg.append("\nCommitting now will overwrite those hand-edits with CodeClip's current version.\n")
+               .append("(To bring hand-edits into CodeClip instead, close this and use \"Update All\".)\n\n")
+               .append("Overwrite disk with CodeClip's version anyway?");
+
+            int choice = JOptionPane.showConfirmDialog(this, msg.toString(),
+                    "Hand-Edited Files Detected", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (choice != JOptionPane.OK_OPTION) {
+                return; // Cancel — commit aborted, nothing changed
+            }
+        } else {
+            int confirm = JOptionPane.showConfirmDialog(this,
+                    "Write the current in-memory version to disk?",
+                    "Confirm Commit", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (confirm != JOptionPane.OK_OPTION) {
+                return;
             }
         }
 
-        refresh();
-
-        StringBuilder msg = new StringBuilder();
-        if (!written.isEmpty()) {
-            msg.append(written.size()).append(" file")
-               .append(written.size() == 1 ? "" : "s")
-               .append(" written to disk:\n\n");
-            for (String name : written) msg.append("  • ").append(name).append("\n");
-        }
-        if (!failed.isEmpty()) {
-            if (msg.length() > 0) msg.append("\n");
-            msg.append(failed.size()).append(" file")
-               .append(failed.size() == 1 ? "" : "s")
-               .append(" could not be written:\n\n");
-            for (String name : failed) msg.append("  • ").append(name).append("\n");
-        }
-
-        JOptionPane.showMessageDialog(this, msg.toString(), "Committed", JOptionPane.INFORMATION_MESSAGE);
-    }
-
-private void commitCurrentState() {
         List<String> written = new ArrayList<>();
         List<String> failed  = new ArrayList<>();
 
         for (Map.Entry<String, String> entry : repo.getClassCodeMap().entrySet()) {
             String path = entry.getKey();
             String code = entry.getValue();
-            String checkpoint = repo.getCheckpointCodeMap().get(path);
-            if (checkpoint == null || checkpoint.equals(code)) continue;
             File file = repo.getClassFileMap().get(path);
-            if (file == null) { failed.add(path); continue; }
+            if (file == null) continue;
+
+            String diskCode = readDiskContent(file);
+            boolean diskAlreadyMatches = diskCode != null && diskCode.equals(code);
+            if (diskAlreadyMatches) continue;
+
             try {
                 Files.writeString(file.toPath(), code);
                 repo.setCheckpoint(path, code);
+                pendingRestores.remove(path);
                 written.add(file.getName());
             } catch (IOException ex) {
                 failed.add(file.getName());
@@ -267,7 +313,7 @@ private void commitCurrentState() {
 
         if (written.isEmpty() && failed.isEmpty()) {
             JOptionPane.showMessageDialog(this,
-                    "All files already match their checkpoints.",
+                    "Disk already matches CodeClip's current version. Nothing to commit.",
                     "Nothing to Commit", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
@@ -307,6 +353,9 @@ private void onSetCheckpoint() {
         pendingRestores.clear();
         refreshCallback.run();
         refresh();
+        if (onCheckpointSetCallback != null) {
+            onCheckpointSetCallback.run();
+        }
 
         StringBuilder msg = new StringBuilder();
         if (updated.isEmpty()) {

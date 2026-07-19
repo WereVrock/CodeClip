@@ -65,6 +65,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             = new JCheckBox("Smart Paste", false);
 
     private final JLabel enabledCountLabel = new JLabel("Enabled Classes: 0");
+    private JLabel modeLabel;
     private final JLabel charCountLabel = new JLabel("Code Characters: 0");
 
     private AppMode currentMode = AppMode.JAVA;
@@ -74,13 +75,17 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private PasteClassHandler pasteHandler;
     private wv.codeclip.godot.GodotPasteHandler godotPasteHandler;
     private wv.codeclip.html.HtmlPasteHandler htmlPasteHandler;
+    private wv.codeclip.generic.GenericPasteHandler genericPasteHandler;
     private wv.codeclip.patch.PatchUndoManager undoManager;
     private JMenuItem godotDirMenuItem;
     private JMenuItem htmlDirMenuItem;
+    private JMenuItem genericDirMenuItem;
     private JMenuItem fuzzySettingsMenuItem;
+    private JMenuItem genericFuzzySettingsMenuItem;
     private JMenuItem copyMetaItem;
     private final SettingsManager settings = new SettingsManager();
     private JCheckBoxMenuItem autoReplaceInsertConflictItem;
+    private JCheckBoxMenuItem compileCheckItem;
     private CheckpointDialog checkpointDialog = null;
     private List<PatchApplier.PatchResult> lastPatchErrors = null;
     private JButton lastErrorBtn;
@@ -127,6 +132,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
         wv.codeclip.godot.GodotDirectory.load(settings);
         wv.codeclip.html.HtmlDirectory.load(settings);
+        wv.codeclip.generic.GenericDirectory.load(settings);
         undoManager = new wv.codeclip.patch.PatchUndoManager();
         pasteHandler = new PasteClassHandler(
                 repo,
@@ -156,6 +162,17 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         );
         godotPasteHandler.setErrorCallback(this::setLastPatchError);
         htmlPasteHandler = new wv.codeclip.html.HtmlPasteHandler(
+                repo, this,
+                () -> {
+                    refreshText();
+                    refreshPanels();
+                },
+                this::appendTempLog,
+                this::addClassPanel,
+                this::onCodeChanged,
+                undoManager
+        );
+        genericPasteHandler = new wv.codeclip.generic.GenericPasteHandler(
                 repo, this,
                 () -> {
                     refreshText();
@@ -272,6 +289,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 SmartPasteSettings.save(settings);
                 wv.codeclip.godot.GodotDirectory.save(settings);
                 wv.codeclip.html.HtmlDirectory.save(settings);
+                wv.codeclip.generic.GenericDirectory.save(settings);
                 settings.saveMode(currentMode.name());
                 settings.saveClassPaths(
                         repo.getClassCodeMap().keySet().toArray(new String[0])
@@ -314,7 +332,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         showMissingItem.addActionListener(e
                 -> showMissingFileMessages.setSelected(showMissingItem.isSelected()));
 settingsMenu.add(showMissingItem);
-JCheckBoxMenuItem compileCheckItem = new JCheckBoxMenuItem(
+        compileCheckItem = new JCheckBoxMenuItem(
 "Verify compilation after patch (Java, requires JDK)",
 wv.codeclip.patch.PostPatchVerifierSettings.isCompileCheckEnabled());
 compileCheckItem.setToolTipText(
@@ -346,6 +364,15 @@ JMenuItem languageItem = new JMenuItem("Language…");
                 new wv.codeclip.html.HtmlFuzzySettingsDialog(this).setVisible(true));
         fuzzySettingsMenuItem.setVisible(false);
         settingsMenu.add(fuzzySettingsMenuItem);
+        genericDirMenuItem = new JMenuItem("Generic Directory…");
+        genericDirMenuItem.addActionListener(e -> openGenericDirectoryDialog());
+        genericDirMenuItem.setVisible(false);
+        settingsMenu.add(genericDirMenuItem);
+        genericFuzzySettingsMenuItem = new JMenuItem("Generic Fuzzy Match Settings…");
+        genericFuzzySettingsMenuItem.addActionListener(e ->
+                new wv.codeclip.generic.GenericFuzzySettingsDialog(this).setVisible(true));
+        genericFuzzySettingsMenuItem.setVisible(false);
+        settingsMenu.add(genericFuzzySettingsMenuItem);
         menuBar.add(settingsMenu);
 
         JMenu extraMenu = new JMenu("Extra");
@@ -476,13 +503,30 @@ JMenuItem languageItem = new JMenuItem("Language…");
                 addVersionEventFromUndoTop();
             }
         });
+        genericPasteHandler.setPostPasteCallback((changed) -> {
+            syncUndoRedo.run();
+            if (changed) {
+                stampBuildInfo();
+                addVersionEventFromUndoTop();
+            }
+        });
 
         JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         statsPanel.add(undoBtn);
         statsPanel.add(redoBtn);
         statsPanel.add(enabledCountLabel);
         statsPanel.add(charCountLabel);
-        add(statsPanel, BorderLayout.NORTH);
+
+        modeLabel = new JLabel(currentMode.toString());
+        modeLabel.setFont(modeLabel.getFont().deriveFont(Font.BOLD));
+        modeLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+        JPanel modePanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        modePanel.add(modeLabel);
+
+        JPanel topBar = new JPanel(new BorderLayout());
+        topBar.add(statsPanel, BorderLayout.WEST);
+        topBar.add(modePanel, BorderLayout.EAST);
+        add(topBar, BorderLayout.NORTH);
 
 // --- Center: notes + class list ---
         notesTextPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -672,6 +716,12 @@ JMenuItem languageItem = new JMenuItem("Language…");
                     htmlPasteHandler.handleSmartPasteFromClipboard();
                 } else {
                     htmlPasteHandler.handlePasteFromClipboard();
+                }
+            } else if (wv.codeclip.modecontext.ModeContext.isGenericMode()) {
+                if (smartPasteCheck.isSelected()) {
+                    genericPasteHandler.handleSmartPasteFromClipboard();
+                } else {
+                    genericPasteHandler.handlePasteFromClipboard();
                 }
             } else {
                 pasteHandler.handlePasteFromClipboard();
@@ -1738,7 +1788,16 @@ dialog.add(topPanel, BorderLayout.NORTH);
         }
     }
 
-    private java.io.File detectSourceRoot() {
+private java.io.File detectSourceRoot() {
+        if (wv.codeclip.modecontext.ModeContext.isHtmlMode()
+                && wv.codeclip.html.HtmlDirectory.isSet()) {
+            return wv.codeclip.html.HtmlDirectory.get();
+        }
+        if (wv.codeclip.modecontext.ModeContext.isGenericMode()
+                && wv.codeclip.generic.GenericDirectory.isSet()) {
+            return wv.codeclip.generic.GenericDirectory.get();
+        }
+
         for (java.util.Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
             java.io.File file = entry.getValue();
             if (file == null) {
@@ -1769,7 +1828,7 @@ dialog.add(topPanel, BorderLayout.NORTH);
         return null;
     }
 
-    private void openCheckpointDialog() {
+private void openCheckpointDialog() {
         if (checkpointDialog == null || !checkpointDialog.isDisplayable()) {
             checkpointDialog = new CheckpointDialog(this, repo, () -> {
                 refreshText();
@@ -1813,6 +1872,7 @@ private void updateDirectoryButton() {
         }
         boolean godot = wv.codeclip.modecontext.ModeContext.isGodotMode();
         boolean html = wv.codeclip.modecontext.ModeContext.isHtmlMode();
+        boolean generic = wv.codeclip.modecontext.ModeContext.isGenericMode();
         godotDirMenuItem.setVisible(godot);
         if (htmlDirMenuItem != null) {
             htmlDirMenuItem.setVisible(html);
@@ -1820,11 +1880,20 @@ private void updateDirectoryButton() {
         if (fuzzySettingsMenuItem != null) {
             fuzzySettingsMenuItem.setVisible(html);
         }
+        if (genericDirMenuItem != null) {
+            genericDirMenuItem.setVisible(generic);
+        }
+        if (genericFuzzySettingsMenuItem != null) {
+            genericFuzzySettingsMenuItem.setVisible(generic);
+        }
         if (copyMetaItem != null) {
-            copyMetaItem.setVisible(!godot && !html);
+            copyMetaItem.setVisible(!godot && !html && !generic);
         }
         if (autoReplaceInsertConflictItem != null) {
-            autoReplaceInsertConflictItem.setVisible(!godot && !html);
+            autoReplaceInsertConflictItem.setVisible(!godot && !html && !generic);
+        }
+        if (compileCheckItem != null) {
+            compileCheckItem.setVisible(!godot && !html && !generic);
         }
     }
 
@@ -1961,6 +2030,66 @@ private void openHtmlDirectoryDialog() {
             if (result == JFileChooser.APPROVE_OPTION) {
                 java.io.File chosen = chooser.getSelectedFile();
                 wv.codeclip.html.HtmlDirectory.set(chosen);
+                dirDisplay.setText(chosen.getAbsolutePath());
+            }
+        });
+
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(420, 200));
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+    }
+
+private void openGenericDirectoryDialog() {
+        java.io.File current = wv.codeclip.generic.GenericDirectory.get();
+
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+
+        JLabel titleLabel = new JLabel("Generic Project Directory");
+        titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 13f));
+        panel.add(titleLabel, BorderLayout.NORTH);
+
+        JTextArea dirDisplay = new JTextArea(current != null ? current.getAbsolutePath() : "(not set)");
+        dirDisplay.setEditable(false);
+        dirDisplay.setLineWrap(true);
+        dirDisplay.setWrapStyleWord(false);
+        dirDisplay.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        dirDisplay.setBackground(UIManager.getColor("Panel.background"));
+        dirDisplay.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(UIManager.getColor("Separator.foreground"), 1, true),
+                BorderFactory.createEmptyBorder(6, 8, 6, 8)));
+        dirDisplay.setRows(3);
+        dirDisplay.setColumns(40);
+        panel.add(new JScrollPane(dirDisplay), BorderLayout.CENTER);
+
+        JButton setNewBtn = new JButton("Set New Directory…");
+        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        btnRow.add(setNewBtn);
+        panel.add(btnRow, BorderLayout.SOUTH);
+
+        JDialog dialog = new JDialog(this, "Generic Directory", true);
+        dialog.setLayout(new BorderLayout(8, 8));
+        dialog.getRootPane().setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+        dialog.add(panel, BorderLayout.CENTER);
+
+        JButton closeBtn = new JButton("Close");
+        closeBtn.addActionListener(e -> dialog.dispose());
+        JPanel footerRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        footerRow.add(closeBtn);
+        dialog.add(footerRow, BorderLayout.SOUTH);
+
+        setNewBtn.addActionListener(e -> {
+            JFileChooser chooser = new JFileChooser();
+            chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            chooser.setDialogTitle("Select Generic Project Directory");
+            if (current != null) {
+                chooser.setCurrentDirectory(current);
+            }
+            int result = chooser.showOpenDialog(dialog);
+            if (result == JFileChooser.APPROVE_OPTION) {
+                java.io.File chosen = chooser.getSelectedFile();
+                wv.codeclip.generic.GenericDirectory.set(chosen);
                 dirDisplay.setText(chosen.getAbsolutePath());
             }
         });
@@ -2459,6 +2588,10 @@ File f = new File(path);
 
 File htmlRoot = wv.codeclip.html.HtmlDirectory.isSet() ? wv.codeclip.html.HtmlDirectory.get() : null;
 String rel = relativizeForLabel(htmlRoot, f);
+if (rel != null) return rel;
+
+File genericRoot = wv.codeclip.generic.GenericDirectory.isSet() ? wv.codeclip.generic.GenericDirectory.get() : null;
+rel = relativizeForLabel(genericRoot, f);
 if (rel != null) return rel;
 
 File godotDir = wv.codeclip.godot.GodotDirectory.get();

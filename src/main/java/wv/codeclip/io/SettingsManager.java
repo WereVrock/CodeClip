@@ -144,12 +144,28 @@ public void saveHtmlDirectory(String path) {
     properties.setProperty("html.directory", path);
 }
 
+public String loadGenericDirectory() {
+    return properties.getProperty("generic.directory", "");
+}
+
+public void saveGenericDirectory(String path) {
+    properties.setProperty("generic.directory", path);
+}
+
 public boolean loadAutoReplaceOnInsertConflict() {
     return Boolean.parseBoolean(properties.getProperty("autoReplaceOnInsertConflict", "false"));
 }
 
 public void saveAutoReplaceOnInsertConflict(boolean value) {
     properties.setProperty("autoReplaceOnInsertConflict", String.valueOf(value));
+}
+
+public String loadExternalEditorPath() {
+    return properties.getProperty("external.editor.path", "");
+}
+
+public void saveExternalEditorPath(String path) {
+    properties.setProperty("external.editor.path", path == null ? "" : path);
 }
 
 }

@@ -40,4 +40,8 @@ public final class ModeContext {
     public static boolean isHtmlMode() {
         return currentMode == AppMode.HTML;
     }
+
+    public static boolean isGenericMode() {
+        return currentMode == AppMode.GENERIC;
+    }
 }

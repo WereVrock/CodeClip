@@ -187,7 +187,7 @@ public void handleSmartPasteFromClipboard() {
             String combinedTitle = outcome.titles.isEmpty() ? headerLabel
                     : outcome.titles.size() == 1 ? outcome.titles.get(0)
                     : outcome.titles.get(0) + " (+" + (outcome.titles.size() - 1) + " more)";
-            undoManager.pushUndo(outcome.combinedSnapshot, combinedTitle);
+            undoManager.pushUndo(outcome.combinedSnapshot, combinedTitle, new ArrayList<>(outcome.titles));
         }
 
         if (!outcome.logLines.isEmpty() && statusLogger != null) {

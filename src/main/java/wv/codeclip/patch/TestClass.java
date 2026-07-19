@@ -3,7 +3,7 @@ package wv.codeclip.patch;
 public class TestClass {
 
     public static String greet() {
-        return "This will never match";
+        return "Hello, this now matches!";
     }
 
 /**
@@ -19,15 +19,19 @@ public class TestClass {
      */
 
 public static String farewell() {
-        return "Goodbye, see you later!";
+        return "Adios, see you later!";
     }
 
 public static String farewell2() {
         return "Farewell, until we meet again!";
     }
 
+public static String farewell3() {
+        return "So long, and thanks for all the fish!";
+    }
+
 private static final String VERY_LONG_CONSTANT_NAME_THAT_EXCEEDS_NORMAL_WIDTH = 
-        "This string is intentionally long to make the patch content larger.";
+        "SHORTENED string for edge-case testing.";
 
 public static String getConstantValue() {
         return VERY_LONG_CONSTANT_NAME_THAT_EXCEEDS_NORMAL_WIDTH + " (with extra flair!)";
@@ -40,5 +44,9 @@ public static String getGreetingWithTime(String timeOfDay) {
 public static String getAppName() {
     return "CodeClip Patch Tester";
 }
+
+public static String getVersion() {
+        return "1.0.0-edge-test";
+    }
 
 }

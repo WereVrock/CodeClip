@@ -8,7 +8,11 @@ import java.util.Deque;
 import java.util.Map;
 public class PatchUndoManager {
     private static final int MAX_HISTORY = 20;
-    public record Entry(Map<String, String> snapshot, String title) {}
+    public record Entry(Map<String, String> snapshot, String title, java.util.List<String> allTitles) {
+        public Entry(Map<String, String> snapshot, String title) {
+            this(snapshot, title, title != null ? java.util.List.of(title) : java.util.List.of());
+        }
+    }
     private final Deque<Entry> undoStack = new ArrayDeque<>();
     private final Deque<Entry> redoStack = new ArrayDeque<>();
     private java.util.function.Consumer<String> panelRemovalCallback;
@@ -22,6 +26,12 @@ public class PatchUndoManager {
 
 public void pushUndo(Map<String, String> snapshot, String title) {
     undoStack.addFirst(new Entry(snapshot, title));
+    if (undoStack.size() > MAX_HISTORY) undoStack.removeLast();
+    redoStack.clear();
+}
+
+public void pushUndo(Map<String, String> snapshot, String title, java.util.List<String> allTitles) {
+    undoStack.addFirst(new Entry(snapshot, title, allTitles));
     if (undoStack.size() > MAX_HISTORY) undoStack.removeLast();
     redoStack.clear();
 }

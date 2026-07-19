@@ -378,9 +378,11 @@ private void buildUI(String errorMessage, Map<String, String> errorsByFile, Patc
                 StringBuilder sb = new StringBuilder();
                 for (int i = 0; i < batchResults.size(); i++) {
                     PatchApplier.PatchResult r = batchResults.get(i);
-                    if (r.failedChanges().isEmpty()) continue;
+                    if (r.failedChanges().isEmpty() && !r.hasFailures()) continue;
                     sb.append("// ========== Batch entry ").append(i + 1)
                       .append(" of ").append(batchResults.size()).append(" ==========\n");
+                    sb.append(r.buildErrorReport()).append("\n");
+                    sb.append("// ---------- Reconstructed patch + classes ----------\n");
                     sb.append(buildPatchPlusClassesText(r)).append("\n\n");
                 }
                 new ClipboardService().write(sb.toString().stripTrailing());

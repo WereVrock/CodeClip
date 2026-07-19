@@ -13,6 +13,10 @@ public enum AppMode {
     HTML(
         wv.codeclip.html.HtmlExtensions.EXTENSIONS,
         wv.codeclip.html.HtmlInstructions.TEXT
+    ),
+    GENERIC(
+        new String[]{},
+        wv.codeclip.generic.GenericInstructions.TEXT
     );
 
     private final String[] extensions;
@@ -26,11 +30,16 @@ public enum AppMode {
     public String[] getExtensions() { return extensions; }
     public String getInstructions() { return instructions; }
 
-    public boolean accepts(String filename) {
+public boolean accepts(String filename) {
+        if (extensions.length == 0) {
+            // GENERIC mode: accept any file.
+            return true;
+        }
         String lower = filename.toLowerCase();
         for (String ext : extensions) {
             if (lower.endsWith(ext)) return true;
         }
         return false;
     }
+
 }
