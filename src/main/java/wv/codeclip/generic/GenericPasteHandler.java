@@ -45,6 +45,11 @@ public class GenericPasteHandler {
     private final PatchUndoManager undoManager;
     private final ClipboardService clipboard = new ClipboardService();
     private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
+    private final wv.codeclip.commands.CopierCommand copierCommand;
+    private final wv.codeclip.commands.EnablerCommand enablerCommand;
+    private final wv.codeclip.commands.MoverCommand moverCommand;
+    private final wv.codeclip.commands.DeleterCommand deleterCommand;
+    private Consumer<String> removePanelCallback;
 
     private Consumer<Boolean> postPasteCallback;
 
@@ -64,6 +69,18 @@ public class GenericPasteHandler {
         this.addPanelCallback = addPanelCallback;
         this.codeChangedCallback = codeChangedCallback;
         this.undoManager = undoManager;
+        this.copierCommand = new wv.codeclip.commands.CopierCommand(repo, statusLogger);
+        this.enablerCommand = new wv.codeclip.commands.EnablerCommand(repo, refreshCallback, statusLogger);
+        this.moverCommand = new wv.codeclip.commands.MoverCommand(repo, refreshCallback, statusLogger,
+                addPanelCallback, path -> { if (removePanelCallback != null) removePanelCallback.accept(path); },
+                undoManager);
+        this.deleterCommand = new wv.codeclip.commands.DeleterCommand(repo, refreshCallback, statusLogger,
+                path -> { if (removePanelCallback != null) removePanelCallback.accept(path); },
+                undoManager);
+    }
+
+    public void setRemovePanelCallback(Consumer<String> callback) {
+        this.removePanelCallback = callback;
     }
 
     public void setPostPasteCallback(Consumer<Boolean> callback) {
@@ -84,6 +101,27 @@ public class GenericPasteHandler {
             JOptionPane.showMessageDialog(parent,
                     "Clipboard is empty or does not contain text.",
                     "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        String trimmed = text.trim();
+        if (trimmed.startsWith("@@Enable")) {
+            enablerCommand.handle(trimmed);
+            firePostPaste(false);
+            return;
+        }
+        if (trimmed.startsWith("@@Copy")) {
+            copierCommand.handle(trimmed);
+            return;
+        }
+        if (trimmed.startsWith("@@Move")) {
+            boolean changed = moverCommand.handle(trimmed, GenericDirectory.isSet() ? GenericDirectory.get() : null);
+            firePostPaste(changed);
+            return;
+        }
+        if (trimmed.startsWith("@@Delete")) {
+            boolean changed = deleterCommand.handle(trimmed);
+            firePostPaste(changed);
             return;
         }
 
@@ -124,6 +162,27 @@ public class GenericPasteHandler {
             JOptionPane.showMessageDialog(parent,
                     "Clipboard is empty or does not contain text.",
                     "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        String trimmed = text.trim();
+        if (trimmed.startsWith("@@Enable")) {
+            enablerCommand.handle(trimmed);
+            firePostPaste(false);
+            return;
+        }
+        if (trimmed.startsWith("@@Copy")) {
+            copierCommand.handle(trimmed);
+            return;
+        }
+        if (trimmed.startsWith("@@Move")) {
+            boolean changed = moverCommand.handle(trimmed, GenericDirectory.isSet() ? GenericDirectory.get() : null);
+            firePostPaste(changed);
+            return;
+        }
+        if (trimmed.startsWith("@@Delete")) {
+            boolean changed = deleterCommand.handle(trimmed);
+            firePostPaste(changed);
             return;
         }
 
@@ -334,7 +393,7 @@ public class GenericPasteHandler {
                     sb.append("  ✓ ").append(f != null ? f.getName() : path).append("\n");
                 }
             }
-            PatchErrorDialog.show(parent, sb.toString(), errorsByFile, repo);
+            PatchErrorDialog.show(parent, sb.toString(), errorsByFile, repo, text);
         }
 
         for (Map.Entry<String, String> entry : workingCode.entrySet()) {

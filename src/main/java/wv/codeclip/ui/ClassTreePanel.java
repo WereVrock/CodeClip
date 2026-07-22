@@ -270,7 +270,7 @@ public class ClassTreePanel extends JPanel {
         return row;
     }
 
-    private JPanel buildClassRow(String path, int depth) {
+private JPanel buildClassRow(String path, int depth) {
         boolean disabled = repo.getDisabledClasses().contains(path);
         File    file     = repo.getClassFileMap().get(path);
         String  name     = (file != null) ? file.getName() : new File(path).getName();
@@ -291,6 +291,17 @@ public class ClassTreePanel extends JPanel {
             nameLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
         }
 
+        JButton moreBtn = new JButton("...");
+        moreBtn.setFont(moreBtn.getFont().deriveFont(Font.PLAIN, 10f));
+        moreBtn.setMargin(new Insets(0, 4, 0, 4));
+        moreBtn.setFocusable(false);
+        moreBtn.setToolTipText("Directory, edit, play, open file location");
+        moreBtn.addActionListener(e -> {
+            java.awt.Window w = SwingUtilities.getWindowAncestor(row);
+            JFrame frame = (w instanceof JFrame) ? (JFrame) w : null;
+            wv.codeclip.ui.FileActionsDialog.show(frame, file);
+        });
+
         JButton toggleBtn = new JButton(disabled ? "Enable" : "Disable");
         toggleBtn.setFont(toggleBtn.getFont().deriveFont(Font.PLAIN, 10f));
         toggleBtn.setMargin(new Insets(0, 4, 0, 4));
@@ -302,12 +313,17 @@ public class ClassTreePanel extends JPanel {
             onToggle.run();
         });
 
+        JPanel btnGroup = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        btnGroup.setOpaque(false);
+        btnGroup.add(moreBtn);
+        btnGroup.add(toggleBtn);
+
         row.add(nameLabel,  BorderLayout.CENTER);
-        row.add(toggleBtn,  BorderLayout.EAST);
+        row.add(btnGroup,  BorderLayout.EAST);
         return row;
     }
 
-    // ── Folder toggle logic ────────────────────────────────────────────────────
+// ── Folder toggle logic ────────────────────────────────────────────────────
 
     private void onFolderToggle(List<String> paths) {
         long disabledCount = paths.stream()

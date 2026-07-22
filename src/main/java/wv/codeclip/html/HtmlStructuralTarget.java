@@ -315,6 +315,13 @@ public final class HtmlStructuralTarget {
     }
 
     /** name(...) { ... } as an object/class method shorthand — name at start of trimmed line, not preceded by 'function'/keyword */
+
+/** name(...) { ... } as an object/class method shorthand — name at start of trimmed line
+     *  (optionally preceded by static/async/get/set modifiers in any combination), not part
+     *  of a call site like foo.bar(. Covers plain object methods and ES6 class members,
+     *  including "static name(...)", "async name(...)", "static async name(...)", and
+     *  accessor-style "get name()"/"set name(...)" (get/set are matched but do not change
+     *  behavior — the body is still located and returned as the extent). */
     private static List<Extent> findJsMethodShorthand(String code, String name) {
         List<Extent> results = new ArrayList<>();
         String needle = name + "(";
@@ -327,8 +334,7 @@ public final class HtmlStructuralTarget {
             String prefix = code.substring(lineStart, idx);
             String trimmedPrefix = prefix.trim();
 
-            // Must be the first token on the line (possibly with async keyword), not part of a call like foo.bar(
-            boolean validPrefix = trimmedPrefix.isEmpty() || trimmedPrefix.equals("async");
+            boolean validPrefix = isValidMethodPrefix(trimmedPrefix);
             char before = idx > 0 ? code.charAt(idx - 1) : ' ';
             boolean wordBoundaryOk = !Character.isLetterOrDigit(before) && before != '_' && before != '.';
 
@@ -352,7 +358,31 @@ public final class HtmlStructuralTarget {
         return results;
     }
 
-    private static int matchingParen(String code, int fromOpenParenSearch) {
+    /**
+     * True if everything before the method name on the line is empty, or is
+     * made up entirely of the modifier keywords "static", "async", "get",
+     * "set" (any combination, any order, whitespace-separated) — covering
+     * plain functions, class methods, static methods, async methods, and
+     * accessor methods, while still rejecting call sites and other prefixed
+     * expressions.
+     */
+    private static boolean isValidMethodPrefix(String trimmedPrefix) {
+        if (trimmedPrefix.isEmpty()) return true;
+        for (String token : trimmedPrefix.split("\\s+")) {
+            switch (token) {
+                case "static":
+                case "async":
+                case "get":
+                case "set":
+                    continue;
+                default:
+                    return false;
+            }
+        }
+        return true;
+    }
+
+private static int matchingParen(String code, int fromOpenParenSearch) {
         int open = code.indexOf('(', fromOpenParenSearch);
         if (open < 0) return -1;
         int depth = 1;

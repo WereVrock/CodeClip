@@ -20,14 +20,140 @@ public class ArchitectureBuilder {
     public enum Mode { ENABLED_ONLY, ADDED_ONLY, ALL }
 
     public String build(Mode mode, Set<String> disabledPaths) {
-        Map<String, List<String>> packageToClasses = groupByPackage(mode, disabledPaths);
-        Map<String, TreeMap<String, Object>> tree = buildPackageTree(packageToClasses);
-
         StringBuilder sb = new StringBuilder();
         sb.append("Architecture\n");
         sb.append("============\n\n");
-        renderTree(tree, packageToClasses, sb, "", "", true);
+
+        if (wv.codeclip.modecontext.ModeContext.getMode() == wv.codeclip.AppMode.JAVA) {
+            Map<String, List<String>> packageToClasses = groupByPackage(mode, disabledPaths);
+            Map<String, TreeMap<String, Object>> tree = buildPackageTree(packageToClasses);
+            renderTree(tree, packageToClasses, sb, "", "", true);
+        } else {
+            buildDirectoryTree(mode, disabledPaths, sb);
+        }
+
         return sb.toString();
+    }
+
+    // ------------------------------------------------------------------
+    // Non-Java modes: real on-disk directory tree (no package concept).
+    // Mirrors the same longest-common-ancestor + folder-tree approach
+    // ClassTreePanel already uses for its live UI tree, so "Copy
+    // Architecture" matches what the tree view shows.
+    // ------------------------------------------------------------------
+
+    private void buildDirectoryTree(Mode mode, Set<String> disabledPaths, StringBuilder sb) {
+        List<File> files = new ArrayList<>();
+        Map<File, String> fileToPath = new java.util.LinkedHashMap<>();
+
+        for (Map.Entry<String, String> entry : repo.getClassCodeMap().entrySet()) {
+            String path = entry.getKey();
+            if (mode == Mode.ENABLED_ONLY && disabledPaths.contains(path)) continue;
+
+            File file = repo.getClassFileMap().get(path);
+            boolean existsOnDisk = file != null && file.exists();
+            if (mode == Mode.ADDED_ONLY && !existsOnDisk) continue;
+            if (file == null) continue;
+
+            files.add(file);
+            fileToPath.put(file, path);
+        }
+
+        if (files.isEmpty()) {
+            sb.append("(no files)\n");
+            return;
+        }
+
+        String commonRoot = findCommonRoot(files);
+        DirNode root = new DirNode(commonRoot.isEmpty()
+                ? "(root)"
+                : new File(commonRoot).getName());
+
+        for (File f : files) {
+            List<String> segments = relativeDirSegments(commonRoot, f.getParentFile());
+            DirNode current = root;
+            for (String seg : segments) {
+                current = current.children.computeIfAbsent(seg, DirNode::new);
+            }
+            current.files.add(f.getName());
+        }
+
+        for (DirNode child : root.children.values()) {
+            child.files.sort(null);
+        }
+        root.files.sort(null);
+
+        if (!commonRoot.isEmpty()) {
+            sb.append(root.name).append("\n");
+        }
+        List<DirNode> topChildren = new ArrayList<>(root.children.values());
+        renderDirTree(topChildren, root.files, sb, "", commonRoot.isEmpty());
+    }
+
+    private static final class DirNode {
+        final String name;
+        final TreeMap<String, DirNode> children = new TreeMap<>();
+        final List<String> files = new ArrayList<>();
+        DirNode(String name) { this.name = name; }
+    }
+
+    private void renderDirTree(List<DirNode> children, List<String> rootFiles,
+                                StringBuilder sb, String indent, boolean isTopLevel) {
+        List<Object> items = new ArrayList<>();
+        items.addAll(children);
+        items.addAll(rootFiles);
+
+        for (int i = 0; i < items.size(); i++) {
+            boolean last = (i == items.size() - 1);
+            String connector = last ? "└── " : "├── ";
+            String childIndent = indent + (last ? "    " : "│   ");
+            Object item = items.get(i);
+
+            if (item instanceof DirNode node) {
+                sb.append(indent).append(connector).append(node.name).append("\n");
+                List<DirNode> nested = new ArrayList<>(node.children.values());
+                renderDirTree(nested, node.files, sb, childIndent, false);
+            } else {
+                sb.append(indent).append(connector).append((String) item).append("\n");
+            }
+        }
+    }
+
+    private String findCommonRoot(List<File> files) {
+        if (files.isEmpty()) return "";
+        List<String> candidate = new ArrayList<>();
+        File dir = files.get(0).getParentFile();
+        while (dir != null) {
+            candidate.add(dir.getAbsolutePath());
+            dir = dir.getParentFile();
+        }
+        outer:
+        for (String root : candidate) {
+            for (File f : files) {
+                String parentAbs = f.getParentFile() != null ? f.getParentFile().getAbsolutePath() : "";
+                if (!parentAbs.equals(root) && !parentAbs.startsWith(root + File.separator)) {
+                    continue outer;
+                }
+            }
+            return root;
+        }
+        return files.get(0).getParentFile() != null
+                ? files.get(0).getParentFile().getAbsolutePath()
+                : "";
+    }
+
+    private List<String> relativeDirSegments(String commonRoot, File dir) {
+        List<String> segs = new ArrayList<>();
+        if (dir == null) return segs;
+        String abs = dir.getAbsolutePath();
+        if (abs.equals(commonRoot)) return segs;
+        String rel = abs.startsWith(commonRoot + File.separator)
+                ? abs.substring(commonRoot.length() + 1)
+                : abs;
+        for (String seg : rel.split(java.util.regex.Pattern.quote(File.separator))) {
+            if (!seg.isEmpty()) segs.add(seg);
+        }
+        return segs;
     }
 
     private Map<String, List<String>> groupByPackage(Mode mode, Set<String> disabledPaths) {

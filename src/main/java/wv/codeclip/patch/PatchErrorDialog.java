@@ -17,6 +17,15 @@ public class PatchErrorDialog extends JDialog {
     private PatchApplier.PatchResult patchResult;
     private ClassRepository repo;
 
+    /**
+     * The exact raw text (the @@PATCH/@@FIND block, or #@FileStart block) that
+     * failed to apply, for callers that don't have a PatchChange list to
+     * reconstruct from (HTML/Generic/Godot handlers report failures as plain
+     * strings). Null when unavailable — the "Copy Failing Block" button is
+     * simply omitted in that case rather than showing an empty/misleading copy.
+     */
+    private String rawFailingBlock;
+
     // --- Batch mode: multiple PatchResults from one Smart Paste batch ---
     private List<PatchApplier.PatchResult> batchResults;
     private int batchIndex = 0;
@@ -28,9 +37,16 @@ public class PatchErrorDialog extends JDialog {
     public PatchErrorDialog(JFrame parent, String errorMessage,
                              Map<String, String> errorsByFile,
                              ClassRepository repo) {
+        this(parent, errorMessage, errorsByFile, repo, null);
+    }
+
+    public PatchErrorDialog(JFrame parent, String errorMessage,
+                             Map<String, String> errorsByFile,
+                             ClassRepository repo, String rawFailingBlock) {
         super(parent, "Patch Failed", true);
         this.parent = parent;
         this.repo = repo;
+        this.rawFailingBlock = rawFailingBlock;
         buildUI(errorMessage, errorsByFile, null);
     }
 
@@ -68,7 +84,8 @@ private void buildUI(String errorMessage, Map<String, String> errorsByFile, Patc
      * for a single PatchResult / error report. Used by the legacy single-result dialog
      * and, per-entry, inside the batch navigator.
      */
-    private JPanel buildResultPanel(String errorMessage, Map<String, String> errorsByFile, PatchApplier.PatchResult result) {
+
+private JPanel buildResultPanel(String errorMessage, Map<String, String> errorsByFile, PatchApplier.PatchResult result) {
         ClipboardService clipboard = new ClipboardService();
 
         // Determine if this is a user file-not-found error
@@ -286,7 +303,7 @@ private void buildUI(String errorMessage, Map<String, String> errorsByFile, Patc
         if (hasClasses) bottomPanel.add(copyBothBtn);
         bottomPanel.add(copyErrorBtn);
 
-        // ---------- ADD THE "Copy Failed/Skipped Patch" BUTTON if we have a PatchResult ----------
+        // ---------- "Copy Failed/Skipped Patch" for the PatchApplier path (has PatchChange objects) ----------
         if (result != null && !result.failedChanges().isEmpty()) {
             JButton copyFailedPatchBtn = new JButton("Copy Failed/Skipped Patch");
             copyFailedPatchBtn.setToolTipText("Copies a reconstructable @@PATCH block containing only the changes that failed or were skipped (errors + file conflicts).");
@@ -306,6 +323,29 @@ private void buildUI(String errorMessage, Map<String, String> errorsByFile, Patc
                 copyPatchAndClassesBtn.setForeground(new Color(30, 120, 30));
             });
             bottomPanel.add(copyPatchAndClassesBtn);
+        } else if (rawFailingBlock != null && !rawFailingBlock.isBlank()) {
+            // Non-PatchApplier path (HTML/Generic/Godot handlers): there's no PatchChange
+            // list to reconstruct from, but the caller supplied the exact raw block text
+            // that failed (the @@PATCH/@@FIND block, or file marker block) — offer that
+            // directly so the user always has something exact to copy back, not just the
+            // formatted prose error report.
+            JButton copyRawBlockBtn = new JButton("Copy Failing Block");
+            copyRawBlockBtn.setToolTipText("Copies the exact block of text that failed to apply, unmodified.");
+            copyRawBlockBtn.addActionListener(e -> {
+                clipboard.write(rawFailingBlock);
+                copyRawBlockBtn.setText("Copied Failing Block!");
+                copyRawBlockBtn.setForeground(new Color(30, 120, 30));
+            });
+            bottomPanel.add(copyRawBlockBtn);
+
+            JButton copyBlockAndErrorBtn = new JButton("Copy Block + Error");
+            copyBlockAndErrorBtn.setToolTipText("Copies the failing block together with the error report, in one paste.");
+            copyBlockAndErrorBtn.addActionListener(e -> {
+                clipboard.write(rawFailingBlock.stripTrailing() + "\n\n" + errorMessage);
+                copyBlockAndErrorBtn.setText("Copied Block + Error!");
+                copyBlockAndErrorBtn.setForeground(new Color(30, 120, 30));
+            });
+            bottomPanel.add(copyBlockAndErrorBtn);
         }
 
         bottomPanel.add(closeBtn);
@@ -501,7 +541,13 @@ private String findClassCode(ClassRepository repo, String fileName) {
 
     public static void show(JFrame parent, String errorMessage,
                              Map<String, String> errorsByFile, ClassRepository repo) {
-        new PatchErrorDialog(parent, errorMessage, errorsByFile, repo).setVisible(true);
+        new PatchErrorDialog(parent, errorMessage, errorsByFile, repo, null).setVisible(true);
+    }
+
+    public static void show(JFrame parent, String errorMessage,
+                             Map<String, String> errorsByFile, ClassRepository repo,
+                             String rawFailingBlock) {
+        new PatchErrorDialog(parent, errorMessage, errorsByFile, repo, rawFailingBlock).setVisible(true);
     }
 
     public static void show(JFrame parent, PatchApplier.PatchResult result, ClassRepository repo) {

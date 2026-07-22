@@ -2,15 +2,9 @@ package wv.codeclip.patch;
 
 public class TestClass {
 
-    public static String greet() {
-        return "Hello, this now matches!";
+public static String greet() {
+        return "Hello from Patch 1!";
     }
-
-/**
-     * Returns a polite farewell message.
-     * This method has a very long Javadoc comment to increase the size
-     * of the patch and help expose any layout issues in the UI.
-     */
 
 /**
      * Returns a polite farewell message.
@@ -19,19 +13,27 @@ public class TestClass {
      */
 
 public static String farewell() {
-        return "Adios, see you later!";
+        return "Adios from Patch 3!";
     }
 
 public static String farewell2() {
-        return "Farewell, until we meet again!";
+        return "Farewell from Patch 1!";
     }
 
 public static String farewell3() {
         return "So long, and thanks for all the fish!";
     }
 
+public static String farewell4() {
+        return "Goodbye, world!";
+    }
+
+public static String farewell5() {
+        return "Hello from Patch 2!";
+    }
+
 private static final String VERY_LONG_CONSTANT_NAME_THAT_EXCEEDS_NORMAL_WIDTH = 
-        "SHORTENED string for edge-case testing.";
+        "Patch 2 constant update.";
 
 public static String getConstantValue() {
         return VERY_LONG_CONSTANT_NAME_THAT_EXCEEDS_NORMAL_WIDTH + " (with extra flair!)";
@@ -46,7 +48,7 @@ public static String getAppName() {
 }
 
 public static String getVersion() {
-        return "1.0.0-edge-test";
+        return "2.0.0-patch-3";
     }
 
 }

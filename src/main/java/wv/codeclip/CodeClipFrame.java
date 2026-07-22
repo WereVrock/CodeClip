@@ -172,6 +172,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 this::onCodeChanged,
                 undoManager
         );
+        htmlPasteHandler.setRemovePanelCallback(this::removeClassPanel);
         genericPasteHandler = new wv.codeclip.generic.GenericPasteHandler(
                 repo, this,
                 () -> {
@@ -183,6 +184,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 this::onCodeChanged,
                 undoManager
         );
+        genericPasteHandler.setRemovePanelCallback(this::removeClassPanel);
         undoManager.setPanelRemovalCallback(this::removeClassPanel);
         undoManager.setPanelAddCallback(this::addClassPanel);
 
@@ -213,6 +215,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             fileDropHandler.setMode(currentMode);
         }
         updateDirectoryButton();
+        updateModeLabel();
         notesBuffer = settings.loadNotes();
         includeInstructionsCheck.setSelected(settings.loadIncludeInstructions());
         smartPasteCheck.setSelected(settings.loadSmartPaste());
@@ -422,6 +425,9 @@ JMenuItem languageItem = new JMenuItem("Language…");
                 actions.resetAll(classPanel);
                 undoManager.clear();
                 syncUndoRedo.run();
+                versionHistory.clear();
+                versionCurrentIdx = -1;
+                refreshVersionPanel();
             }
         });
         systemMenu.add(resetItem);
@@ -1018,7 +1024,21 @@ JMenuItem languageItem = new JMenuItem("Language…");
             }
             wv.codeclip.modecontext.ModeContext.setMode(currentMode);
             updateDirectoryButton();
+            updateModeLabel();
+            refreshText();
             refreshPanels();
+        }
+    }
+
+    /**
+     * Keeps the top-right mode label in sync with currentMode. Must be called
+     * any time currentMode changes (startup load and the Language… dialog) —
+     * modeLabel is otherwise only initialized once in buildUI() and silently
+     * goes stale.
+     */
+    private void updateModeLabel() {
+        if (modeLabel != null) {
+            modeLabel.setText(currentMode.toString());
         }
     }
 
@@ -1226,7 +1246,8 @@ JMenuItem languageItem = new JMenuItem("Language…");
 // ------------------------------------------------------------------
 // Class panels
 // ------------------------------------------------------------------
-    public void addClassPanel(String path, String name) {
+
+public void addClassPanel(String path, String name) {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         panel.setOpaque(true);
         panel.setBackground(wv.codeclip.modecontext.ModeColors.getEnabledBackground());
@@ -1237,6 +1258,7 @@ JMenuItem languageItem = new JMenuItem("Language…");
         label.setToolTipText("In sync with checkpoint");
         JButton toggle = new JButton("Disable");
         JButton copy = new JButton("Copy");
+        JButton more = new JButton("...");
         JButton delete = new JButton("Delete");
         panel.putClientProperty("label", label);
 
@@ -1263,6 +1285,12 @@ JMenuItem languageItem = new JMenuItem("Language…");
             }
         });
 
+        more.setToolTipText("Directory, edit, play, open file location");
+        more.addActionListener(e -> {
+            File f = repo.getClassFileMap().get(path);
+            wv.codeclip.ui.FileActionsDialog.show(CodeClipFrame.this, f);
+        });
+
         delete.addActionListener(e -> {
             repo.getClassCodeMap().remove(path);
             repo.getClassFileMap().remove(path);
@@ -1275,6 +1303,7 @@ JMenuItem languageItem = new JMenuItem("Language…");
         panel.add(label);
         panel.add(toggle);
         panel.add(copy);
+        panel.add(more);
         panel.add(delete);
 
         classPanel.add(panel);
@@ -1282,7 +1311,7 @@ JMenuItem languageItem = new JMenuItem("Language…");
         classPanel.repaint();
     }
 
-    private void removeClassPanel(String path) {
+private void removeClassPanel(String path) {
         for (Component c : classPanel.getComponents()) {
             if (c instanceof JPanel panel) {
                 Object storedPath = panel.getClientProperty("path");
@@ -1398,12 +1427,17 @@ JMenuItem languageItem = new JMenuItem("Language…");
         private final String files;
         private final String timestamp;
         private final String targetBuild;      // BUILD_NO at the time of this version
+        private final java.util.List<String> allTitles; // every @@TITLE: in a batch, in order
+        private boolean isCheckpoint;
 
-        VersionEvent(String title, String files, String timestamp, String targetBuild) {
+        VersionEvent(String title, String files, String timestamp, String targetBuild,
+                     java.util.List<String> allTitles, boolean isCheckpoint) {
             this.title = title;
             this.files = files;
             this.timestamp = timestamp;
             this.targetBuild = targetBuild;
+            this.allTitles = allTitles != null ? allTitles : java.util.List.of(title);
+            this.isCheckpoint = isCheckpoint;
         }
 
         String title() { return title; }
@@ -1411,6 +1445,8 @@ JMenuItem languageItem = new JMenuItem("Language…");
         String files() { return files; }
         String timestamp() { return timestamp; }
         String targetBuild() { return targetBuild; }
+        java.util.List<String> allTitles() { return allTitles; }
+        boolean isCheckpoint() { return isCheckpoint; }
     }
 
     private String describeEntry(wv.codeclip.patch.PatchUndoManager.Entry entry) {
@@ -1828,7 +1864,7 @@ private java.io.File detectSourceRoot() {
         return null;
     }
 
-private void openCheckpointDialog() {
+    private void openCheckpointDialog() {
         if (checkpointDialog == null || !checkpointDialog.isDisplayable()) {
             checkpointDialog = new CheckpointDialog(this, repo, () -> {
                 refreshText();
@@ -1842,6 +1878,7 @@ private void openCheckpointDialog() {
                 stampBuildInfo();
             });
         }
+        checkpointDialog.setOnCheckpointSetCallback(this::markNextVersionAsCheckpoint);
         checkpointDialog.refresh();
         checkpointDialog.setVisible(true);
     }
@@ -1873,6 +1910,7 @@ private void updateDirectoryButton() {
         boolean godot = wv.codeclip.modecontext.ModeContext.isGodotMode();
         boolean html = wv.codeclip.modecontext.ModeContext.isHtmlMode();
         boolean generic = wv.codeclip.modecontext.ModeContext.isGenericMode();
+        boolean isJava = !godot && !html && !generic;
         godotDirMenuItem.setVisible(godot);
         if (htmlDirMenuItem != null) {
             htmlDirMenuItem.setVisible(html);
@@ -1887,13 +1925,20 @@ private void updateDirectoryButton() {
             genericFuzzySettingsMenuItem.setVisible(generic);
         }
         if (copyMetaItem != null) {
-            copyMetaItem.setVisible(!godot && !html && !generic);
+            copyMetaItem.setVisible(isJava);
         }
         if (autoReplaceInsertConflictItem != null) {
-            autoReplaceInsertConflictItem.setVisible(!godot && !html && !generic);
+            autoReplaceInsertConflictItem.setVisible(isJava);
         }
         if (compileCheckItem != null) {
-            compileCheckItem.setVisible(!godot && !html && !generic);
+            compileCheckItem.setVisible(isJava);
+            if (!isJava && compileCheckItem.isSelected()) {
+                // Don't just hide it — a hidden-but-still-checked item leaves the
+                // compile-check flag silently armed with no visible way to turn it
+                // off until switching back to Java. Force it off at the source.
+                compileCheckItem.setSelected(false);
+                wv.codeclip.patch.PostPatchVerifierSettings.setCompileCheckEnabled(false);
+            }
         }
     }
 
@@ -2163,6 +2208,14 @@ private void openGenericDirectoryDialog() {
     }
 
     private String pendingTargetBuild = null;  // set by stampBuildInfo before version event created
+    private boolean pendingIsCheckpoint = false; // set right before a checkpoint-triggered save
+
+    /** Called by CheckpointDialog right before it triggers a refresh, so the
+     *  next version event (if any is produced as a result) is marked with a
+     *  star instead of the ordinary active dot. */
+    private void markNextVersionAsCheckpoint() {
+        pendingIsCheckpoint = true;
+    }
 
     private void addVersionEventFromUndoTop() {
         wv.codeclip.patch.PatchUndoManager.Entry top = undoManager.peekUndo();
@@ -2170,6 +2223,9 @@ private void openGenericDirectoryDialog() {
             return;
         }
         String title = top.title() != null ? top.title() : "Change";
+        java.util.List<String> allTitles = (top.allTitles() != null && !top.allTitles().isEmpty())
+                ? new java.util.ArrayList<>(top.allTitles())
+                : java.util.List.of(title);
         String files = top.snapshot().keySet().stream()
                 .map(p -> {
                     java.io.File f = repo.getClassFileMap().get(p);
@@ -2183,10 +2239,13 @@ private void openGenericDirectoryDialog() {
         String time = java.time.LocalTime.now()
                 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         String build = pendingTargetBuild != null ? pendingTargetBuild : "?";
-        versionHistory.add(new VersionEvent(title, files, time, build));
+        boolean isCheckpoint = pendingIsCheckpoint;
+        versionHistory.add(new VersionEvent(title, files, time, build, allTitles, isCheckpoint));
         versionCurrentIdx = versionHistory.size() - 1;
         pendingTargetBuild = null;
+        pendingIsCheckpoint = false;
         refreshVersionPanel();
+        flashNewestVersionRow();
     }
 
     private void versionUndo() {
@@ -2208,6 +2267,7 @@ private void refreshVersionPanel() {
             return;
         }
         versionPanel.removeAll();
+        latestVersionRow = null;
         if (versionHistory.isEmpty()) {
             JLabel empty = new JLabel("No version events yet.");
             empty.setForeground(Color.GRAY);
@@ -2216,7 +2276,11 @@ private void refreshVersionPanel() {
             versionPanel.add(empty);
         } else {
             for (int i = versionHistory.size() - 1; i >= 0; i--) {
-                versionPanel.add(createVersionRow(versionHistory.get(i), i <= versionCurrentIdx));
+                JPanel row = createVersionRow(versionHistory.get(i), i <= versionCurrentIdx);
+                if (i == versionHistory.size() - 1) {
+                    latestVersionRow = row;
+                }
+                versionPanel.add(row);
             }
         }
         versionPanel.revalidate();
@@ -2227,6 +2291,56 @@ private void refreshVersionPanel() {
                 vp.setViewPosition(new Point(0, 0));
             }
         });
+    }
+
+    /** Reference to the most-recently-added row, kept only long enough to
+     *  drive the new-patch flash animation right after refreshVersionPanel
+     *  rebuilds the list. Not used for anything else — cleared implicitly
+     *  on the next refresh. */
+    private JPanel latestVersionRow;
+
+    /**
+     * Briefly flashes the newest version row's background so a freshly
+     * created version is visually obvious even if the person is still
+     * looking at the previous entry. Implemented as a plain Swing Timer
+     * ticking a color lerp back to the row's normal background — no
+     * threads, nothing to leak, and it self-stops after a fixed number
+     * of ticks, so there's nothing here that can get stuck running.
+     */
+    private void flashNewestVersionRow() {
+        JPanel row = latestVersionRow;
+        if (row == null) {
+            return;
+        }
+        Color from = new Color(255, 244, 176); // soft highlight yellow
+        Color to = row.getBackground();
+        int totalTicks = 18;      // ~1.5s at 80ms/tick — held constant, no external tuning knobs
+        int delayMs = 80;
+
+        javax.swing.Timer timer = new javax.swing.Timer(delayMs, null);
+        int[] tick = {0};
+        timer.addActionListener(e -> {
+            tick[0]++;
+            float ratio = Math.min(1f, tick[0] / (float) totalTicks);
+            row.setBackground(lerpColor(from, to, ratio));
+            row.repaint();
+            if (ratio >= 1f) {
+                timer.stop();
+            }
+        });
+        timer.setRepeats(true);
+        timer.start();
+    }
+
+    private static Color lerpColor(Color a, Color b, float t) {
+        int r = Math.round(a.getRed()   + (b.getRed()   - a.getRed())   * t);
+        int g = Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * t);
+        int bl = Math.round(a.getBlue() + (b.getBlue()  - a.getBlue())  * t);
+        return new Color(clamp255(r), clamp255(g), clamp255(bl));
+    }
+
+    private static int clamp255(int v) {
+        return Math.max(0, Math.min(255, v));
     }
 
 private JPanel createVersionRow(VersionEvent ev, boolean active) {
@@ -2259,9 +2373,14 @@ private JPanel createVersionRow(VersionEvent ev, boolean active) {
                 BorderFactory.createEmptyBorder(5, 8, 5, 8)));
         row.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
-        JLabel icon = new JLabel(active ? "●" : "↩");
+        String iconGlyph = ev.isCheckpoint() ? "★" : (active ? "●" : "↩");
+        Color iconColor = ev.isCheckpoint()
+                ? new Color(190, 150, 20)
+                : (active ? new Color(40, 160, 40) : new Color(170, 170, 170));
+        JLabel icon = new JLabel(iconGlyph);
         icon.setFont(icon.getFont().deriveFont(Font.BOLD, 13f));
-        icon.setForeground(active ? new Color(40, 160, 40) : new Color(170, 170, 170));
+        icon.setForeground(iconColor);
+        icon.setToolTipText(ev.isCheckpoint() ? "Checkpoint set here" : (active ? "Applied" : "Undone"));
         icon.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 8));
 
         Font baseFont = UIManager.getFont("Label.font");
@@ -2294,6 +2413,14 @@ private JPanel createVersionRow(VersionEvent ev, boolean active) {
         content.setOpaque(false);
         header.setAlignmentX(Component.LEFT_ALIGNMENT);
         content.add(header);
+
+        if (ev.allTitles() != null && ev.allTitles().size() > 1) {
+            JLabel batchNote = new JLabel(ev.allTitles().size() + " changes in this batch — click for details");
+            batchNote.setFont(baseFont.deriveFont(Font.ITALIC, 10.5f));
+            batchNote.setForeground(active ? new Color(130, 100, 40) : new Color(180, 180, 180));
+            batchNote.setAlignmentX(Component.LEFT_ALIGNMENT);
+            content.add(batchNote);
+        }
 
         if (ev.files() != null && !ev.files().isBlank()) {
             // Word-wrapping file list (no truncation)
@@ -2449,22 +2576,41 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
         StyleConstants.setForeground(undoneStatusStyle, new Color(160, 40, 40));
         StyleConstants.setBold(undoneStatusStyle, true);
 
+        Style checkpointStatusStyle = detailPane.addStyle("checkpointStatus", base);
+        StyleConstants.setForeground(checkpointStatusStyle, new Color(190, 150, 20));
+        StyleConstants.setBold(checkpointStatusStyle, true);
+
         Style wholeClassStyle = detailPane.addStyle("wholeClass", base);
         StyleConstants.setForeground(wholeClassStyle, new Color(40, 100, 200));
 
         Style patchStyle = detailPane.addStyle("patchStyle", base);
         StyleConstants.setForeground(patchStyle, new Color(150, 80, 0));
 
+        Style batchItemStyle = detailPane.addStyle("batchItem", base);
+        StyleConstants.setForeground(batchItemStyle, new Color(90, 90, 90));
+
         try {
             doc.insertString(doc.getLength(), ev.title() + "\n", titleStyle);
             doc.insertString(doc.getLength(), "Time: " + ev.timestamp() + "\n", smallStyle);
             doc.insertString(doc.getLength(), "Target Build: #" + ev.targetBuild() + "\n", smallStyle);
-            if (active) {
+            if (ev.isCheckpoint()) {
+                doc.insertString(doc.getLength(), "Status: Checkpoint\n", checkpointStatusStyle);
+            } else if (active) {
                 doc.insertString(doc.getLength(), "Status: Active\n", activeStatusStyle);
             } else {
                 doc.insertString(doc.getLength(), "Status: Undone\n", undoneStatusStyle);
             }
             doc.insertString(doc.getLength(), "\n", base);
+
+            if (ev.allTitles() != null && ev.allTitles().size() > 1) {
+                doc.insertString(doc.getLength(),
+                        "Changes in this batch (" + ev.allTitles().size() + "):\n", base);
+                int n = 1;
+                for (String t : ev.allTitles()) {
+                    doc.insertString(doc.getLength(), "  " + (n++) + ". " + t + "\n", batchItemStyle);
+                }
+                doc.insertString(doc.getLength(), "\n", base);
+            }
 
             if (ev.files() != null && !ev.files().isBlank()) {
                 doc.insertString(doc.getLength(), "Altered files:\n", base);
@@ -2489,52 +2635,45 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
 
         JButton renameBtn = new JButton("Rename Title");
         renameBtn.addActionListener(e -> {
-            String newTitle = JOptionPane.showInputDialog(dlg, 
-                "Enter new title:", ev.title());
-            if (newTitle != null && !newTitle.trim().isEmpty()) {
-                ev.setTitle(newTitle.trim());
-                refreshVersionPanel();
-                dlg.dispose();
+            JTextField titleField = new JTextField(ev.title());
+            titleField.setFont(titleField.getFont().deriveFont(14f));
+            titleField.setPreferredSize(new Dimension(420, 32));
+            titleField.selectAll();
+
+            JPanel promptPanel = new JPanel(new BorderLayout(0, 8));
+            JLabel promptLabel = new JLabel("Enter new title:");
+            promptPanel.add(promptLabel, BorderLayout.NORTH);
+            promptPanel.add(titleField, BorderLayout.CENTER);
+            promptPanel.setPreferredSize(new Dimension(440, 70));
+
+            int result = JOptionPane.showConfirmDialog(
+                    dlg, promptPanel, "Rename Title",
+                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+
+            if (result == JOptionPane.OK_OPTION) {
+                String newTitle = titleField.getText();
+                if (newTitle != null && !newTitle.trim().isEmpty()) {
+                    ev.setTitle(newTitle.trim());
+                    refreshVersionPanel();
+                    dlg.dispose();
+                }
             }
         });
         btnRow.add(renameBtn);
 
         JButton enableOnlyBtn = new JButton("Enable Only These");
+        enableOnlyBtn.setToolTipText("Disables everything else, enables only files touched by this version.");
         enableOnlyBtn.addActionListener(e -> {
-            String filesStr = ev.files();
-            if (filesStr == null || filesStr.isBlank()) {
+            java.util.List<String> targetNames = versionEventFileTargets(ev);
+            if (targetNames.isEmpty()) {
                 JOptionPane.showMessageDialog(dlg, "No files recorded for this version event.");
                 return;
             }
-            java.util.List<String> targetNames = new java.util.ArrayList<>();
-            for (String f : filesStr.split(",")) {
-                String trimmed = f.trim();
-                if (!trimmed.isEmpty()) targetNames.add(trimmed.toLowerCase());
-            }
-            if (targetNames.isEmpty()) return;
 
-            // Disable all, then re-enable matched files
             repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
             java.util.List<String> enabled = new java.util.ArrayList<>();
             java.util.List<String> notFound = new java.util.ArrayList<>();
-
-            for (String target : targetNames) {
-                boolean found = false;
-                for (java.util.Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
-                    java.io.File file = entry.getValue();
-                    if (file == null) continue;
-                    String name = file.getName().toLowerCase();
-                    if (name.equals(target) || name.equals(target + ".java") || name.equals(target + ".gd")) {
-                        repo.getDisabledClasses().remove(entry.getKey());
-                        enabled.add(file.getName());
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    notFound.add(target);
-                }
-            }
+            enableMatchingFiles(targetNames, enabled, notFound);
 
             refreshText();
             refreshPanels();
@@ -2548,6 +2687,31 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
         });
         btnRow.add(enableOnlyBtn);
 
+        JButton enableAlsoBtn = new JButton("Enable Also");
+        enableAlsoBtn.setToolTipText("Enables files touched by this version without disabling anything currently enabled.");
+        enableAlsoBtn.addActionListener(e -> {
+            java.util.List<String> targetNames = versionEventFileTargets(ev);
+            if (targetNames.isEmpty()) {
+                JOptionPane.showMessageDialog(dlg, "No files recorded for this version event.");
+                return;
+            }
+
+            java.util.List<String> enabled = new java.util.ArrayList<>();
+            java.util.List<String> notFound = new java.util.ArrayList<>();
+            enableMatchingFiles(targetNames, enabled, notFound);
+
+            refreshText();
+            refreshPanels();
+            if (!enabled.isEmpty()) {
+                appendTempLog("Enabled version files (kept others enabled): " + String.join(", ", enabled));
+            }
+            if (!notFound.isEmpty()) {
+                appendTempLog("Warning: not found in loaded classes: " + String.join(", ", notFound));
+            }
+            dlg.dispose();
+        });
+        btnRow.add(enableAlsoBtn);
+
         JButton closeBtn = new JButton("Close");
         closeBtn.addActionListener(e -> dlg.dispose());
         btnRow.add(closeBtn);
@@ -2555,13 +2719,52 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
         dlg.add(btnRow, BorderLayout.SOUTH);
 
         dlg.pack();
-        dlg.setMinimumSize(new Dimension(400, 300));
+        dlg.setMinimumSize(new Dimension(420, 320));
         int frameWidth = CodeClipFrame.this.getWidth();
         if (dlg.getWidth() > frameWidth) {
             dlg.setSize(frameWidth, dlg.getHeight());
         }
         dlg.setLocationRelativeTo(this);
         dlg.setVisible(true);
+    }
+
+    /** Parses ev.files() ("Foo.java, bar.js, ...") into a lowercase name list for matching. */
+    private java.util.List<String> versionEventFileTargets(VersionEvent ev) {
+        java.util.List<String> targetNames = new java.util.ArrayList<>();
+        String filesStr = ev.files();
+        if (filesStr == null || filesStr.isBlank()) return targetNames;
+        for (String f : filesStr.split(",")) {
+            String trimmed = f.trim();
+            if (!trimmed.isEmpty()) targetNames.add(trimmed.toLowerCase());
+        }
+        return targetNames;
+    }
+
+    /**
+     * Enables every loaded file whose bare name matches one of targetNames
+     * (exact match, or with .java/.gd appended for bare-class-name style
+     * @@Enable targets). Never touches disabled state of non-matching files —
+     * callers decide separately whether to disable everything else first.
+     */
+    private void enableMatchingFiles(java.util.List<String> targetNames,
+                                      java.util.List<String> enabled, java.util.List<String> notFound) {
+        for (String target : targetNames) {
+            boolean found = false;
+            for (java.util.Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
+                java.io.File file = entry.getValue();
+                if (file == null) continue;
+                String name = file.getName().toLowerCase();
+                if (name.equals(target) || name.equals(target + ".java") || name.equals(target + ".gd")) {
+                    repo.getDisabledClasses().remove(entry.getKey());
+                    enabled.add(file.getName());
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                notFound.add(target);
+            }
+        }
     }
 
 /**
