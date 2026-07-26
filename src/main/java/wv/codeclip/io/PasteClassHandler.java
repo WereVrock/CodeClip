@@ -283,8 +283,9 @@ List<PatchChange> changes;
 try {
 changes = new PatchParser().parse(patchText);
 } catch (IllegalArgumentException e) {
+String[] parts = PatchParser.splitRawBlock(e.getMessage());
 PatchErrorDialog.show(parent,
-"Patch format error:\n\n" + e.getMessage(), null, null);
+"Patch format error:\n\n" + parts[0], null, null, parts[1]);
 return;
 }
 
@@ -378,7 +379,8 @@ List<PatchChange> changes;
 try {
 changes = patchParser.parse(text);
 } catch (IllegalArgumentException e) {
-PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
+String[] parts = PatchParser.splitRawBlock(e.getMessage());
+PatchErrorDialog.show(parent, "Patch format error:\n\n" + parts[0], null, null, parts[1]);
 return false;
 }
 

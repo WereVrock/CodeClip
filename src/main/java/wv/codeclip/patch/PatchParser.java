@@ -79,6 +79,31 @@ public static String VERSION()      { return "1.0-test"; }
 */
 
 public List<PatchChange> parse(String text) {
+        try {
+            return parseInternal(text);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(e.getMessage() + RAW_BLOCK_SUFFIX + text, e);
+        }
+    }
+
+    private static final String RAW_BLOCK_SUFFIX = "\n\n[RAW_BLOCK]\n";
+
+    /**
+     * Splits a message that already failed to parse into its human-readable
+     * part and the raw offending block, if the raw block was attached by
+     * parse() above. Returns [message, null] if no raw block was attached.
+     */
+    public static String[] splitRawBlock(String fullMessage) {
+        if (fullMessage == null) return new String[]{null, null};
+        int idx = fullMessage.indexOf(RAW_BLOCK_SUFFIX);
+        if (idx < 0) return new String[]{fullMessage, null};
+        return new String[]{
+            fullMessage.substring(0, idx),
+            fullMessage.substring(idx + RAW_BLOCK_SUFFIX.length())
+        };
+    }
+
+    private List<PatchChange> parseInternal(String text) {
 String[] lines = text.lines().toArray(String[]::new);
 
 int i = 0;

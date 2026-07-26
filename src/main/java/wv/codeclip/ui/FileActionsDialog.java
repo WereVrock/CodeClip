@@ -24,7 +24,18 @@ public final class FileActionsDialog {
 
     private FileActionsDialog() {}
 
-    public static void show(JFrame parent, File file) {
+public static void show(JFrame parent, File file) {
+        show(parent, file, null);
+    }
+
+    /**
+     * @param onDelete optional callback invoked (with the file's absolute path)
+     *                  when the user confirms deletion from this dialog. If
+     *                  null, no Delete button is shown — callers that don't
+     *                  offer delete-from-here (e.g. plain "view info" contexts)
+     *                  are unaffected.
+     */
+    public static void show(JFrame parent, File file, java.util.function.Consumer<String> onDelete) {
         if (file == null) {
             JOptionPane.showMessageDialog(parent,
                     "No file is associated with this entry.",
@@ -82,16 +93,33 @@ public final class FileActionsDialog {
         btnPanel.add(editBtn);
         btnPanel.add(playBtn);
         btnPanel.add(locationBtn);
+
+        if (onDelete != null) {
+            JButton deleteBtn = new JButton("Delete");
+            deleteBtn.setForeground(new Color(160, 30, 30));
+            deleteBtn.setToolTipText("Removes this file from disk and from CodeClip.");
+            deleteBtn.addActionListener(e -> {
+                int confirm = JOptionPane.showConfirmDialog(dialog,
+                        "Delete \"" + file.getName() + "\" from disk?\nThis cannot be undone from this dialog.",
+                        "Confirm Delete", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (confirm == JOptionPane.YES_OPTION) {
+                    onDelete.accept(file.getAbsolutePath());
+                    dialog.dispose();
+                }
+            });
+            btnPanel.add(deleteBtn);
+        }
+
         btnPanel.add(closeBtn);
         dialog.add(btnPanel, BorderLayout.SOUTH);
 
         dialog.pack();
-        dialog.setMinimumSize(new Dimension(420, exists ? 160 : 190));
+        dialog.setMinimumSize(new Dimension(460, exists ? 160 : 190));
         dialog.setLocationRelativeTo(parent);
         dialog.setVisible(true);
     }
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // Edit — Notepad++ preferred, Notepad fallback, cross-platform fallback
     // ------------------------------------------------------------------
     private static void openInEditor(Component parent, File file) {
@@ -168,7 +196,8 @@ public final class FileActionsDialog {
     // ------------------------------------------------------------------
     // Open file location — select file in Explorer (Windows) or open folder
     // ------------------------------------------------------------------
-    private static void openFileLocation(Component parent, File file) {
+
+private static void openFileLocation(Component parent, File file) {
         File parentDir = file.getParentFile();
         if (parentDir == null || !parentDir.exists()) {
             showFailure(parent, "Cannot find the containing folder", null);
@@ -176,9 +205,15 @@ public final class FileActionsDialog {
         }
 
         if (isWindows()) {
-            // Explorer with /select highlights the file
+            // Explorer with /select highlights the file. When passed through
+            // ProcessBuilder (not a shell), each array element is one argv entry —
+            // wrapping the path in literal quotes here was being passed to
+            // explorer.exe as a single token containing quote characters, which
+            // explorer.exe doesn't strip, so it silently fell back to opening the
+            // default (Documents) folder. The fix: pass "/select," and the bare
+            // path as two separate, unquoted argv entries.
             try {
-                String[] cmd = {"explorer.exe", "/select,\"" + file.getAbsolutePath() + "\""};
+                String[] cmd = {"explorer.exe", "/select,", file.getAbsolutePath()};
                 if (tryLaunch(parent, cmd)) {
                     return;
                 }
@@ -200,7 +235,7 @@ public final class FileActionsDialog {
         showFailure(parent, "Desktop API not available", null);
     }
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // Utility helpers
     // ------------------------------------------------------------------
     private static boolean isWindows() {

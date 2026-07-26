@@ -291,15 +291,45 @@ private JPanel buildClassRow(String path, int depth) {
             nameLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
         }
 
+        JButton copyBtn = new JButton("Copy");
+        copyBtn.setFont(copyBtn.getFont().deriveFont(Font.PLAIN, 10f));
+        copyBtn.setMargin(new Insets(0, 4, 0, 4));
+        copyBtn.setFocusable(false);
+        copyBtn.setToolTipText("Copy this file's source to the clipboard");
+        copyBtn.addActionListener(e -> {
+            String code = repo.getClassCodeMap().get(path);
+            if (code != null) {
+                String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
+                String text = prefix + " ===== " + name + " =====\n" + code + "\n";
+                java.awt.Toolkit.getDefaultToolkit()
+                        .getSystemClipboard()
+                        .setContents(new java.awt.datatransfer.StringSelection(text), null);
+                copyBtn.setText("Copied!");
+                javax.swing.Timer t = new javax.swing.Timer(1200, ev -> copyBtn.setText("Copy"));
+                t.setRepeats(false);
+                t.start();
+            }
+        });
+
         JButton moreBtn = new JButton("...");
         moreBtn.setFont(moreBtn.getFont().deriveFont(Font.PLAIN, 10f));
         moreBtn.setMargin(new Insets(0, 4, 0, 4));
         moreBtn.setFocusable(false);
-        moreBtn.setToolTipText("Directory, edit, play, open file location");
+        moreBtn.setToolTipText("Directory, edit, play, open file location, delete");
         moreBtn.addActionListener(e -> {
             java.awt.Window w = SwingUtilities.getWindowAncestor(row);
             JFrame frame = (w instanceof JFrame) ? (JFrame) w : null;
-            wv.codeclip.ui.FileActionsDialog.show(frame, file);
+            wv.codeclip.ui.FileActionsDialog.show(frame, file, deletedPath -> {
+                repo.getClassCodeMap().remove(deletedPath);
+                repo.getClassFileMap().remove(deletedPath);
+                repo.getDisabledClasses().remove(deletedPath);
+                File onDisk = new File(deletedPath);
+                if (onDisk.exists()) {
+                    onDisk.delete();
+                }
+                onToggle.run();
+                refresh();
+            });
         });
 
         JButton toggleBtn = new JButton(disabled ? "Enable" : "Disable");
@@ -315,6 +345,7 @@ private JPanel buildClassRow(String path, int depth) {
 
         JPanel btnGroup = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         btnGroup.setOpaque(false);
+        btnGroup.add(copyBtn);
         btnGroup.add(moreBtn);
         btnGroup.add(toggleBtn);
 

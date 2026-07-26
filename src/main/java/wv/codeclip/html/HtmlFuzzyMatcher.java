@@ -134,15 +134,22 @@ public final class HtmlFuzzyMatcher {
         return a.startOffset() < b.endOffset() && b.startOffset() < a.endOffset();
     }
 
-    public static double similarityPercent(String a, String b) {
-        if (a.equals(b)) return 100.0;
-        int dist = levenshtein(a, b);
-        int maxLen = Math.max(a.length(), b.length());
-        if (maxLen == 0) return 100.0;
-        return Math.max(0.0, (1.0 - ((double) dist / maxLen)) * 100.0);
-    }
+public static double similarityPercent(String a, String b) {
+    if (a.equals(b)) return 100.0;
+    String an = collapseWhitespace(a);
+    String bn = collapseWhitespace(b);
+    if (an.equals(bn)) return 100.0;
+    int dist = levenshtein(an, bn);
+    int maxLen = Math.max(an.length(), bn.length());
+    if (maxLen == 0) return 100.0;
+    return Math.max(0.0, (1.0 - ((double) dist / maxLen)) * 100.0);
+}
 
-    public static String formatPercent(double value) {
+private static String collapseWhitespace(String s) {
+    return s.replaceAll("[ \\t]+", " ");
+}
+
+public static String formatPercent(double value) {
         return String.format(Locale.US, "%.1f", value);
     }
 

@@ -401,6 +401,28 @@ JMenuItem languageItem = new JMenuItem("Language…");
             );
         });
         extraMenu.add(copyCopierItem);
+        JMenuItem copyMoveItem = new JMenuItem("Copy Move Instructions");
+        copyMoveItem.addActionListener(e -> {
+            new ClipboardService().write(
+                    "Use @@Move to move/rename a loaded file\n\n"
+                    + "@@Move OldName.ext -> new/relative/path.ext"
+            );
+        });
+        extraMenu.add(copyMoveItem);
+        JMenuItem copyDeleteItem = new JMenuItem("Copy Delete Instructions");
+        copyDeleteItem.addActionListener(e -> {
+            new ClipboardService().write(
+                    "Use @@Delete to delete loaded files from disk\n\n"
+                    + "@@Delete FileName1.ext, FileName2.ext"
+            );
+        });
+        extraMenu.add(copyDeleteItem);
+        JMenuItem copyCodemapItem = new JMenuItem("Copy Codemap");
+        copyCodemapItem.addActionListener(e -> {
+            String map = new wv.codeclip.codemap.CodeMapBuilder(repo).build(repo.getDisabledClasses());
+            new ClipboardService().write(map);
+        });
+        extraMenu.add(copyCodemapItem);
         copyMetaItem = new JMenuItem("Copy Meta Instructions");
         copyMetaItem.addActionListener(e -> {
             new ClipboardService().write(wv.codeclip.config.MetaInstructions.TEXT);
@@ -464,6 +486,8 @@ JMenuItem languageItem = new JMenuItem("Language…");
                     versionUndo();
                     pasteHandler.clearDuplicateHistory();
                     godotPasteHandler.clearDuplicateHistory();
+                    htmlPasteHandler.clearDuplicateHistory();
+                    genericPasteHandler.clearDuplicateHistory();
                 }
             } catch (java.io.IOException ex) {
                 JOptionPane.showMessageDialog(this, "Undo failed:\n" + ex.getMessage(),
@@ -1259,7 +1283,6 @@ public void addClassPanel(String path, String name) {
         JButton toggle = new JButton("Disable");
         JButton copy = new JButton("Copy");
         JButton more = new JButton("...");
-        JButton delete = new JButton("Delete");
         panel.putClientProperty("label", label);
 
         toggle.addActionListener(e -> {
@@ -1285,26 +1308,27 @@ public void addClassPanel(String path, String name) {
             }
         });
 
-        more.setToolTipText("Directory, edit, play, open file location");
+        more.setToolTipText("Directory, edit, play, open file location, delete");
         more.addActionListener(e -> {
             File f = repo.getClassFileMap().get(path);
-            wv.codeclip.ui.FileActionsDialog.show(CodeClipFrame.this, f);
-        });
-
-        delete.addActionListener(e -> {
-            repo.getClassCodeMap().remove(path);
-            repo.getClassFileMap().remove(path);
-            repo.getDisabledClasses().remove(path);
-            classPanel.remove(panel);
-            refreshText();
-            refreshPanels();
+            wv.codeclip.ui.FileActionsDialog.show(CodeClipFrame.this, f, deletedPath -> {
+                repo.getClassCodeMap().remove(deletedPath);
+                repo.getClassFileMap().remove(deletedPath);
+                repo.getDisabledClasses().remove(deletedPath);
+                removeClassPanel(deletedPath);
+                File onDisk = new File(deletedPath);
+                if (onDisk.exists()) {
+                    onDisk.delete();
+                }
+                refreshText();
+                refreshPanels();
+            });
         });
 
         panel.add(label);
         panel.add(toggle);
         panel.add(copy);
         panel.add(more);
-        panel.add(delete);
 
         classPanel.add(panel);
         classPanel.revalidate();
@@ -2772,14 +2796,38 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
      * paste; otherwise it was a patch. Falls back to checking the undo manager
      * top entry title.
      */
+
+/**
+     * Determines whether a file name was touched by a whole-file write
+     * (new class/file creation, or a full-file overwrite) versus a surgical
+     * patch, by inspecting the matching version event's title. Whole-file
+     * titles come from three sources depending on mode:
+     *   Java mode:            "Class Created: X" / "Class Updated: X" / "Class: X"
+     *   HTML/Generic modes:   "File Created: X" / "File Updated: X"
+     * Anything else (FindReplace/MethodReplace/InsertMethod-derived titles,
+     * or multi-file batch titles ending in "(+N more)") is treated as a patch.
+     */
     private boolean isWholeClassFile(String fileName) {
-        // Walk version history to find the matching event and check its title
         for (VersionEvent ev : versionHistory) {
-            if (ev.files() != null && java.util.Arrays.asList(ev.files().split(","))
-                    .stream().map(String::trim).anyMatch(f -> f.equalsIgnoreCase(fileName))) {
-                return ev.title() != null
-                        && (ev.title().startsWith("Class Created") || ev.title().startsWith("Class Updated")
-                        || ev.title().startsWith("Class:"));
+            if (ev.files() == null) continue;
+            boolean matchesThisFile = java.util.Arrays.stream(ev.files().split(","))
+                    .map(String::trim)
+                    .anyMatch(f -> f.equalsIgnoreCase(fileName));
+            if (!matchesThisFile) continue;
+
+            // A batch's allTitles() carries the per-entry title even when the
+            // combined VersionEvent.title() is a "(+N more)" summary — check
+            // every title in the batch, not just the first.
+            java.util.List<String> titlesToCheck = (ev.allTitles() != null && !ev.allTitles().isEmpty())
+                    ? ev.allTitles()
+                    : (ev.title() != null ? java.util.List.of(ev.title()) : java.util.List.of());
+
+            for (String t : titlesToCheck) {
+                if (t == null) continue;
+                if (t.startsWith("Class Created") || t.startsWith("Class Updated") || t.startsWith("Class:")
+                        || t.startsWith("File Created") || t.startsWith("File Updated")) {
+                    return true;
+                }
             }
         }
         return false;

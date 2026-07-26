@@ -357,7 +357,9 @@ private void applyFileEntry(HtmlScriptExtractor.FileEntry entry, PasteOutcome ou
         try {
             changes = new PatchParser().parse(text);
         } catch (IllegalArgumentException e) {
-            PatchErrorDialog.show(parent, "Patch format error:\n\n" + e.getMessage(), null, null);
+            String[] parts = PatchParser.splitRawBlock(e.getMessage());
+            PatchErrorDialog.show(parent, "Patch format error:\n\n" + parts[0], null, null,
+                    parts[1] != null ? parts[1] : text);
             return;
         }
 
