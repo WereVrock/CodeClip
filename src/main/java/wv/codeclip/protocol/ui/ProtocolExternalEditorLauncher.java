@@ -1,4 +1,4 @@
-package protocol.ui;
+package wv.codeclip.protocol.ui;
 
 import java.io.*;
 import java.nio.file.*;
@@ -7,7 +7,7 @@ import java.nio.file.*;
  * Opens a file in Notepad++ if available on the system PATH or common install
  * locations, falling back to plain Notepad (Windows) or the OS default handler.
  */
-public final class ExternalEditorLauncher {
+public final class ProtocolExternalEditorLauncher {
 
     private static final String[] NOTEPADPP_CANDIDATES = {
         "notepad++.exe", // if on PATH
@@ -15,7 +15,7 @@ public final class ExternalEditorLauncher {
         "C:\\Program Files (x86)\\Notepad++\\notepad++.exe"
     };
 
-    private ExternalEditorLauncher() {}
+    private ProtocolExternalEditorLauncher() {}
 
     public static void open(Path file) {
         String notepadPlusPlus = findNotepadPlusPlus();

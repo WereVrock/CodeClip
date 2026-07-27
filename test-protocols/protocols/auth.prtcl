@@ -1,0 +1,6 @@
+!id auth-jwt
+JWT tokens validated at gateway with RS256.
+
+!id caching
+Cache responses for 60s.
+

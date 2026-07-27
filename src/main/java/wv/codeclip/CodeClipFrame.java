@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.io.PasteClassHandler;
 import wv.codeclip.modecontext.ModeColors;
@@ -63,6 +64,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             = new JCheckBox("Include Instructions", false);
     private final JCheckBox smartPasteCheck
             = new JCheckBox("Smart Paste", false);
+    private final JCheckBox includeProtocolCheck
+            = new JCheckBox("Include Protocol", true);
 
     private final JLabel enabledCountLabel = new JLabel("Enabled Classes: 0");
     private JLabel modeLabel;
@@ -77,6 +80,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private wv.codeclip.html.HtmlPasteHandler htmlPasteHandler;
     private wv.codeclip.generic.GenericPasteHandler genericPasteHandler;
     private wv.codeclip.patch.PatchUndoManager undoManager;
+    private wv.codeclip.protocol.library.ProtocolLibrary protocolLibrary;
+    private wv.codeclip.protocol.engine.ProtocolUndoManager protocolUndoManager;
+    private wv.codeclip.protocol.engine.ProtocolPasteRouter protocolPasteRouter;
+    private Runnable syncProtocolUndoRedo;
     private JMenuItem godotDirMenuItem;
     private JMenuItem htmlDirMenuItem;
     private JMenuItem genericDirMenuItem;
@@ -134,6 +141,11 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         wv.codeclip.html.HtmlDirectory.load(settings);
         wv.codeclip.generic.GenericDirectory.load(settings);
         undoManager = new wv.codeclip.patch.PatchUndoManager();
+        protocolLibrary = new wv.codeclip.protocol.library.ProtocolLibrary(
+                new File(System.getProperty("user.dir")).toPath());
+        protocolUndoManager = new wv.codeclip.protocol.engine.ProtocolUndoManager();
+        protocolPasteRouter = new wv.codeclip.protocol.engine.ProtocolPasteRouter(
+                protocolLibrary, protocolUndoManager);
         pasteHandler = new PasteClassHandler(
                 repo,
                 this,
@@ -463,6 +475,12 @@ JMenuItem languageItem = new JMenuItem("Language…");
         systemMenu.add(lastErrorMenuItem);
         menuBar.add(systemMenu);
 
+        JMenu protocolMenu = new JMenu("Protocol");
+        JMenuItem protocolManagerItem = new JMenuItem("Protocol Manager…");
+        protocolManagerItem.addActionListener(e -> openProtocolManagerDialog());
+        protocolMenu.add(protocolManagerItem);
+        menuBar.add(protocolMenu);
+
         setJMenuBar(menuBar);
 
 // --- Top bar: undo/redo + stats ---
@@ -475,6 +493,8 @@ JMenuItem languageItem = new JMenuItem("Language…");
             undoBtn.setEnabled(undoManager.canUndo());
             redoBtn.setEnabled(undoManager.canRedo());
         };
+
+        syncProtocolUndoRedo = () -> {};
 
         undoBtn.addActionListener(e -> {
             try {
@@ -736,6 +756,11 @@ JMenuItem languageItem = new JMenuItem("Language…");
         alwaysOnTopCheck.addActionListener(e -> setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
 
         pasteClass.addActionListener(e -> {
+            if (includeProtocolCheck.isSelected() && handleProtocolPasteIfPresent()) {
+                syncUndoRedo.run();
+                syncProtocolUndoRedo.run();
+                return;
+            }
             if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
                 // Godot mode has no Smart Paste — always single-block.
                 godotPasteHandler.handlePasteFromClipboard();
@@ -773,10 +798,17 @@ JMenuItem languageItem = new JMenuItem("Language…");
             }
         });
 
-// Paste + Smart Paste pinned to left
+// Paste + Smart Paste + Always On Top stacked, pinned to left
+        JPanel pasteCheckStack = new JPanel();
+        pasteCheckStack.setLayout(new BoxLayout(pasteCheckStack, BoxLayout.Y_AXIS));
+        smartPasteCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        alwaysOnTopCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        pasteCheckStack.add(smartPasteCheck);
+        pasteCheckStack.add(alwaysOnTopCheck);
+
         JPanel pasteGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
         pasteGroup.add(pasteClass);
-        pasteGroup.add(smartPasteCheck);
+        pasteGroup.add(pasteCheckStack);
 
 // Right side grid
         JPanel rightButtons = new JPanel(new GridLayout(0, 3, 5, 5));
@@ -784,8 +816,8 @@ JMenuItem languageItem = new JMenuItem("Language…");
         rightButtons.add(copy);
         rightButtons.add(copyCode);
         rightButtons.add(copyInstructions);
-        rightButtons.add(alwaysOnTopCheck);
         rightButtons.add(includeInstructionsCheck);
+        rightButtons.add(includeProtocolCheck);
 
         JPanel bottomBar = new JPanel(new BorderLayout(4, 0));
         bottomBar.add(pasteGroup, BorderLayout.WEST);
@@ -2867,5 +2899,82 @@ return filePath.substring(rootPath.length() + 1).replace(File.separatorChar, '/'
 } catch (Exception ignored) {}
 return null;
 }
+
+/**
+     * Checks clipboard content for @@protocol blocks before any mode-specific
+     * paste routing runs. If found, routes the ENTIRE clipboard text through
+     * the protocol module regardless of current AppMode, and returns true so
+     * the caller skips normal paste handling entirely. Returns false if no
+     * protocol content is present, so normal paste handling proceeds untouched.
+     */
+    private boolean handleProtocolPasteIfPresent() {
+        String text = new ClipboardService().read();
+        if (!wv.codeclip.protocol.engine.ProtocolPasteRouter.containsProtocolBlock(text)) {
+            return false;
+        }
+
+        wv.codeclip.protocol.engine.ProtocolEngine.AcceptanceResolver resolver =
+                (fileName, original, commandsForFile) -> {
+                    Set<String> accepted = new java.util.HashSet<>();
+                    for (wv.codeclip.protocol.model.Command c : commandsForFile) {
+                        accepted.add(wv.codeclip.protocol.engine.ProtocolApplier.commandKey(c));
+                    }
+                    return accepted;
+                };
+
+        wv.codeclip.protocol.engine.ProtocolPasteRouter.RouteOutcome outcome =
+                protocolPasteRouter.route(text, resolver);
+
+        for (String line : outcome.logLines) {
+            logProtocolLine(line);
+        }
+
+        if (outcome.changed) {
+            addProtocolVersionEvent(outcome.result.getWrittenFiles().size());
+        }
+
+        return true;
+    }
+
+    /**
+     * Opens the Protocol Manager dialog. Modeless per protocol module design —
+     * does not block this frame.
+     */
+
+private void openProtocolManagerDialog() {
+        wv.codeclip.protocol.ui.ProtocolManagerDialog dialog =
+                new wv.codeclip.protocol.ui.ProtocolManagerDialog(this,
+                        new File(System.getProperty("user.dir")).toPath(),
+                        protocolUndoManager,
+                        this::logProtocolLine);
+        dialog.setVisible(true);
+    }
+
+/**
+     * Writes a protocol-related log line into BOTH the protocol module's own
+     * concern (nothing extra needed there — ProtocolManagerDialog reads
+     * straight from disk) and the existing code-log feeds (temp log +
+     * persistent log), per the "protocols get own logs but same logs also
+     * apply to normal logs" requirement — the shared feeds are the "normal
+     * logs" being referred to, and protocol lines are mirrored into them
+     * rather than replacing anything.
+     */
+    private void logProtocolLine(String message) {
+        appendTempLog(message);
+    }
+
+    /** Adds a version-history entry so the Versions tab reflects protocol changes too. */
+    private void addProtocolVersionEvent(int fileCount) {
+        String time = java.time.LocalTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        String title = "Protocol change (" + fileCount + " file" + (fileCount > 1 ? "s" : "") + ")";
+        while (versionHistory.size() > versionCurrentIdx + 1) {
+            versionHistory.remove(versionHistory.size() - 1);
+        }
+        versionHistory.add(new VersionEvent(title, "(protocol files)", time, "-", List.of(title), false));
+        versionCurrentIdx = versionHistory.size() - 1;
+        refreshVersionPanel();
+        flashNewestVersionRow();
+    }
 
 }
