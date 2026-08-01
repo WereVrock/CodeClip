@@ -40,7 +40,7 @@ public final class HtmlStructuralTarget {
         if (lower.endsWith(".css")) {
             return findCssRuleBySelector(code, name);
         }
-        if (lower.endsWith(".js") || lower.endsWith(".mjs")) {
+        if (lower.endsWith(".js") || lower.endsWith(".mjs") || lower.endsWith(".php")) {
             return findJsFunctionByName(code, name);
         }
         return List.of();
@@ -51,7 +51,8 @@ public final class HtmlStructuralTarget {
         String lower = fileName.toLowerCase();
         return lower.endsWith(".html") || lower.endsWith(".htm")
                 || lower.endsWith(".css")
-                || lower.endsWith(".js") || lower.endsWith(".mjs");
+                || lower.endsWith(".js") || lower.endsWith(".mjs")
+                || lower.endsWith(".php");
     }
 
     /**

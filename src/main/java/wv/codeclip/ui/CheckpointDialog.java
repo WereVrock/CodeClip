@@ -351,11 +351,13 @@ private void onSetCheckpoint() {
 
         repo.setAllCheckpoints();
         pendingRestores.clear();
-        refreshCallback.run();
-        refresh();
+
+        boolean hadChanges = !updated.isEmpty();
         if (onCheckpointSetCallback != null) {
             onCheckpointSetCallback.run();
         }
+        refreshCallback.run();
+        refresh();
 
         StringBuilder msg = new StringBuilder();
         if (updated.isEmpty()) {

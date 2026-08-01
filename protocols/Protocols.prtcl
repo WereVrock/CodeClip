@@ -1,0 +1,22 @@
+!id includeprotocols
+include protocols buttons should include them to the copied text when copy all button is clicked
+
+!id pasteing
+every paste should be sent to protocol manager. protocol manager will decide what to do with it. Minimal coupling with protocol system and the rest of app
+
+!id storage-location
+protocols should be held in project root by default, with the ability to change the storage directory (configurable location, not hardcoded to root)
+
+!id rss-fallback
+RSS fallback: when ntfy delivery fails after retry, the message is written as an RSS item to KV (key `rss:items`, capped to CONFIG.RSS_MAX_ITEMS, newest first). Served at GET /rss.xml as a valid RSS 2.0 feed. A password-gated "Send test RSS item" button on the index page (GET /__test-rss) adds a synthetic item without requiring an actual ntfy failure. RSS is fallback-only — it does not fire on successful ntfy sends.
+On every ntfy failure, deliverMessage reports the RSS fallback outcome (written ok / failed with error / not attempted) rather than swallowing it. The dispatcher logs this outcome alongside the existing send-failure log line, and /__send-now includes it in its response body, so an RSS write failure is never silent.
+The RSS feed is reset (all items cleared) once per day, at the point the daily plan is first created in ensureTodayPlan — i.e. before the morning's first scheduled message can fire. Reset only happens on new-plan creation, not on every read of an existing plan, so a mid-day dispatcher self-heal call does not wipe the feed again.
+Each RSS item's title is the full oracle message itself, untruncated, so a feed reader notification surfaces the message text directly without opening the item. The item's description holds only the fallback reason ("ntfy delivery failed" or "manual test"), not a repeat of the message — title and description are deliberately non-redundant.
+A password-gated "Erase all RSS except last" button on the index page (GET /__trim-rss) manually keeps only the single most recent RSS item, discarding the rest. Distinct from the daily automatic reset in ensureTodayPlan, which clears the feed entirely — this is a manual, user-triggered partial trim.
+
+!id runtime-config
+Step 10: scheduling parameters (window start/end, min gap, soft band low/high, max gap ceiling, max messages per day, continuation probability) are runtime-editable from the index page rather than hardcoded. Defaults live in config.js as before; edits are stored as overrides in KV (key `config:overrides`) via runtime-config.js, which merges them over the defaults at read time through getEffectiveConfig(env). All scheduling code (scheduler.js, status.js) must read tunables through getEffectiveConfig rather than importing CONFIG's scheduling fields directly.
+GET /api/config returns current effective editable values. POST /api/config (password-protected) validates and saves overrides — validation enforces MIN_GAP_MINUTES \u2264 SOFT_BAND_LOW \u2264 SOFT_BAND_HIGH \u2264 MAX_GAP_CEILING, a fitting window, and sane ranges, rejecting bad combinations before they reach KV.
+Saved changes apply only to future plan generation by default. A password-protected "Regenerate today's plan now" button (GET /__regenerate-plan) force-overwrites today's already-generated plan immediately using current effective config, and — via the existing ensureTodayPlan reset path — also clears the RSS feed as part of that regeneration.
+The index page password field has a Show/Hide toggle button to reveal typed characters.
+

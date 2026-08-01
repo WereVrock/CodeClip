@@ -57,7 +57,22 @@ public class ClassActions {
      * Copies code + (optionally) instructions + notes to clipboard.
      * Order: code → instructions (if ticked) → notes
      */
+
+/**
+     * Copies code + (optionally) instructions + notes to clipboard.
+     * Order: code → instructions (if ticked) → notes
+     */
     public void copyAll(Runnable clearLogsCallback, String cleanNotes) {
+        copyAll(clearLogsCallback, cleanNotes, null);
+    }
+
+    /**
+     * Same as copyAll(Runnable, String), with an optional protocol appendix
+     * inserted after notes when "Include Protocol" is checked. Pass null (or
+     * use the two-arg overload) to omit it entirely.
+     * Order: code → instructions (if ticked) → notes → protocol appendix (if present)
+     */
+    public void copyAll(Runnable clearLogsCallback, String cleanNotes, String protocolAppendix) {
         StringBuilder sb = new StringBuilder();
         sb.append(classTextArea.getText());
 
@@ -69,6 +84,10 @@ public class ClassActions {
           .append(cleanNotes)
           .append(NOTES_END_MARK);
 
+        if (protocolAppendix != null && !protocolAppendix.isBlank()) {
+            sb.append(protocolAppendix);
+        }
+
         Toolkit.getDefaultToolkit()
                 .getSystemClipboard()
                 .setContents(new StringSelection(sb.toString()), null);
@@ -76,7 +95,7 @@ public class ClassActions {
         clearLogsCallback.run();
     }
 
-    public void copyCodeOnly() {
+public void copyCodeOnly() {
         Toolkit.getDefaultToolkit()
                 .getSystemClipboard()
                 .setContents(new StringSelection(classTextArea.getText()), null);

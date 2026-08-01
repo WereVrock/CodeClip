@@ -1,0 +1,18 @@
+!id when_to_implement
+you should implement these if user specifically asks you to implement these
+
+!id no_guessing
+if you cant implement the files because you need to see them you should ask the user.
+
+!id do_what_you_can
+if you can only implement some of these and you need to see more files to implement others, do what you can before asking to see more
+
+!id the_actual_list
+1bigger protocol view should also share the same color coding with live view 
+2 change protocols folder should allow quickly going to root folder with a btton press
+3. build properties should hold protocol folder and project root folder directory
+6. pressing enter while writing id should enter the caret into content area
+7. if at least 1 protocol command is there, dont show (clipboard doesnt appear to have java file" message - implemented but not tested
+8 no protocol found error gave me a text bigger than my screen, limit initial window to protocol manager size. allow scrolling and resizeing 
+9 if somehow protocols files are send to the app either by pasting or file creation. send them to protocol folder but first check if they already exist. if they exist check for diff and ask user.
+

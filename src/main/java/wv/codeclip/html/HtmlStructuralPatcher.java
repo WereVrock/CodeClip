@@ -143,7 +143,7 @@ public final class HtmlStructuralPatcher {
             if (braceIdx < 0) return null;
             return trimmed.substring(0, braceIdx).trim().replaceAll("\\s+", " ");
         }
-        if (lower.endsWith(".js") || lower.endsWith(".mjs")) {
+        if (lower.endsWith(".js") || lower.endsWith(".mjs") || lower.endsWith(".php")) {
             // Reuse the same heuristics as PatchApplier's Java method-name extraction,
             // adapted for JS: look for "function name(" or "name(" at line start.
             for (String line : trimmed.lines().toList()) {

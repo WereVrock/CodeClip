@@ -1,5 +1,6 @@
 package wv.codeclip;
 
+import wv.codeclip.mainFrame.CodeClipFrame;
 import javax.swing.SwingUtilities;
 
 public class CodeClip {

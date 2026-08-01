@@ -61,7 +61,8 @@ public final class DiffAcceptDialog extends JDialog {
         add(tabs, BorderLayout.CENTER);
         add(buttonPanel, BorderLayout.SOUTH);
 
-        setSize(800, 600);
+        setSize(1200, 800);
+        setMinimumSize(new Dimension(700, 450));
         setLocationRelativeTo(owner);
     }
 

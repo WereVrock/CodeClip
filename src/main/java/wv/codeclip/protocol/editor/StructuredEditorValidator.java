@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
  */
 public final class StructuredEditorValidator {
 
-    private static final Pattern VALID_ID = Pattern.compile("^[a-z][a-z0-9-]*$");
+    private static final Pattern VALID_ID = Pattern.compile("^[a-z][a-z0-9_-]*$");
 
     public Map<EntryDraft, EntryValidationState> validateAll(List<EntryDraft> drafts) {
         Map<EntryDraft, EntryValidationState> results = new LinkedHashMap<>();
@@ -29,7 +29,7 @@ public final class StructuredEditorValidator {
                 continue;
             }
             if (!VALID_ID.matcher(id).matches()) {
-                results.put(draft, EntryValidationState.error("ID must be lowercase letters, digits, hyphens, starting with a letter"));
+                results.put(draft, EntryValidationState.error("ID must be lowercase letters, digits, hyphens, or underscores, starting with a letter"));
                 continue;
             }
             if (idCounts.get(id) > 1) {

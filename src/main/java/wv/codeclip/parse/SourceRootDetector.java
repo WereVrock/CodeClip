@@ -23,11 +23,18 @@ public class SourceRootDetector {
     private final ClassRepository repo;
     private final JFrame parent;
     private final JavaSourceParser parser;
+    private final wv.codeclip.io.SettingsManager settings;
 
     public SourceRootDetector(ClassRepository repo, JFrame parent, JavaSourceParser parser) {
+        this(repo, parent, parser, null);
+    }
+
+    public SourceRootDetector(ClassRepository repo, JFrame parent, JavaSourceParser parser,
+                               wv.codeclip.io.SettingsManager settings) {
         this.repo = repo;
         this.parent = parent;
         this.parser = parser;
+        this.settings = settings;
     }
 
     public File detect(String packageName) {
@@ -41,11 +48,22 @@ public class SourceRootDetector {
             return resolveSourceRoot(mainFile.getParentFile(), getPackageOf(PREFERRED_MAIN_CLASS_NAME));
         }
 
+        String savedChoice = (settings != null) ? settings.loadPreferredMainClass() : "";
+        if (savedChoice != null && !savedChoice.isEmpty() && mainClasses.containsKey(savedChoice)) {
+            File savedFile = mainClasses.get(savedChoice);
+            return resolveSourceRoot(savedFile.getParentFile(), getPackageOf(savedChoice));
+        }
+
         if (!mainClasses.isEmpty()) {
             File chosen = promptUserToPickMainClass(mainClasses);
             if (chosen != null) {
                 try {
                     String code = Files.readString(chosen.toPath());
+                    String chosenName = parser.parseClassName(code);
+                    if (settings != null && chosenName != null) {
+                        settings.savePreferredMainClass(chosenName);
+                        settings.saveProperties();
+                    }
                     return resolveSourceRoot(chosen.getParentFile(), parser.parsePackage(code));
                 } catch (IOException ignored) {}
             }
@@ -93,7 +111,8 @@ public class SourceRootDetector {
         String[] options = mainClasses.keySet().toArray(new String[0]);
         String choice = (String) JOptionPane.showInputDialog(
                 parent,
-                "Multiple classes with main method detected. Pick folder for new class:",
+                "Multiple classes with main method detected. Pick folder for new class:\n"
+                        + "(This choice will be remembered — change it any time in Settings.)",
                 "Select Main Class Folder",
                 JOptionPane.QUESTION_MESSAGE,
                 null,

@@ -18,7 +18,7 @@ import wv.codeclip.protocol.model.ProtocolFile;
  */
 public final class ProtocolFileParser {
 
-    private static final Pattern ID_LINE = Pattern.compile("^!id\\s+([a-z][a-z0-9-]*)\\s*$");
+    private static final Pattern ID_LINE = Pattern.compile("^!id\\s+([a-z][a-z0-9_-]*)\\s*$");
     private static final Pattern LOCKED_LINE = Pattern.compile("^!locked\\s*$");
 
     public ProtocolFile parse(String fileName, String content) {

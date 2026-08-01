@@ -319,17 +319,25 @@ private JPanel buildClassRow(String path, int depth) {
         moreBtn.addActionListener(e -> {
             java.awt.Window w = SwingUtilities.getWindowAncestor(row);
             JFrame frame = (w instanceof JFrame) ? (JFrame) w : null;
-            wv.codeclip.ui.FileActionsDialog.show(frame, file, deletedPath -> {
-                repo.getClassCodeMap().remove(deletedPath);
-                repo.getClassFileMap().remove(deletedPath);
-                repo.getDisabledClasses().remove(deletedPath);
-                File onDisk = new File(deletedPath);
-                if (onDisk.exists()) {
-                    onDisk.delete();
-                }
-                onToggle.run();
-                refresh();
-            });
+            wv.codeclip.ui.FileActionsDialog.show(frame, file,
+                    deletedPath -> {
+                        repo.getClassCodeMap().remove(deletedPath);
+                        repo.getClassFileMap().remove(deletedPath);
+                        repo.getDisabledClasses().remove(deletedPath);
+                        File onDisk = new File(deletedPath);
+                        if (onDisk.exists()) {
+                            onDisk.delete();
+                        }
+                        onToggle.run();
+                        refresh();
+                    },
+                    removedPath -> {
+                        repo.getClassCodeMap().remove(removedPath);
+                        repo.getClassFileMap().remove(removedPath);
+                        repo.getDisabledClasses().remove(removedPath);
+                        onToggle.run();
+                        refresh();
+                    });
         });
 
         JButton toggleBtn = new JButton(disabled ? "Enable" : "Disable");

@@ -17,17 +17,17 @@ public final class AiOutputParser {
     private static final Pattern BLOCK_START_NO_FILENAME = Pattern.compile("^@@protocol\\s*$");
     private static final Pattern BLOCK_END = Pattern.compile("^@@protocolEnd\\s*$");
 
-    private static final Pattern DELETE_LINE = Pattern.compile("^DELETE\\s+!id\\s+([a-z][a-z0-9-]*)\\s*$");
+    private static final Pattern DELETE_LINE = Pattern.compile("^DELETE\\s+!id\\s+([a-z][a-z0-9_-]*)\\s*$");
     private static final Pattern MOVE_AFTER_LINE = Pattern.compile(
-        "^MOVE_AFTER\\s+!id\\s+([a-z][a-z0-9-]*)\\s+!id\\s+(START|[a-z][a-z0-9-]*)\\s*$");
-    private static final Pattern UPDATE_START = Pattern.compile("^UPDATE\\s+!id\\s+([a-z][a-z0-9-]*)\\s*$");
+        "^MOVE_AFTER\\s+!id\\s+([a-z][a-z0-9_-]*)\\s+!id\\s+(START|[a-z][a-z0-9_-]*)\\s*$");
+    private static final Pattern UPDATE_START = Pattern.compile("^UPDATE\\s+!id\\s+([a-z][a-z0-9_-]*)\\s*$");
     private static final Pattern UPDATE_END = Pattern.compile("^ENDUPDATE\\s*$");
-    private static final Pattern APPENDTO_START = Pattern.compile("^APPENDTO\\s+!id\\s+([a-z][a-z0-9-]*)\\s*$");
+    private static final Pattern APPENDTO_START = Pattern.compile("^APPENDTO\\s+!id\\s+([a-z][a-z0-9_-]*)\\s*$");
     private static final Pattern APPENDTO_END = Pattern.compile("^ENDAPPENDTO\\s*$");
-    private static final Pattern NEW_START = Pattern.compile("^NEW\\s+!id\\s+([a-z][a-z0-9-]*)\\s*$");
+    private static final Pattern NEW_START = Pattern.compile("^NEW\\s+!id\\s+([a-z][a-z0-9_-]*)\\s*$");
     private static final Pattern NEW_END = Pattern.compile("^ENDNEW\\s*$");
     private static final Pattern NEWAFTER_START = Pattern.compile(
-        "^NEWAFTER\\s+!id\\s+([a-z][a-z0-9-]*)\\s+!id\\s+(START|[a-z][a-z0-9-]*)\\s*$");
+        "^NEWAFTER\\s+!id\\s+([a-z][a-z0-9_-]*)\\s+!id\\s+(START|[a-z][a-z0-9_-]*)\\s*$");
     private static final Pattern NEWAFTER_END = Pattern.compile("^ENDNEWAFTER\\s*$");
 
     public List<Command> parse(String aiOutput) {

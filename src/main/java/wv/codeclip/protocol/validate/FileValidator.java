@@ -10,7 +10,7 @@ import wv.codeclip.protocol.model.ValidationResult;
 /** Runs AFTER the accepted subset is applied. Also used after hand-edits in the UI. */
 public final class FileValidator {
 
-    private static final Pattern VALID_ID = Pattern.compile("^[a-z][a-z0-9-]*$");
+    private static final Pattern VALID_ID = Pattern.compile("^[a-z][a-z0-9_-]*$");
 
     public ValidationResult validate(ProtocolFile file) {
         ValidationResult result = new ValidationResult();

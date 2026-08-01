@@ -34,7 +34,7 @@ public final class StructuredProtocolEditorDialog extends JDialog {
     private final JTextArea contentArea = new JTextArea();
     private final JLabel entryStatusLabel = new JLabel(" ");
 
-    private final JTextArea previewArea = new JTextArea();
+    private final JTextPane previewArea = new JTextPane();
     private final JCheckBox lockCheckBox = new JCheckBox("File is locked (blocks AI edits, hand edits still allowed)");
     private final JLabel fileStatusLabel = new JLabel(" ");
 
@@ -96,6 +96,16 @@ public final class StructuredProtocolEditorDialog extends JDialog {
         entryList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
                 selectEntry(entryList.getSelectedValue());
+            }
+        });
+        entryList.setFocusTraversalKeysEnabled(false);
+        entryList.addKeyListener(new java.awt.event.KeyAdapter() {
+            @Override
+            public void keyPressed(java.awt.event.KeyEvent e) {
+                if (e.getKeyCode() == java.awt.event.KeyEvent.VK_TAB) {
+                    e.consume();
+                    selectNextEntryInListWrapping();
+                }
             }
         });
         panel.add(new JScrollPane(entryList), BorderLayout.CENTER);
@@ -160,19 +170,28 @@ public final class StructuredProtocolEditorDialog extends JDialog {
         return panel;
     }
 
-    private JPanel buildPreviewPanel() {
+private JPanel buildPreviewPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(BorderFactory.createTitledBorder("Live Preview (exact file to be written)"));
 
         previewArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         previewArea.setEditable(false);
-        previewArea.setBackground(new Color(245, 245, 245));
         panel.add(new JScrollPane(previewArea), BorderLayout.CENTER);
+
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton fullViewBtn = new JButton("\u26F6 Full View");
+        fullViewBtn.setToolTipText("Open a resizable, color-coded full view of this file");
+        fullViewBtn.addActionListener(e -> {
+            new wv.codeclip.protocol.editor.ProtocolFullViewDialog(
+                SwingUtilities.getWindowAncestor(this), fileName, previewArea.getText()).setVisible(true);
+        });
+        toolbar.add(fullViewBtn);
+        panel.add(toolbar, BorderLayout.NORTH);
 
         return panel;
     }
 
-    private JPanel buildBottomBar() {
+private JPanel buildBottomBar() {
         JPanel panel = new JPanel(new BorderLayout());
 
         JPanel leftButtons = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -323,7 +342,16 @@ public final class StructuredProtocolEditorDialog extends JDialog {
         updatePreview();
     }
 
-    // ---------------------------------------------------------------
+/** Selects the next entry in the list, wrapping to the first after the last. */
+    private void selectNextEntryInListWrapping() {
+        if (entryListModel.isEmpty()) return;
+        int idx = entryList.getSelectedIndex();
+        int next = (idx < 0 || idx + 1 >= entryListModel.size()) ? 0 : idx + 1;
+        entryList.setSelectedIndex(next);
+        entryList.ensureIndexIsVisible(next);
+    }
+
+// ---------------------------------------------------------------
     // Entry editing
     // ---------------------------------------------------------------
 
@@ -404,7 +432,7 @@ public final class StructuredProtocolEditorDialog extends JDialog {
         updatePreview();
     }
 
-    private void updatePreview() {
+private void updatePreview() {
         List<ProtocolEntry> entries = new ArrayList<>();
         int idx = 0;
         for (EntryDraft draft : Collections.list(entryListModel.elements())) {
@@ -412,11 +440,10 @@ public final class StructuredProtocolEditorDialog extends JDialog {
             entries.add(new ProtocolEntry(id, draft.contentAsLines(), idx++));
         }
         ProtocolFile preview = new ProtocolFile(fileName, lockCheckBox.isSelected(), List.of(), entries);
-        previewArea.setText(preview.render());
-        previewArea.setCaretPosition(0);
+        wv.codeclip.protocol.editor.ProtocolSyntaxColorizer.render(previewArea, preview.render());
     }
 
-    // ---------------------------------------------------------------
+// ---------------------------------------------------------------
     // Export / clipboard / external editor
     // ---------------------------------------------------------------
 

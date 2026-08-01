@@ -1,4 +1,4 @@
-package wv.codeclip;
+package wv.codeclip.mainFrame;
 
 import wv.codeclip.io.SettingsManager;
 import wv.codeclip.io.ClipboardService;
@@ -13,8 +13,11 @@ import java.io.File;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import wv.codeclip.AppMode;
 import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.io.PasteClassHandler;
 import wv.codeclip.modecontext.ModeColors;
@@ -84,6 +87,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private wv.codeclip.protocol.engine.ProtocolUndoManager protocolUndoManager;
     private wv.codeclip.protocol.engine.ProtocolPasteRouter protocolPasteRouter;
     private Runnable syncProtocolUndoRedo;
+    private wv.codeclip.mainFrame.ProjectNameManager projectNameManager;
+    private wv.codeclip.protocol.library.ProtocolDirectoryManager protocolDirectoryManager;
     private JMenuItem godotDirMenuItem;
     private JMenuItem htmlDirMenuItem;
     private JMenuItem genericDirMenuItem;
@@ -129,6 +134,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private static final String BUILD_INFO_FILE = "buildinfo.properties";
     private static final int ICON_SIZE = 64;
     private boolean titleFrozen = false;
+    private wv.codeclip.mainFrame.BuildInfoStamper buildInfoStamper;
 
     private JWindow loadBarWindow;
     private JProgressBar loadProgressBar;
@@ -141,8 +147,11 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         wv.codeclip.html.HtmlDirectory.load(settings);
         wv.codeclip.generic.GenericDirectory.load(settings);
         undoManager = new wv.codeclip.patch.PatchUndoManager();
+        projectNameManager = new wv.codeclip.mainFrame.ProjectNameManager(settings);
+        protocolDirectoryManager = new wv.codeclip.protocol.library.ProtocolDirectoryManager(
+                settings, this::detectSourceRootForProtocols);
         protocolLibrary = new wv.codeclip.protocol.library.ProtocolLibrary(
-                new File(System.getProperty("user.dir")).toPath());
+                protocolDirectoryManager.getProtocolsBaseDir());
         protocolUndoManager = new wv.codeclip.protocol.engine.ProtocolUndoManager();
         protocolPasteRouter = new wv.codeclip.protocol.engine.ProtocolPasteRouter(
                 protocolLibrary, protocolUndoManager);
@@ -218,8 +227,6 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         buildUI();
         installDnD();
 
-        setAlwaysOnTop(alwaysOnTopCheck.isSelected());
-
 // Load persisted state
         currentMode = AppMode.valueOf(settings.loadMode());
         wv.codeclip.modecontext.ModeContext.setMode(currentMode);
@@ -234,6 +241,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         autoReplaceInsertConflictItem.setSelected(settings.loadAutoReplaceOnInsertConflict());
         wireConflictResolver();
         SmartPasteSettings.load(settings);
+        alwaysOnTopCheck.setSelected(settings.loadAlwaysOnTop());
         renderNotes();
 
         String[] savedPaths = settings.loadClassPaths();
@@ -301,6 +309,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 settings.saveIncludeInstructions(includeInstructionsCheck.isSelected());
                 settings.saveSmartPaste(smartPasteCheck.isSelected());
                 settings.saveAutoReplaceOnInsertConflict(autoReplaceInsertConflictItem.isSelected());
+                settings.saveAlwaysOnTop(alwaysOnTopCheck.isSelected());
                 SmartPasteSettings.save(settings);
                 wv.codeclip.godot.GodotDirectory.save(settings);
                 wv.codeclip.html.HtmlDirectory.save(settings);
@@ -314,6 +323,11 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         });
 
         setVisible(true);
+        // Must be applied after setVisible — some window managers (notably
+        // several Linux WMs, and Windows in certain focus states) silently
+        // ignore setAlwaysOnTop calls made before the peer is realized, which
+        // is why it previously only "worked" by accident depending on timing.
+        SwingUtilities.invokeLater(() -> setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
     }
 
 // ------------------------------------------------------------------
@@ -357,9 +371,13 @@ compileCheckItem.setToolTipText(
 compileCheckItem.addActionListener(e ->
 wv.codeclip.patch.PostPatchVerifierSettings.setCompileCheckEnabled(compileCheckItem.isSelected()));
 settingsMenu.add(compileCheckItem);
-JMenuItem languageItem = new JMenuItem("Language…");
+        JMenuItem languageItem = new JMenuItem("Language…");
         languageItem.addActionListener(e -> openLanguageDialog());
         settingsMenu.add(languageItem);
+        JMenuItem mainClassItem = new JMenuItem("Change Main Class…");
+        mainClassItem.setToolTipText("Java mode: change which class's folder new pasted classes default to.");
+        mainClassItem.addActionListener(e -> openChangeMainClassDialog());
+        settingsMenu.add(mainClassItem);
         autoReplaceInsertConflictItem = new JCheckBoxMenuItem("Auto-Replace Duplicate Methods");
         autoReplaceInsertConflictItem.setToolTipText(
                 "Java mode only: when INSERT_METHOD finds an existing method with a different body, "
@@ -473,6 +491,24 @@ JMenuItem languageItem = new JMenuItem("Language…");
             }
         });
         systemMenu.add(lastErrorMenuItem);
+
+        JMenuItem renameProjectItem = new JMenuItem("Rename Project…");
+        renameProjectItem.addActionListener(e -> {
+            if (projectNameManager.promptForRename(this)) {
+                titleFrozen = false;
+                refreshTitle();
+                setIcon();
+            }
+        });
+        systemMenu.add(renameProjectItem);
+
+        JMenuItem rerollColorItem = new JMenuItem("New Random Icon Color");
+        rerollColorItem.addActionListener(e -> {
+            projectNameManager.rerollIconTint();
+            setIcon();
+        });
+        systemMenu.add(rerollColorItem);
+
         menuBar.add(systemMenu);
 
         JMenu protocolMenu = new JMenu("Protocol");
@@ -753,39 +789,55 @@ JMenuItem languageItem = new JMenuItem("Language…");
         lastErrorBtn = new JButton("Last Error");
         lastErrorBtn.setEnabled(false);
 
-        alwaysOnTopCheck.addActionListener(e -> setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
+        alwaysOnTopCheck.addActionListener(e -> {
+            setAlwaysOnTop(alwaysOnTopCheck.isSelected());
+            settings.saveAlwaysOnTop(alwaysOnTopCheck.isSelected());
+        });
 
         pasteClass.addActionListener(e -> {
-            if (includeProtocolCheck.isSelected() && handleProtocolPasteIfPresent()) {
-                syncUndoRedo.run();
-                syncProtocolUndoRedo.run();
-                return;
-            }
-            if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
-                // Godot mode has no Smart Paste — always single-block.
-                godotPasteHandler.handlePasteFromClipboard();
-            } else if (wv.codeclip.modecontext.ModeContext.isHtmlMode()) {
-                // HTML mode has its own Smart Paste, fully separate from
-                // PasteClassHandler's Java-oriented Smart Paste.
-                if (smartPasteCheck.isSelected()) {
-                    htmlPasteHandler.handleSmartPasteFromClipboard();
+            // Protocol commands in the clipboard are always extracted and
+            // routed to review, regardless of the "Include Protocol"
+            // checkbox (that checkbox only controls Copy All's output).
+            // This never blocks or consumes the rest of the clipboard —
+            // handleProtocolPasteIfPresent() only reacts to @@protocol
+            // blocks and leaves everything else untouched, so normal paste
+            // handling below always still runs against the same text.
+            handleProtocolPasteIfPresent();
+            syncUndoRedo.run();
+            syncProtocolUndoRedo.run();
+            showPasteBusyBar();
+            try {
+                if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
+                    // Godot mode has no Smart Paste — always single-block.
+                    godotPasteHandler.handlePasteFromClipboard();
+                } else if (wv.codeclip.modecontext.ModeContext.isHtmlMode()) {
+                    // HTML mode has its own Smart Paste, fully separate from
+                    // PasteClassHandler's Java-oriented Smart Paste.
+                    if (smartPasteCheck.isSelected()) {
+                        htmlPasteHandler.handleSmartPasteFromClipboard();
+                    } else {
+                        htmlPasteHandler.handlePasteFromClipboard();
+                    }
+                } else if (wv.codeclip.modecontext.ModeContext.isGenericMode()) {
+                    if (smartPasteCheck.isSelected()) {
+                        genericPasteHandler.handleSmartPasteFromClipboard();
+                    } else {
+                        genericPasteHandler.handlePasteFromClipboard();
+                    }
                 } else {
-                    htmlPasteHandler.handlePasteFromClipboard();
+                    pasteHandler.handlePasteFromClipboard();
                 }
-            } else if (wv.codeclip.modecontext.ModeContext.isGenericMode()) {
-                if (smartPasteCheck.isSelected()) {
-                    genericPasteHandler.handleSmartPasteFromClipboard();
-                } else {
-                    genericPasteHandler.handlePasteFromClipboard();
-                }
-            } else {
-                pasteHandler.handlePasteFromClipboard();
+            } finally {
+                hidePasteBusyBar();
             }
             syncUndoRedo.run();
         });
 
         update.addActionListener(e -> actions.updateAll(this::refreshText, this::removeClassPanel));
-        copy.addActionListener(e -> actions.copyAll(this::clearTempLogs, notesBuffer));
+        copy.addActionListener(e -> {
+            String protocolAppendix = includeProtocolCheck.isSelected() ? buildProtocolAppendixForCopy() : null;
+            actions.copyAll(this::clearTempLogs, notesBuffer, protocolAppendix);
+        });
         copyCode.addActionListener(e -> actions.copyCodeOnly());
         copyInstructions.addActionListener(e -> new ClipboardService().write(currentMode.getInstructions()));
 
@@ -958,47 +1010,12 @@ JMenuItem languageItem = new JMenuItem("Language…");
 // ------------------------------------------------------------------
 // Classes
 // ------------------------------------------------------------------
-    private void setIcon() {
-        java.net.URL iconURL = getClass().getResource("/icon.png");
-        if (iconURL != null) {
-            setIconImage(new ImageIcon(iconURL).getImage());
-            return;
-        }
-// Fallback: generate programmatic icon
-        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
-                ICON_SIZE, ICON_SIZE, java.awt.image.BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2 = img.createGraphics();
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-// Background rounded square
-        GradientPaint bgGrad = new GradientPaint(0, 0, new Color(79, 110, 247),
-                ICON_SIZE, ICON_SIZE, new Color(43, 156, 216));
-        g2.setPaint(bgGrad);
-        g2.fillRoundRect(2, 2, ICON_SIZE - 4, ICON_SIZE - 4, 14, 14);
-// Clipboard body
-        g2.setColor(Color.WHITE);
-        g2.fillRoundRect(12, 20, ICON_SIZE - 24, ICON_SIZE - 28, 8, 8);
-// Clip
-        GradientPaint clipGrad = new GradientPaint(0, 0, new Color(208, 213, 221),
-                ICON_SIZE, 0, new Color(160, 170, 181));
-        g2.setPaint(clipGrad);
-        g2.fillRoundRect(ICON_SIZE / 2 - 12, 14, 24, 10, 4, 4);
-        g2.setColor(new Color(176, 184, 194));
-        g2.fillRect(ICON_SIZE / 2 - 12, 24, 24, 2);
-// Code brackets
-        g2.setColor(new Color(79, 110, 247, 220));
-        g2.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        int cy = ICON_SIZE / 2 + 8;
-        g2.drawLine(26, cy - 10, 24, cy);
-        g2.drawLine(24, cy, 26, cy + 10);
-        g2.drawLine(ICON_SIZE - 26, cy - 10, ICON_SIZE - 24, cy);
-        g2.drawLine(ICON_SIZE - 24, cy, ICON_SIZE - 26, cy + 10);
-// Center dot
-        g2.fillOval(ICON_SIZE / 2 - 3, cy - 3, 6, 6);
-        g2.dispose();
-        setIconImage(img);
+
+private void setIcon() {
+        setIconImage(wv.codeclip.mainFrame.AppIconFactory.build(projectNameManager.getIconTintSeed()));
     }
 
-    private void showLoadBar() {
+private void showLoadBar() {
         loadBarWindow = new JWindow(this);
         loadProgressBar = new JProgressBar(0, 100);
         loadProgressBar.setValue(0);
@@ -1056,7 +1073,58 @@ JMenuItem languageItem = new JMenuItem("Language…");
         }
     }
 
-    private void installDnD() {
+/**
+     * Reuses the same JWindow-based bar as class loading, but in indeterminate
+     * mode: paste is a single synchronous call with no discrete step count to
+     * report, so a moving/pulsing bar is the honest signal — it tells the
+     * person something is happening without inventing a fake percentage.
+     */
+    private void showPasteBusyBar() {
+        loadBarWindow = new JWindow(this);
+        loadProgressBar = new JProgressBar();
+        loadProgressBar.setIndeterminate(true);
+        loadProgressBar.setPreferredSize(new java.awt.Dimension(280, 7));
+        loadProgressBar.setBorderPainted(false);
+
+        loadProgressLabel = new JLabel("Pasting…");
+        loadProgressLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+        loadProgressLabel.setForeground(UIManager.getColor("Label.foreground"));
+
+        JLabel subLabel = new JLabel("Parsing clipboard content");
+        subLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+        subLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+
+        JPanel inner = new JPanel();
+        inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
+        inner.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(UIManager.getColor("Separator.foreground"), 1),
+                BorderFactory.createEmptyBorder(12, 16, 14, 16)
+        ));
+        inner.setBackground(UIManager.getColor("Panel.background"));
+        inner.add(loadProgressLabel);
+        inner.add(Box.createVerticalStrut(3));
+        inner.add(subLabel);
+        inner.add(Box.createVerticalStrut(10));
+        inner.add(loadProgressBar);
+
+        loadBarWindow.setContentPane(inner);
+        loadBarWindow.pack();
+
+        Rectangle b = getBounds();
+        int wx = b.x + b.width - loadBarWindow.getWidth() - 16;
+        int wy = b.y + b.height - loadBarWindow.getHeight() - 16;
+        loadBarWindow.setLocation(wx, wy);
+        loadBarWindow.setVisible(true);
+        // Paint immediately — the paste call below runs synchronously on the
+        // EDT and would otherwise block before this window ever gets drawn.
+        loadBarWindow.paint(loadBarWindow.getGraphics());
+    }
+
+    private void hidePasteBusyBar() {
+        hideLoadBar();
+    }
+
+private void installDnD() {
         fileDropHandler = new FileDropHandler(this::addFilesBatched, true);
         fileDropHandler.setMode(currentMode);
         fileDropHandler.install(this);
@@ -1086,7 +1154,44 @@ JMenuItem languageItem = new JMenuItem("Language…");
         }
     }
 
-    /**
+/**
+     * Lets the user clear or directly retype the saved "preferred main class"
+     * used by SourceRootDetector to decide which folder new pasted classes
+     * land in, when the project has multiple classes containing main().
+     */
+    private void openChangeMainClassDialog() {
+        String current = settings.loadPreferredMainClass();
+
+        JTextField field = new JTextField(current != null ? current : "");
+        field.setFont(field.getFont().deriveFont(13f));
+
+        JPanel panel = new JPanel(new BorderLayout(0, 8));
+        JLabel label = new JLabel(
+                (current == null || current.isEmpty())
+                        ? "No main class saved yet — it will be asked for on the next ambiguous paste."
+                        : "Currently saved: " + current);
+        label.setFont(label.getFont().deriveFont(Font.PLAIN, 11f));
+        panel.add(label, BorderLayout.NORTH);
+        panel.add(field, BorderLayout.CENTER);
+        panel.setPreferredSize(new Dimension(420, 60));
+
+        Object[] options = {"Save", "Clear (ask again next time)", "Cancel"};
+        int choice = JOptionPane.showOptionDialog(
+                this, panel, "Change Main Class",
+                JOptionPane.DEFAULT_OPTION, JOptionPane.PLAIN_MESSAGE,
+                null, options, options[0]);
+
+        if (choice == 0) {
+            String newValue = field.getText().trim();
+            settings.savePreferredMainClass(newValue);
+            settings.saveProperties();
+        } else if (choice == 1) {
+            settings.savePreferredMainClass("");
+            settings.saveProperties();
+        }
+    }
+
+/**
      * Keeps the top-right mode label in sync with currentMode. Must be called
      * any time currentMode changes (startup load and the Language… dialog) —
      * modeLabel is otherwise only initialized once in buildUI() and silently
@@ -1343,18 +1448,27 @@ public void addClassPanel(String path, String name) {
         more.setToolTipText("Directory, edit, play, open file location, delete");
         more.addActionListener(e -> {
             File f = repo.getClassFileMap().get(path);
-            wv.codeclip.ui.FileActionsDialog.show(CodeClipFrame.this, f, deletedPath -> {
-                repo.getClassCodeMap().remove(deletedPath);
-                repo.getClassFileMap().remove(deletedPath);
-                repo.getDisabledClasses().remove(deletedPath);
-                removeClassPanel(deletedPath);
-                File onDisk = new File(deletedPath);
-                if (onDisk.exists()) {
-                    onDisk.delete();
-                }
-                refreshText();
-                refreshPanels();
-            });
+            wv.codeclip.ui.FileActionsDialog.show(CodeClipFrame.this, f,
+                    deletedPath -> {
+                        repo.getClassCodeMap().remove(deletedPath);
+                        repo.getClassFileMap().remove(deletedPath);
+                        repo.getDisabledClasses().remove(deletedPath);
+                        removeClassPanel(deletedPath);
+                        File onDisk = new File(deletedPath);
+                        if (onDisk.exists()) {
+                            onDisk.delete();
+                        }
+                        refreshText();
+                        refreshPanels();
+                    },
+                    removedPath -> {
+                        repo.getClassCodeMap().remove(removedPath);
+                        repo.getClassFileMap().remove(removedPath);
+                        repo.getDisabledClasses().remove(removedPath);
+                        removeClassPanel(removedPath);
+                        refreshText();
+                        refreshPanels();
+                    });
         });
 
         panel.add(label);
@@ -1561,29 +1675,11 @@ private void removeClassPanel(String path) {
         stampBuildInfo();
     }
 
-    private void stampBuildInfoWithContent(String content) {
-        java.io.File sourceRoot = detectSourceRoot();
-        if (sourceRoot == null) {
-            return;
-        }
-        java.io.File file = new java.io.File(sourceRoot, BUILD_INFO_FILE);
-        try {
-            java.nio.file.Files.writeString(file.toPath(), content);
-            String path = file.getAbsolutePath();
-            repo.getClassCodeMap().put(path, content);
-            repo.getClassFileMap().put(path, file);
-            repo.setCheckpoint(path, content);
-            // Extract build number from the restored content to display in version event
-            String oldBuild = extractBuildNoFromContent(content);
-            pendingTargetBuild = oldBuild != null ? oldBuild : "?";
-            refreshText();
-            refreshTitle();
-        } catch (java.io.IOException ex) {
-            ex.printStackTrace();
-        }
+private void stampBuildInfoWithContent(String content) {
+        getBuildInfoStamper().stampWithContent(content, build -> pendingTargetBuild = build);
     }
 
-    private String extractTimestampFromContent(String content) {
+private String extractTimestampFromContent(String content) {
         if (content == null) {
             return null;
         }
@@ -1739,18 +1835,26 @@ dialog.add(topPanel, BorderLayout.NORTH);
         dialog.setVisible(true);
     }
 
-    private void refreshTitle() {
+private void refreshTitle() {
         if (titleFrozen) {
             return;
         }
         String info = wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
         if (!info.equals("unknown")) {
-            setTitle("Code Clip — " + info);
+            setTitle(buildWindowTitle(info));
             titleFrozen = true;
         }
     }
 
-    private void restoreBuildInfoTitle() {
+private String buildWindowTitle(String buildInfo) {
+        String project = projectNameManager.hasProjectName() ? projectNameManager.getProjectName() : null;
+        if (project != null) {
+            return "Code Clip — " + project + " — " + buildInfo;
+        }
+        return "Code Clip — " + buildInfo;
+    }
+
+private void restoreBuildInfoTitle() {
         refreshTitle();
     }
 
@@ -1799,139 +1903,60 @@ dialog.add(topPanel, BorderLayout.NORTH);
         return false;
     }
 
-    private void stampBuildInfo() {
-        String timestamp = java.time.LocalDateTime.now()
-                .format(java.time.format.DateTimeFormatter.ofPattern("EEE-HH:mm:ss"));
-
-        java.io.File sourceRoot = detectSourceRoot();
-        if (sourceRoot == null) {
-            return;
+private void stampBuildInfo() {
+        if (!projectNameManager.hasProjectName()) {
+            projectNameManager.promptForNameIfMissing(this);
+            titleFrozen = false;
         }
+        getBuildInfoStamper().stamp();
+    }
 
-        int nextBuildNo = 1;
-        java.io.File file = new java.io.File(sourceRoot, BUILD_INFO_FILE);
-        if (file.exists()) {
-            String oldContent = repo.getClassCodeMap().get(file.getAbsolutePath());
-            if (oldContent == null) {
-                try {
-                    oldContent = java.nio.file.Files.readString(file.toPath());
-                } catch (java.io.IOException ignored) {
-                }
-            }
-            if (oldContent != null) {
-                for (String line : oldContent.split("\n")) {
-                    if (line.startsWith("BUILD_NO=")) {
-                        String oldNo = line.substring("BUILD_NO=".length()).trim();
-                        try {
-                            nextBuildNo = Integer.parseInt(oldNo, 36) + 1;
-                        } catch (NumberFormatException ignored) {
+private wv.codeclip.mainFrame.BuildInfoStamper getBuildInfoStamper() {
+        if (buildInfoStamper == null) {
+            buildInfoStamper = new wv.codeclip.mainFrame.BuildInfoStamper(
+                    repo,
+                    undoManager,
+                    this::appendTempLog,
+                    this::refreshText,
+                    this::refreshTitle,
+                    this::addClassPanel,
+                    path -> {
+                        for (java.awt.Component c : classPanel.getComponents()) {
+                            if (c instanceof JPanel p
+                                    && path.equals(p.getClientProperty("path"))) {
+                                return true;
+                            }
                         }
-                        break;
-                    }
-                }
-            }
+                        return false;
+                    },
+                    build -> pendingTargetBuild = build
+            );
         }
-        String buildNo36 = Integer.toString(nextBuildNo, 36);
-        String content = "LAST_UPDATED=" + timestamp + "\nBUILD_NO=" + buildNo36 + "\n";
-        // For the case where stampBuildInfoWithContent is called instead,
-        // we also need to extract the build number from the old content if applicable
-        pendingTargetBuild = buildNo36;
-
-        // Log target build info
-        appendTempLog("Target Build: #" + buildNo36 + " --- " + timestamp);
-        pendingTargetBuild = buildNo36;   // for the version event about to be created
-
-        String path = file.getAbsolutePath();
-        String oldContent = repo.getClassCodeMap().get(path);
-        if (oldContent == null && file.exists()) {
-            try {
-                oldContent = java.nio.file.Files.readString(file.toPath());
-            } catch (java.io.IOException ignored) {
-            }
-        }
-
-        try {
-            java.nio.file.Files.writeString(file.toPath(), content);
-            repo.getClassCodeMap().put(path, content);
-            repo.getClassFileMap().put(path, file);
-            repo.setCheckpoint(path, content);
-
-            if (oldContent != null) {
-                undoManager.mergeTimestampSnapshot(path, oldContent);
-            }
-
-            boolean panelExists = false;
-            for (java.awt.Component c : classPanel.getComponents()) {
-                if (c instanceof JPanel p
-                        && file.getAbsolutePath().equals(p.getClientProperty("path"))) {
-                    panelExists = true;
-                    break;
-                }
-            }
-            if (!panelExists) {
-                addClassPanel(path, file.getName());
-            }
-
-            refreshText();
-            refreshTitle();
-
-        } catch (java.io.IOException ex) {
-            ex.printStackTrace();
-        }
+        return buildInfoStamper;
     }
 
 private java.io.File detectSourceRoot() {
-        if (wv.codeclip.modecontext.ModeContext.isHtmlMode()
-                && wv.codeclip.html.HtmlDirectory.isSet()) {
-            return wv.codeclip.html.HtmlDirectory.get();
-        }
-        if (wv.codeclip.modecontext.ModeContext.isGenericMode()
-                && wv.codeclip.generic.GenericDirectory.isSet()) {
-            return wv.codeclip.generic.GenericDirectory.get();
-        }
-
-        for (java.util.Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
-            java.io.File file = entry.getValue();
-            if (file == null) {
-                continue;
-            }
-            if (file.getName().equals(BUILD_INFO_FILE)) {
-                continue;
-            }
-            String code = repo.getClassCodeMap().get(entry.getKey());
-            if (code == null) {
-                continue;
-            }
-            wv.codeclip.parse.JavaSourceParser p = new wv.codeclip.parse.JavaSourceParser();
-            String pkg = p.parsePackage(code);
-            if (pkg == null || pkg.isEmpty()) {
-                continue;
-            }
-            String pkgPath = pkg.replace('.', java.io.File.separatorChar);
-            java.io.File dir = file.getParentFile();
-            if (dir == null) {
-                continue;
-            }
-            String abs = dir.getAbsolutePath();
-            if (abs.endsWith(java.io.File.separator + pkgPath)) {
-                return new java.io.File(abs.substring(0, abs.length() - pkgPath.length() - 1));
-            }
-        }
-        return null;
+        return getBuildInfoStamper().detectSourceRoot();
     }
 
-    private void openCheckpointDialog() {
+private void openCheckpointDialog() {
         if (checkpointDialog == null || !checkpointDialog.isDisplayable()) {
             checkpointDialog = new CheckpointDialog(this, repo, () -> {
                 refreshText();
                 refreshPanels();
                 stampBuildInfo();
+                if (pendingIsCheckpoint) {
+                    addCheckpointVersionEvent();
+                }
             });
         } else {
             checkpointDialog.setRefreshCallback(() -> {
                 refreshText();
                 refreshPanels();
                 stampBuildInfo();
+                if (pendingIsCheckpoint) {
+                    addCheckpointVersionEvent();
+                }
             });
         }
         checkpointDialog.setOnCheckpointSetCallback(this::markNextVersionAsCheckpoint);
@@ -1939,7 +1964,7 @@ private java.io.File detectSourceRoot() {
         checkpointDialog.setVisible(true);
     }
 
-    public void setLastPatchError(List<PatchApplier.PatchResult> results) {
+public void setLastPatchError(List<PatchApplier.PatchResult> results) {
         lastPatchErrors = (results != null && !results.isEmpty()) ? results : null;
         boolean hasError = lastPatchErrors != null;
         lastErrorBtn.setEnabled(hasError);
@@ -2273,7 +2298,26 @@ private void openGenericDirectoryDialog() {
         pendingIsCheckpoint = true;
     }
 
-    private void addVersionEventFromUndoTop() {
+/** Creates a dedicated version-history entry for a manual "Set New Checkpoint"
+     *  action, so the star reliably lands on its own row instead of waiting to
+     *  piggyback on some future unrelated edit. */
+    private void addCheckpointVersionEvent() {
+        String time = java.time.LocalTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        String build = pendingTargetBuild != null ? pendingTargetBuild : "?";
+        while (versionHistory.size() > versionCurrentIdx + 1) {
+            versionHistory.remove(versionHistory.size() - 1);
+        }
+        String title = "Checkpoint set";
+        versionHistory.add(new VersionEvent(title, "", time, build, List.of(title), true));
+        versionCurrentIdx = versionHistory.size() - 1;
+        pendingTargetBuild = null;
+        pendingIsCheckpoint = false;
+        refreshVersionPanel();
+        flashNewestVersionRow();
+    }
+
+private void addVersionEventFromUndoTop() {
         wv.codeclip.patch.PatchUndoManager.Entry top = undoManager.peekUndo();
         if (top == null) {
             return;
@@ -2907,20 +2951,132 @@ return null;
      * the caller skips normal paste handling entirely. Returns false if no
      * protocol content is present, so normal paste handling proceeds untouched.
      */
-    private boolean handleProtocolPasteIfPresent() {
-        String text = new ClipboardService().read();
-        if (!wv.codeclip.protocol.engine.ProtocolPasteRouter.containsProtocolBlock(text)) {
-            return false;
+
+/**
+     * Builds the text block appended to Copy All's clipboard output when
+     * "Include Protocol" is checked. Reads every enabled/available protocol
+     * file from this project's protocol library and renders them plainly,
+     * so the person copying context to an AI also gets current protocol
+     * state included. Has no relationship to pasting whatsoever.
+     */
+    private String buildProtocolAppendixForCopy() {
+        List<String> fileNames = protocolLibrary.listFileNames();
+        if (fileNames.isEmpty()) {
+            return null;
         }
 
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n\n===== PROTOCOLS =====\n\n");
+        for (String fileName : fileNames) {
+            StringBuilder err = new StringBuilder();
+            wv.codeclip.protocol.model.ProtocolFile file = protocolLibrary.loadSafely(fileName, err);
+            sb.append("--- ").append(fileName).append(" ---\n");
+            if (err.length() > 0) {
+                sb.append("[could not load: ").append(err).append("]\n");
+            } else {
+                sb.append(file.render());
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+/**
+     * Opens the Protocol Manager dialog. Modeless per protocol module design —
+     * does not block this frame.
+     */
+
+private void openProtocolManagerDialog() {
+        wv.codeclip.protocol.ui.ProtocolManagerDialog dialog =
+                new wv.codeclip.protocol.ui.ProtocolManagerDialog(this,
+                        protocolDirectoryManager,
+                        protocolUndoManager,
+                        this::logProtocolLine,
+                        this::onProtocolLibraryChanged);
+        dialog.setVisible(true);
+    }
+
+/**
+     * Called when the Protocol Manager dialog switches to a different
+     * protocols folder. Rebuilds this frame's own protocolLibrary and
+     * protocolPasteRouter against the new folder so Copy All's protocol
+     * appendix and main-frame paste routing (@@protocol blocks pasted
+     * directly into the app, outside the dialog) both immediately follow
+     * the switch instead of continuing to use the pre-switch folder for
+     * the rest of the session.
+     */
+    private void onProtocolLibraryChanged(wv.codeclip.protocol.library.ProtocolLibrary newLibrary) {
+        this.protocolLibrary = newLibrary;
+        this.protocolPasteRouter = new wv.codeclip.protocol.engine.ProtocolPasteRouter(
+                protocolLibrary, protocolUndoManager);
+        appendTempLog("Protocols folder switched — Copy All and paste routing now use: "
+                + protocolLibrary.getProtocolsDir());
+    }
+
+/**
+     * Checks clipboard content for @@protocol blocks and, if found, routes
+     * them through the review dialog. Only ever acts on the
+     * @@protocol...@@protocolEnd regions — never touches or consumes any
+     * other content (e.g. a @@PATCH block) sitting alongside it in the same
+     * clipboard payload. Safe to call unconditionally before every paste.
+     */
+    private void handleProtocolPasteIfPresent() {
+        String text = new ClipboardService().read();
+        if (!wv.codeclip.protocol.engine.ProtocolPasteRouter.containsProtocolBlock(text)) {
+            return;
+        }
+
+        List<wv.codeclip.protocol.model.Command> commands;
+        wv.codeclip.protocol.engine.ProtocolEngine reviewEngine = new wv.codeclip.protocol.engine.ProtocolEngine();
+        try {
+            reviewEngine.recordPatch(text);
+            commands = reviewEngine.getRecordedCommands();
+        } catch (wv.codeclip.protocol.parser.AiOutputParser.PatchParseException e) {
+            JOptionPane.showMessageDialog(this, "Could not parse protocol content:\n" + e.getMessage()
+                + "\n\nAny non-protocol content (e.g. a @@PATCH block) elsewhere in the clipboard will still be applied normally.",
+                "Protocol Parse Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        if (commands.isEmpty()) {
+            return;
+        }
+
+        Map<String, List<wv.codeclip.protocol.model.Command>> byFile = new LinkedHashMap<>();
+        for (wv.codeclip.protocol.model.Command c : commands) {
+            byFile.computeIfAbsent(c.getTargetFile(), k -> new ArrayList<>()).add(c);
+        }
+
+        Map<String, wv.codeclip.protocol.model.ProtocolFile> originals = new LinkedHashMap<>();
+        List<String> unreadable = new ArrayList<>();
+        for (String fileName : byFile.keySet()) {
+            StringBuilder err = new StringBuilder();
+            wv.codeclip.protocol.model.ProtocolFile loaded = protocolLibrary.loadSafely(fileName, err);
+            if (err.length() > 0 && protocolLibrary.exists(fileName)) {
+                unreadable.add(fileName + ": " + err);
+            }
+            originals.put(fileName, loaded);
+        }
+
+        if (!unreadable.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                "The following protocol files could not be read and were skipped:\n" + String.join("\n", unreadable),
+                "Some Files Unreadable", JOptionPane.WARNING_MESSAGE);
+        }
+
+        wv.codeclip.protocol.ui.DiffAcceptDialog reviewDialog =
+            new wv.codeclip.protocol.ui.DiffAcceptDialog(this, originals, byFile);
+        reviewDialog.setVisible(true);
+
+        if (!reviewDialog.wasConfirmed()) {
+            appendTempLog("Protocol paste reviewed and cancelled; nothing applied.");
+            return;
+        }
+
+        Map<String, Set<String>> acceptedByFile = reviewDialog.getAcceptedKeysByFile();
+
         wv.codeclip.protocol.engine.ProtocolEngine.AcceptanceResolver resolver =
-                (fileName, original, commandsForFile) -> {
-                    Set<String> accepted = new java.util.HashSet<>();
-                    for (wv.codeclip.protocol.model.Command c : commandsForFile) {
-                        accepted.add(wv.codeclip.protocol.engine.ProtocolApplier.commandKey(c));
-                    }
-                    return accepted;
-                };
+                (fileName, original, commandsForFile) -> acceptedByFile.getOrDefault(fileName, Set.of());
 
         wv.codeclip.protocol.engine.ProtocolPasteRouter.RouteOutcome outcome =
                 protocolPasteRouter.route(text, resolver);
@@ -2932,22 +3088,15 @@ return null;
         if (outcome.changed) {
             addProtocolVersionEvent(outcome.result.getWrittenFiles().size());
         }
-
-        return true;
     }
 
-    /**
-     * Opens the Protocol Manager dialog. Modeless per protocol module design —
-     * does not block this frame.
+/**
+     * Wraps detectSourceRoot() as a no-arg supplier target for
+     * ProtocolDirectoryManager, which needs to lazily re-detect the source
+     * root on first use.
      */
-
-private void openProtocolManagerDialog() {
-        wv.codeclip.protocol.ui.ProtocolManagerDialog dialog =
-                new wv.codeclip.protocol.ui.ProtocolManagerDialog(this,
-                        new File(System.getProperty("user.dir")).toPath(),
-                        protocolUndoManager,
-                        this::logProtocolLine);
-        dialog.setVisible(true);
+    private java.io.File detectSourceRootForProtocols() {
+        return detectSourceRoot();
     }
 
 /**

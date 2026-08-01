@@ -35,7 +35,23 @@ public static void show(JFrame parent, File file) {
      *                  offer delete-from-here (e.g. plain "view info" contexts)
      *                  are unaffected.
      */
-    public static void show(JFrame parent, File file, java.util.function.Consumer<String> onDelete) {
+
+public static void show(JFrame parent, File file, java.util.function.Consumer<String> onDelete) {
+        show(parent, file, onDelete, null);
+    }
+
+    /**
+     * @param onDelete optional callback invoked (with the file's absolute path)
+     *                  when the user confirms deletion from this dialog. If
+     *                  null, no Delete button is shown.
+     * @param onRemove optional callback invoked (with the file's absolute path)
+     *                  when the user confirms removing this file from CodeClip
+     *                  only, leaving it untouched on disk — as if it had never
+     *                  been added. If null, no Remove button is shown.
+     */
+    public static void show(JFrame parent, File file,
+                             java.util.function.Consumer<String> onDelete,
+                             java.util.function.Consumer<String> onRemove) {
         if (file == null) {
             JOptionPane.showMessageDialog(parent,
                     "No file is associated with this entry.",
@@ -94,6 +110,22 @@ public static void show(JFrame parent, File file) {
         btnPanel.add(playBtn);
         btnPanel.add(locationBtn);
 
+        if (onRemove != null) {
+            JButton removeBtn = new JButton("Remove");
+            removeBtn.setToolTipText("Removes this file from CodeClip only. The file on disk is left untouched.");
+            removeBtn.addActionListener(e -> {
+                int confirm = JOptionPane.showConfirmDialog(dialog,
+                        "Remove \"" + file.getName() + "\" from CodeClip?\n"
+                                + "The file itself will NOT be deleted from disk.",
+                        "Confirm Remove", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+                if (confirm == JOptionPane.YES_OPTION) {
+                    onRemove.accept(file.getAbsolutePath());
+                    dialog.dispose();
+                }
+            });
+            btnPanel.add(removeBtn);
+        }
+
         if (onDelete != null) {
             JButton deleteBtn = new JButton("Delete");
             deleteBtn.setForeground(new Color(160, 30, 30));
@@ -114,7 +146,7 @@ public static void show(JFrame parent, File file) {
         dialog.add(btnPanel, BorderLayout.SOUTH);
 
         dialog.pack();
-        dialog.setMinimumSize(new Dimension(460, exists ? 160 : 190));
+        dialog.setMinimumSize(new Dimension(520, exists ? 160 : 190));
         dialog.setLocationRelativeTo(parent);
         dialog.setVisible(true);
     }

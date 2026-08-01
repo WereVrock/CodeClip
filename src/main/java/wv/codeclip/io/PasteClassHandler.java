@@ -39,6 +39,7 @@ private final ClipboardService clipboard;
 private final JavaSourceParser parser;
 private final SourceRootDetector rootDetector;
 private final ClassFileWriter fileWriter;
+private final wv.codeclip.io.SettingsManager settingsManager;
 private final BiConsumer<String, String> codeChangedCallback;
 private final Supplier<Boolean> multiPatchMode;
 private final PatchDuplicateDetector duplicateDetector = new PatchDuplicateDetector();
@@ -93,10 +94,11 @@ this.errorCallback = null;
 this.undoManager = undoManager;
 this.copierCommand = new wv.codeclip.commands.CopierCommand(repo, statusLogger);
 this.enablerCommand = new wv.codeclip.commands.EnablerCommand(repo, refreshCallback, statusLogger);
+this.settingsManager = new wv.codeclip.io.SettingsManager();
 
 this.clipboard = new ClipboardService();
 this.parser = new JavaSourceParser();
-this.rootDetector = new SourceRootDetector(repo, parent, parser);
+this.rootDetector = new SourceRootDetector(repo, parent, parser, settingsManager);
 this.fileWriter = new ClassFileWriter(repo);
 }
 
@@ -128,43 +130,60 @@ private void handlePasteFromClipboardInternal() {
         return;
     }
 
-    if (text.trim().startsWith("@@Enable")) {
-        boolean changed = handleEnable(text.trim());
-        firePostPaste(false);
-        return;
-    }
+    try {
+        if (text.trim().startsWith("@@Enable")) {
+            boolean changed = handleEnable(text.trim());
+            firePostPaste(false);
+            return;
+        }
 
-    if (text.trim().startsWith("@@Copy") || isFencedCopyCommand(text.trim())) {
-        copierCommand.handle(stripFence(text.trim()));
-        return;
-    }
+        if (text.trim().startsWith("@@Copy") || isFencedCopyCommand(text.trim())) {
+            copierCommand.handle(stripFence(text.trim()));
+            return;
+        }
 
 
-    if (Boolean.TRUE.equals(multiPatchMode.get()) &&
-        (PatchParser.containsPatch(text) || looksLikePatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
-        boolean changed = handleSmartPaste(text);
-        firePostPaste(changed);
-        return;
-    }
+        if (Boolean.TRUE.equals(multiPatchMode.get()) &&
+            (PatchParser.containsPatch(text) || looksLikePatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
+            boolean changed = handleSmartPaste(text);
+            firePostPaste(changed);
+            return;
+        }
 
-    if (PatchParser.containsPatch(text) || looksLikePatch(text)) {
-        boolean changed = handlePatch(text);
-        firePostPaste(changed);
-        return;
-    }
+        if (PatchParser.containsPatch(text) || looksLikePatch(text)) {
+            boolean changed = handlePatch(text);
+            firePostPaste(changed);
+            return;
+        }
 
-    if (!looksLikeJavaSource(text)) {
+        if (!looksLikeJavaSource(text)) {
+            JOptionPane.showMessageDialog(
+                parent,
+                "Clipboard does not appear to contain Java source code.",
+                "Invalid Input",
+                JOptionPane.ERROR_MESSAGE
+            );
+            return;
+        }
+
+        handlePaste(text);
+        firePostPaste(true);
+    } catch (Exception ex) {
+        // Top-level safety net. Previously an uncaught exception anywhere in
+        // this call chain (PatchApplier, SourceRootDetector, extractors,
+        // etc.) propagated silently out of the button's ActionListener with
+        // no dialog and nothing visible in a packaged build — the paste
+        // simply appeared to do nothing. Now it's surfaced explicitly.
+        ex.printStackTrace();
         JOptionPane.showMessageDialog(
             parent,
-            "Clipboard does not appear to contain Java source code.",
-            "Invalid Input",
+            "Paste failed unexpectedly:\n\n" + ex.getClass().getSimpleName()
+                + (ex.getMessage() != null ? ": " + ex.getMessage() : "")
+                + "\n\nNothing was applied from this paste. Check the console/log for a stack trace.",
+            "Paste Failed",
             JOptionPane.ERROR_MESSAGE
         );
-        return;
     }
-
-    handlePaste(text);
-    firePostPaste(true);
 }
 
 // ------------------------------------------------------------------
@@ -217,16 +236,54 @@ List<String> logLines = new ArrayList<>();
 Map<String, String> combinedSnapshot = new java.util.LinkedHashMap<>();
 List<String> titles = new ArrayList<>();
 List<PatchApplier.PatchResult> failedResults = new ArrayList<>();
+List<String> crashedEntries = new ArrayList<>();
 
 for (SmartPasteExtractor.Entry entry : entries) {
-if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
-handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles, failedResults);
-} else if (entry instanceof SmartPasteExtractor.ClassEntry ce) {
-handlePasteInternal(ce.text(), logLines, combinedSnapshot, titles);
-}
+    try {
+        if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
+            handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles, failedResults);
+        } else if (entry instanceof SmartPasteExtractor.ClassEntry ce) {
+            handlePasteInternal(ce.text(), logLines, combinedSnapshot, titles);
+        }
+    } catch (Exception ex) {
+        // One block throwing an unexpected exception (as opposed to the
+        // IllegalArgumentException PatchParser normally raises for format
+        // errors, which is already caught inside handleSmartPatchEntry)
+        // must NOT abort the whole batch — every other block in this same
+        // paste has to keep getting a chance to apply. Previously this was
+        // unguarded, so a single bad block silently killed the entire
+        // method with no dialog, no log entry, and nothing printed anywhere
+        // visible in a packaged (non-console) build.
+        String label;
+        if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
+            String t = PatchParser.extractTitle(pe.text());
+            label = t != null ? t : "(untitled patch block)";
+        } else {
+            label = "(class block)";
+        }
+        crashedEntries.add(label + " — " + ex.getClass().getSimpleName()
+            + (ex.getMessage() != null ? ": " + ex.getMessage() : ""));
+        ex.printStackTrace();
+    }
 }
 
 reportBatchErrors(failedResults);
+
+if (!crashedEntries.isEmpty()) {
+    StringBuilder sb = new StringBuilder(
+        "The following block(s) failed unexpectedly and were skipped.\n"
+        + "Everything else in this paste was still applied normally:\n\n");
+    for (String c : crashedEntries) {
+        sb.append("• ").append(c).append("\n");
+    }
+    JOptionPane.showMessageDialog(parent, sb.toString(),
+        "Some Blocks Failed", JOptionPane.WARNING_MESSAGE);
+    if (statusLogger != null) {
+        for (String c : crashedEntries) {
+            statusLogger.accept("✗ Block failed unexpectedly: " + c);
+        }
+    }
+}
 
 if (!combinedSnapshot.isEmpty()) {
 String combinedTitle = titles.isEmpty() ? "Smart Paste"

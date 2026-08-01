@@ -168,4 +168,49 @@ public void saveExternalEditorPath(String path) {
     properties.setProperty("external.editor.path", path == null ? "" : path);
 }
 
+public boolean loadAlwaysOnTop() {
+    return Boolean.parseBoolean(properties.getProperty("always.on.top", "true"));
+}
+
+public void saveAlwaysOnTop(boolean value) {
+    properties.setProperty("always.on.top", String.valueOf(value));
+}
+
+public String loadPreferredMainClass() {
+    return properties.getProperty("java.main.class", "");
+}
+
+public void savePreferredMainClass(String className) {
+    properties.setProperty("java.main.class", className == null ? "" : className);
+}
+
+public String loadProtocolsDirectory() {
+    return properties.getProperty("protocols.directory", "");
+}
+
+public void saveProtocolsDirectory(String path) {
+    properties.setProperty("protocols.directory", path == null ? "" : path);
+}
+
+public String loadProjectName() {
+    return properties.getProperty("projectName", "");
+}
+
+public void saveProjectName(String name) {
+    properties.setProperty("projectName", name == null ? "" : name);
+}
+
+public long loadIconTintSeed() {
+    String raw = properties.getProperty("iconTintSeed", "0");
+    try {
+        return Long.parseLong(raw);
+    } catch (NumberFormatException e) {
+        return 0L;
+    }
+}
+
+public void saveIconTintSeed(long seed) {
+    properties.setProperty("iconTintSeed", Long.toString(seed));
+}
+
 }

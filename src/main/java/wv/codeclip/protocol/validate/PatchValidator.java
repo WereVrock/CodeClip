@@ -19,7 +19,7 @@ import wv.codeclip.protocol.model.ValidationResult;
  */
 public final class PatchValidator {
 
-    private static final Pattern VALID_ID = Pattern.compile("^[a-z][a-z0-9-]*$");
+    private static final Pattern VALID_ID = Pattern.compile("^[a-z][a-z0-9_-]*$");
     private final CycleDetector cycleDetector = new CycleDetector();
 
     /**
@@ -53,7 +53,7 @@ public final class PatchValidator {
         for (Command c : commandsForFile) {
             if (!VALID_ID.matcher(c.getId()).matches()) {
                 result.add(ValidationError.patchError(
-                    "Invalid id format: '" + c.getId() + "' (must match [a-z][a-z0-9-]*)", c.getId(), fileName));
+                    "Invalid id format: '" + c.getId() + "' (must match [a-z][a-z0-9_-]*)", c.getId(), fileName));
             }
             if (c.getTargetId() != null && !c.targetsStart()
                     && !VALID_ID.matcher(c.getTargetId()).matches()) {

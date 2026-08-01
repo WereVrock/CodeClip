@@ -20,26 +20,35 @@ import wv.codeclip.protocol.model.ValidationError;
 
 public final class ProtocolManagerDialog extends JDialog {
 
-    private final ProtocolLibrary library;
+    private ProtocolLibrary library;
+    private final wv.codeclip.protocol.library.ProtocolDirectoryManager directoryManager;
+    private final java.util.function.Consumer<ProtocolLibrary> onLibraryChanged;
     private final ProtocolEngine engine = new ProtocolEngine();
 
-    private final ProtocolListPanel listPanel;
-    private final StructuredProtocolEditorPanel editorPanel;
+    private ProtocolListPanel listPanel;
+    private StructuredProtocolEditorPanel editorPanel;
     private final LockIndicator masterLockIndicator = new LockIndicator();
     private final JLabel statusBar = new JLabel(" ");
+    private final JLabel folderLabel = new JLabel();
+    private JPanel centerHolder;
+    private JSplitPane mainSplit;
 
     private final wv.codeclip.protocol.engine.ProtocolUndoManager protocolUndoManager;
     private final java.util.function.Consumer<String> protocolLogCallback;
     private JButton protocolUndoBtn;
     private JButton protocolRedoBtn;
 
-    public ProtocolManagerDialog(Frame owner, Path baseDir,
+    public ProtocolManagerDialog(Frame owner,
+            wv.codeclip.protocol.library.ProtocolDirectoryManager directoryManager,
             wv.codeclip.protocol.engine.ProtocolUndoManager protocolUndoManager,
-            java.util.function.Consumer<String> protocolLogCallback) {
+            java.util.function.Consumer<String> protocolLogCallback,
+            java.util.function.Consumer<ProtocolLibrary> onLibraryChanged) {
         // Modeless: does not block the owner window, and does not prevent
         // minimizing the app while this dialog is open.
         super(owner, "Protocol Manager", false);
-        this.library = new ProtocolLibrary(baseDir);
+        this.directoryManager = directoryManager;
+        this.onLibraryChanged = onLibraryChanged != null ? onLibraryChanged : (lib -> {});
+        this.library = directoryManager.buildLibrary();
         this.protocolUndoManager = protocolUndoManager;
         this.protocolLogCallback = protocolLogCallback != null ? protocolLogCallback : (msg -> {});
 
@@ -53,29 +62,35 @@ public final class ProtocolManagerDialog extends JDialog {
         setLayout(new BorderLayout());
         add(buildTopBar(), BorderLayout.NORTH);
 
-        JSplitPane mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, listPanel, editorPanel);
-        mainSplit.setDividerLocation(260);
-        add(mainSplit, BorderLayout.CENTER);
+        centerHolder = new JPanel(new BorderLayout());
+        mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, listPanel, editorPanel);
+        mainSplit.setDividerLocation(300);
+        centerHolder.add(mainSplit, BorderLayout.CENTER);
+        add(centerHolder, BorderLayout.CENTER);
 
         add(buildBottomBar(), BorderLayout.SOUTH);
 
-        setSize(1150, 700);
+        setSize(1500, 900);
+        setMinimumSize(new Dimension(1000, 600));
         setLocationRelativeTo(owner);
     }
 
-    private JPanel buildTopBar() {
+private JPanel buildTopBar() {
         JPanel topBar = new JPanel(new BorderLayout());
 
         JPanel leftTop = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        JLabel folderLabel = new JLabel("Protocols folder: " + shortenPath(library.getProtocolsDir().toAbsolutePath().toString()));
-        folderLabel.setToolTipText(library.getProtocolsDir().toAbsolutePath().toString());
+        refreshFolderLabel();
         leftTop.add(folderLabel);
+        JButton changeFolderBtn = new JButton("Change Protocols Folder\u2026");
+        changeFolderBtn.setToolTipText("Choose where this project's .prtcl files live");
+        changeFolderBtn.addActionListener(e -> changeProtocolsFolder());
+        leftTop.add(changeFolderBtn);
         topBar.add(leftTop, BorderLayout.WEST);
 
         JPanel rightTop = new JPanel(new FlowLayout(FlowLayout.RIGHT));
 
-        protocolUndoBtn = new JButton("↩ Undo");
-        protocolRedoBtn = new JButton("↪ Redo");
+        protocolUndoBtn = new JButton("\u21A9 Undo");
+        protocolRedoBtn = new JButton("\u21AA Redo");
         protocolUndoBtn.setToolTipText("Undo the last protocol file change");
         protocolRedoBtn.setToolTipText("Redo the last undone protocol file change");
         protocolUndoBtn.addActionListener(e -> {
@@ -115,7 +130,61 @@ public final class ProtocolManagerDialog extends JDialog {
         return topBar;
     }
 
-    private void syncProtocolUndoRedoButtons() {
+private void refreshFolderLabel() {
+        String full = library.getProtocolsDir().toAbsolutePath().toString();
+        folderLabel.setText("Protocols folder: " + shortenPath(full));
+        folderLabel.setToolTipText(full);
+    }
+
+    /**
+     * Opens the folder chooser via ProtocolDirectoryManager, and if a new
+     * folder was picked, rebuilds this dialog's ProtocolLibrary and every
+     * panel that holds a reference to the old one, so nothing keeps writing
+     * to the stale location.
+     */
+    private void changeProtocolsFolder() {
+        if (editorPanel.hasUnsavedChanges()) {
+            int choice = JOptionPane.showConfirmDialog(this,
+                "You have unsaved changes in the editor. Discard them and switch folders?",
+                "Unsaved Changes", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (choice != JOptionPane.YES_OPTION) return;
+        }
+
+        ProtocolLibrary newLibrary = directoryManager.changeDirectoryInteractively(this);
+        if (newLibrary == null) {
+            return;
+        }
+
+        this.library = newLibrary;
+        protocolUndoManager.clear();
+
+        listPanel = new ProtocolListPanel(library);
+        editorPanel = new StructuredProtocolEditorPanel(library);
+        listPanel.setOnFileSelected(editorPanel::showFile);
+        editorPanel.setOnSavedCallback(listPanel::refresh);
+        editorPanel.setOnRequestNextFile(listPanel::selectNextFile);
+
+        mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, listPanel, editorPanel);
+        mainSplit.setDividerLocation(300);
+        centerHolder.removeAll();
+        centerHolder.add(mainSplit, BorderLayout.CENTER);
+        centerHolder.revalidate();
+        centerHolder.repaint();
+
+        masterLockIndicator.setLocked(library.isMasterLocked());
+        refreshFolderLabel();
+        statusBar.setText("Switched protocols folder to: " + library.getProtocolsDir());
+        protocolLogCallback.accept("Protocols folder changed to: " + library.getProtocolsDir());
+        syncProtocolUndoRedoButtons();
+
+        // Propagate to CodeClipFrame so Copy All and main-frame paste routing
+        // stop reading/writing the stale pre-switch folder — without this,
+        // the dialog moves to the new folder but the rest of the app silently
+        // keeps using the old one for the rest of the session.
+        onLibraryChanged.accept(library);
+    }
+
+private void syncProtocolUndoRedoButtons() {
         if (protocolUndoBtn == null || protocolRedoBtn == null || protocolUndoManager == null) return;
         protocolUndoBtn.setEnabled(protocolUndoManager.canUndo());
         protocolRedoBtn.setEnabled(protocolUndoManager.canRedo());
@@ -197,10 +266,12 @@ public final class ProtocolManagerDialog extends JDialog {
         statusBar.setText("Copied AI format instructions to clipboard.");
     }
 
-    private void handlePasteAiOutput() {
+private void handlePasteAiOutput() {
         String clipboardText = ProtocolClipboardHelper.readFromClipboard();
         if (clipboardText == null || clipboardText.isBlank()) {
-            JOptionPane.showMessageDialog(this, "Clipboard is empty or unreadable.",
+            JOptionPane.showMessageDialog(this,
+                "Clipboard is empty.\n\nClipboard content was:\n" +
+                (clipboardText == null ? "(null \u2014 clipboard has no text content)" : "(blank/whitespace only)"),
                 "Nothing to paste", JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -210,13 +281,20 @@ public final class ProtocolManagerDialog extends JDialog {
             engine.recordPatch(clipboardText);
             commands = engine.getRecordedCommands();
         } catch (wv.codeclip.protocol.parser.AiOutputParser.PatchParseException e) {
-            JOptionPane.showMessageDialog(this, "Could not parse AI output:\n" + e.getMessage(),
+            JOptionPane.showMessageDialog(this, "Could not parse AI output:\n" + e.getMessage()
+                + "\n\nClipboard content was:\n" + truncateForDialog(clipboardText),
                 "Parse Error", JOptionPane.ERROR_MESSAGE);
             return;
         }
 
         if (commands.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "No @@protocol blocks found in clipboard content.",
+            // Only reached when zero protocol commands were found — if even one
+            // command parsed, we never land here, so this message never fires on
+            // a valid paste. Shows the actual clipboard body so it's clear why
+            // nothing was recognized, instead of a bare generic message.
+            JOptionPane.showMessageDialog(this,
+                "No @@protocol blocks found in clipboard content.\n\nClipboard content was:\n"
+                + truncateForDialog(clipboardText),
                 "Nothing to apply", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
@@ -261,7 +339,15 @@ public final class ProtocolManagerDialog extends JDialog {
         editorPanel.reload();
     }
 
-    private void showPatchResult(wv.codeclip.protocol.model.ProtocolPatchResult result) {
+/** Keeps error dialogs readable — full clipboard body for anything reasonably
+     *  sized, truncated with a note for pathologically large pastes. */
+    private String truncateForDialog(String text) {
+        int limit = 4000;
+        if (text.length() <= limit) return text;
+        return text.substring(0, limit) + "\n\n\u2026 (truncated, " + (text.length() - limit) + " more characters)";
+    }
+
+private void showPatchResult(wv.codeclip.protocol.model.ProtocolPatchResult result) {
         switch (result.getStatus()) {
             case APPLIED -> {
                 StringBuilder sb = new StringBuilder("Applied successfully.\n\n");

@@ -31,7 +31,7 @@ public final class StructuredProtocolEditorPanel extends JPanel {
     private final JTextArea contentArea = new JTextArea();
     private final JLabel entryStatusLabel = new JLabel(" ");
 
-    private final JTextArea previewArea = new JTextArea();
+    private final JTextPane previewArea = new JTextPane();
     private final JCheckBox lockCheckBox = new JCheckBox("File is locked (blocks AI edits, hand edits still allowed)");
     private final JLabel fileStatusLabel = new JLabel(" ");
     private final JLabel titleLabel = new JLabel("No file selected");
@@ -90,11 +90,12 @@ public final class StructuredProtocolEditorPanel extends JPanel {
         return panel;
     }
 
-    private JSplitPane buildMainSplit() {
+private JSplitPane buildMainSplit() {
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
         split.setLeftComponent(buildEntryListPanel());
         split.setRightComponent(buildRightSplit());
-        split.setDividerLocation(240);
+        split.setDividerLocation(300);
+        entryList.setFixedCellHeight(30);
         return split;
     }
 
@@ -106,6 +107,16 @@ private JPanel buildEntryListPanel() {
         entryList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
                 selectEntry(entryList.getSelectedValue());
+            }
+        });
+        entryList.setFocusTraversalKeysEnabled(false);
+        entryList.addKeyListener(new java.awt.event.KeyAdapter() {
+            @Override
+            public void keyPressed(java.awt.event.KeyEvent e) {
+                if (e.getKeyCode() == java.awt.event.KeyEvent.VK_TAB) {
+                    e.consume();
+                    selectNextEntryInListWrapping();
+                }
             }
         });
         panel.add(new JScrollPane(entryList), BorderLayout.CENTER);
@@ -134,8 +145,10 @@ private JSplitPane buildRightSplit() {
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
         split.setLeftComponent(buildEntryEditorPanel());
         split.setRightComponent(buildPreviewPanel());
-        split.setResizeWeight(0.6);
-        split.setDividerLocation(400);
+        split.setResizeWeight(0.55);
+        split.setDividerLocation(480);
+        contentArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
+        previewArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
         return split;
     }
 
@@ -200,8 +213,18 @@ private JPanel buildPreviewPanel() {
 
         previewArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         previewArea.setEditable(false);
-        previewArea.setBackground(new Color(245, 245, 245));
         panel.add(new JScrollPane(previewArea), BorderLayout.CENTER);
+
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton fullViewBtn = new JButton("\u26F6 Full View");
+        fullViewBtn.setToolTipText("Open a resizable, color-coded full view of this file");
+        fullViewBtn.addActionListener(e -> {
+            if (fileName == null) return;
+            new wv.codeclip.protocol.editor.ProtocolFullViewDialog(
+                SwingUtilities.getWindowAncestor(this), fileName, previewArea.getText()).setVisible(true);
+        });
+        toolbar.add(fullViewBtn);
+        panel.add(toolbar, BorderLayout.NORTH);
 
         return panel;
     }
@@ -425,7 +448,19 @@ private JPanel buildBottomBar() {
         updatePreview();
     }
 
-    // ---------------------------------------------------------------
+/** Selects the next entry in the list, wrapping to the first after the last.
+     *  Distinct from advanceToNextEntryOrCreate(), which is the field-editing Tab
+     *  flow and creates a new entry at the end rather than wrapping — this is pure
+     *  list-navigation cycling triggered by Tab while the entry list itself has focus. */
+    private void selectNextEntryInListWrapping() {
+        if (entryListModel.isEmpty()) return;
+        int idx = entryList.getSelectedIndex();
+        int next = (idx < 0 || idx + 1 >= entryListModel.size()) ? 0 : idx + 1;
+        entryList.setSelectedIndex(next);
+        entryList.ensureIndexIsVisible(next);
+    }
+
+// ---------------------------------------------------------------
     // Entry editing
     // ---------------------------------------------------------------
 
@@ -514,7 +549,7 @@ private JPanel buildBottomBar() {
         updatePreview();
     }
 
-    private void updatePreview() {
+private void updatePreview() {
         if (fileName == null) return;
         List<ProtocolEntry> entries = new ArrayList<>();
         int idx = 0;
@@ -523,11 +558,10 @@ private JPanel buildBottomBar() {
             entries.add(new ProtocolEntry(id, draft.contentAsLines(), idx++));
         }
         ProtocolFile preview = new ProtocolFile(fileName, lockCheckBox.isSelected(), List.of(), entries);
-        previewArea.setText(preview.render());
-        previewArea.setCaretPosition(0);
+        wv.codeclip.protocol.editor.ProtocolSyntaxColorizer.render(previewArea, preview.render());
     }
 
-    // ---------------------------------------------------------------
+// ---------------------------------------------------------------
     // Export / clipboard / external editor
     // ---------------------------------------------------------------
 
@@ -609,7 +643,7 @@ private JPanel buildBottomBar() {
         // If the user typed "!id someid" inline, pull that id out for the new entry.
         String newId = "";
         String remainingContent = after;
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^([a-z][a-z0-9-]*)\\s*(.*)$", java.util.regex.Pattern.DOTALL).matcher(after);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^([a-z][a-z0-9_-]*)\\s*(.*)$", java.util.regex.Pattern.DOTALL).matcher(after);
         if (m.matches()) {
             newId = m.group(1);
             remainingContent = m.group(2);
