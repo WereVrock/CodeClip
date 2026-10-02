@@ -418,8 +418,8 @@ settingsMenu.add(compileCheckItem);
         JMenuItem copyEnablerItem = new JMenuItem("Copy Enable Instructions");
         copyEnablerItem.addActionListener(e -> {
             new ClipboardService().write(
-                    "Use @@Enable to enable the classes you want\n\n"
-                    + "@@Enable ClassName1, ClassName2, ClassName3"
+                    "Write the command @@Enable to allow the user to enable the classes you want by copy pasting the command\n\n"
+                    + "@@Enable ClassName1, ClassName2, ClassName3" +"\n if you are working with javascripts, add .js to file end."
             );
         });
         extraMenu.add(copyEnablerItem);
