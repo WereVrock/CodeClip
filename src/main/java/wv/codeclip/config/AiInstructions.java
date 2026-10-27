@@ -1,3 +1,4 @@
+
 package wv.codeclip.config;
 
 public final class AiInstructions {
@@ -64,8 +65,11 @@ public final class AiInstructions {
           Place after @@TITLE: (or after @@PATCH if no title).
 
         @@FILE:
-          The exact filename including .java extension.
+          The exact filename including its extension — .java, but equally
+          .xml (e.g. pom.xml), .gradle, .properties, .kt, .json, .yml, etc.
           All changes below apply to this file until the next @@FILE:.
+          @@FIND:/@@REPLACE: work on any text file. @@METHOD: and
+          @@INSERT_METHOD: only make sense for Java/Kotlin sources.
 
         @@FIND: / @@REPLACE:
           Use for small targeted changes.
@@ -132,4 +136,4 @@ public final class AiInstructions {
         Smart Paste extracts and applies them in document order together with any @@PATCH blocks.
         ================================================================
         """;
-} 
+}

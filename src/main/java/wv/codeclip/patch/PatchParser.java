@@ -157,15 +157,20 @@ i++;
 continue;
 }
 
-if (line.equals(MARKER_FIND)) {
+if (line.startsWith(MARKER_FIND)) {
 requireFile(currentFile, i);
+String findTrailing = line.length() > MARKER_FIND.length()
+    ? line.substring(MARKER_FIND.length()).trim() : "";
 i++;
 ParsedBlock find = readBlock(lines, i, MARKER_REPLACE);
 i = find.nextIndex();
-if (i >= lines.length || !lines[i].trim().equals(MARKER_REPLACE)) {
+if (i >= lines.length || !lines[i].trim().startsWith(MARKER_REPLACE)) {
 throw new IllegalArgumentException(
 "Expected @@REPLACE: after @@FIND block at line " + (i + 1));
 }
+String replaceLine = lines[i].trim();
+String replaceTrailing = replaceLine.length() > MARKER_REPLACE.length()
+    ? replaceLine.substring(MARKER_REPLACE.length()).trim() : "";
 i++;
 String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_FIND + "|" + MARKER_METHOD
 + "|" + MARKER_INSERT_METHOD + "|" + MARKER_AFTER_METHOD;
@@ -175,7 +180,9 @@ throw new IllegalArgumentException(
 "@@REPLACE block is not terminated. Did you forget @@END?");
 }
 i = replace.nextIndex();
-changes.add(new PatchChange.FindReplace(currentFile, find.text(), replace.text()));
+changes.add(new PatchChange.FindReplace(currentFile,
+    prependTrailing(findTrailing, find.text()),
+    prependTrailing(replaceTrailing, replace.text())));
 continue;
 }
 
@@ -188,12 +195,13 @@ throw new IllegalArgumentException(
 }
 i++;
 while (i < lines.length && lines[i].isBlank()) i++;
-if (i >= lines.length || !lines[i].trim().equals(MARKER_INSERT_METHOD)) {
+if (i >= lines.length || !lines[i].trim().startsWith(MARKER_INSERT_METHOD)) {
 String found = i < lines.length ? lines[i].trim() : "<end of input>";
 throw new IllegalArgumentException(
 "Expected @@INSERT_METHOD: after @@AFTER_METHOD: at line " + (i + 1)
 + "\nFound: \"" + found + "\"");
 }
+String insertTrailing = lines[i].trim().substring(MARKER_INSERT_METHOD.length()).trim();
 i++;
 String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_METHOD
 + "|" + MARKER_FIND + "|" + MARKER_INSERT_METHOD + "|" + MARKER_AFTER_METHOD;
@@ -203,12 +211,14 @@ throw new IllegalArgumentException(
 "@@INSERT_METHOD block is not terminated. Did you forget @@END?");
 }
 i = code.nextIndex();
-changes.add(new PatchChange.InsertMethod(currentFile, anchorMethod, code.text()));
+changes.add(new PatchChange.InsertMethod(currentFile, anchorMethod,
+buildInsertBody(insertTrailing, code.text())));
 continue;
 }
 
 if (line.startsWith(MARKER_INSERT_METHOD)) {
 requireFile(currentFile, i);
+String trailing = line.substring(MARKER_INSERT_METHOD.length()).trim();
 i++;
 String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_METHOD
 + "|" + MARKER_FIND + "|" + MARKER_INSERT_METHOD + "|" + MARKER_AFTER_METHOD;
@@ -218,26 +228,30 @@ throw new IllegalArgumentException(
 "@@INSERT_METHOD block is not terminated. Did you forget @@END?");
 }
 i = code.nextIndex();
-changes.add(new PatchChange.InsertMethod(currentFile, null, code.text()));
+changes.add(new PatchChange.InsertMethod(currentFile, null,
+buildInsertBody(trailing, code.text())));
 continue;
 }
 
-        if (line.equals(MARKER_METHOD) || line.startsWith(MARKER_METHOD)) {
+        if (line.startsWith(MARKER_METHOD)) {
             requireFile(currentFile, i);
-            String rawMethodSpec = line.equals(MARKER_METHOD)
-                    ? ""
-                    : line.substring(MARKER_METHOD.length()).trim();
+            String rawMethodSpec = line.length() > MARKER_METHOD.length()
+                    ? line.substring(MARKER_METHOD.length()).trim()
+                    : "";
             String explicitMethodName = extractNameFromSpec(rawMethodSpec);
             String explicitParamTypes = extractParamTypesFromSpec(rawMethodSpec);
 i++;
 while (i < lines.length && lines[i].isBlank()) i++;
-if (i >= lines.length || !lines[i].trim().equals(MARKER_REPLACE)) {
+if (i >= lines.length || !lines[i].trim().startsWith(MARKER_REPLACE)) {
 String found = i < lines.length ? lines[i].trim() : "<end of input>";
 throw new IllegalArgumentException(
 "Expected @@REPLACE: after @@METHOD at line " + (i + 1) +
 "\nFound instead: \"" + found + "\"" +
 "\nMake sure @@REPLACE: appears on its own line after @@METHOD:");
 }
+String replaceLine = lines[i].trim();
+String replaceTrailing = replaceLine.length() > MARKER_REPLACE.length()
+    ? replaceLine.substring(MARKER_REPLACE.length()).trim() : "";
 i++;
 String replaceStops = MARKER_FILE + "|" + MARKER_END + "|" + MARKER_METHOD + "|" + MARKER_FIND
 + "|" + MARKER_INSERT_METHOD + "|" + MARKER_AFTER_METHOD;
@@ -247,8 +261,9 @@ throw new IllegalArgumentException(
 "@@REPLACE block for @@METHOD is not terminated. Did you forget @@END?");
 }
 i = replace.nextIndex();
+String replaceText = prependTrailing(replaceTrailing, replace.text());
             if (explicitMethodName.isEmpty()) {
-                List<String> methods = splitIntoMethods(replace.text());
+                List<String> methods = splitIntoMethods(replaceText);
                 if (methods.isEmpty()) {
                     throw new IllegalArgumentException(
                         "@@METHOD: has no name and none could be parsed from the @@REPLACE block.\n" +
@@ -263,7 +278,7 @@ i = replace.nextIndex();
                     changes.add(new PatchChange.MethodReplace(currentFile, name, null, methodBlock));
                 }
             } else {
-                changes.add(new PatchChange.MethodReplace(currentFile, explicitMethodName, explicitParamTypes, replace.text()));
+                changes.add(new PatchChange.MethodReplace(currentFile, explicitMethodName, explicitParamTypes, replaceText));
             }
 continue;
 }
@@ -276,6 +291,39 @@ throw new IllegalArgumentException("Patch block contains no changes.");
 }
 
 return changes;
+}
+
+/**
+ * Prepends same-line trailing content (text after the directive on the
+ * same line) to the block body read from subsequent lines. Both are
+ * preserved — this is for FIND/REPLACE, where any content after the
+ * marker is meaningful (unlike INSERT_METHOD, where a bare identifier is
+ * almost always just the method name hint and is safely dropped).
+ */
+private static String prependTrailing(String trailing, String body) {
+    String t = (trailing == null) ? "" : trailing;
+    String b = (body == null) ? "" : body;
+    if (t.isEmpty()) return b;
+    if (b.isEmpty()) return t;
+    return t + "\n" + b;
+}
+
+/**
+ * Tolerates the common AI formatting variant where content follows the
+ * INSERT_METHOD marker on the same line, e.g.
+ * {@code @@INSERT_METHOD: someMethodName} instead of
+ * {@code @@INSERT_METHOD:} alone.
+ * <p>
+ * A bare identifier is almost always the method name the model intended
+ * to put on its own line — it is redundant (the actual signature lives in
+ * the body below) so we drop it. Anything else is treated as code and
+ * prepended to the body, so nothing is silently lost.
+ */
+private static String buildInsertBody(String trailing, String bodyText) {
+    if (trailing == null || trailing.isEmpty()) return bodyText;
+    if (trailing.matches("[a-zA-Z_$][a-zA-Z0-9_$]*")) return bodyText;
+    if (bodyText == null || bodyText.isEmpty()) return trailing;
+    return trailing + "\n" + bodyText;
 }
 
 /**
@@ -410,13 +458,3 @@ private static String extractNameFromSpec(String spec) {
 
 private record ParsedBlock(String text, int nextIndex, boolean hitEndOfInput) {}
 }
-
-
-
-
-
-
-
-
-
-

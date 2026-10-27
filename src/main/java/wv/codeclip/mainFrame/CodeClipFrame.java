@@ -32,8 +32,6 @@ import wv.codeclip.ui.ClassTreePanel;
 
 public class CodeClipFrame extends JFrame implements java.awt.event.FocusListener {
 
-    private final JTextArea classTextArea = new JTextArea(8, 50);
-
 // Replaces JTextArea — supports colored segments
     private final JTextPane notesTextPane = new JTextPane();
 
@@ -133,8 +131,39 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
     private static final String BUILD_INFO_FILE = "buildinfo.properties";
     private static final int ICON_SIZE = 64;
+    /** Single files larger than this are not loaded. Prevents one minified
+     *  bundle or generated dump from dominating the heap and stalling every
+     *  refresh. 2 MB comfortably covers real source files. */
+    private static final long MAX_FILE_BYTES = 2L * 1024 * 1024;
+    /** When the total enabled content exceeds this many characters, the
+     *  display area shows a summary instead of the full text. Copy operations
+     *  read from the repository, not the display, so nothing is lost — only
+     *  scrolling the whole corpus in a Swing JTextArea is what gets skipped. */
+    private static final long MAX_DISPLAY_CHARS = 500_000L;
     private boolean titleFrozen = false;
     private wv.codeclip.mainFrame.BuildInfoStamper buildInfoStamper;
+
+    /** Source root that project-scoped settings (name, tint, protocols folder)
+     *  are currently bound to. Null until the first successful detection. */
+    private java.io.File projectSourceRoot = null;
+    private wv.codeclip.io.ProjectSettings projectSettings = null;
+    /**
+     * True immediately after Reset. The first batch that lands while this is
+     * true forces auto-set of the current mode's directory — even if one is
+     * already set — because Reset means "I want fresh directories for the
+     * next project". Cleared on any successful auto-set or manual pick.
+     *
+     * Needed because *Directory.load() ignores empty saved values, so clearing
+     * the settings string alone does not clear the in-memory directory.
+     */
+    private boolean pendingDirectoryAutoSet = false;
+
+    /** Only one Protocol Manager dialog is ever open at a time; kept here so
+     *  a project switch can rebind it to the new protocols folder. */
+    private wv.codeclip.protocol.ui.ProtocolManagerDialog protocolManagerDialog = null;
+
+    private final wv.codeclip.io.RecentProjects recentProjects = new wv.codeclip.io.RecentProjects();
+    private JMenu recentProjectsMenu;
 
     private JWindow loadBarWindow;
     private JProgressBar loadProgressBar;
@@ -143,15 +172,16 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     public CodeClipFrame() {
 
         wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
+        recentProjects.load(settings);
         wv.codeclip.godot.GodotDirectory.load(settings);
         wv.codeclip.html.HtmlDirectory.load(settings);
         wv.codeclip.generic.GenericDirectory.load(settings);
         undoManager = new wv.codeclip.patch.PatchUndoManager();
-        projectNameManager = new wv.codeclip.mainFrame.ProjectNameManager(settings);
+        projectNameManager = new wv.codeclip.mainFrame.ProjectNameManager();
         protocolDirectoryManager = new wv.codeclip.protocol.library.ProtocolDirectoryManager(
-                settings, this::detectSourceRootForProtocols);
+                this::detectSourceRootForProtocols);
         protocolLibrary = new wv.codeclip.protocol.library.ProtocolLibrary(
-                protocolDirectoryManager.getProtocolsBaseDir());
+                protocolDirectoryManager.getProtocolsDir());
         protocolUndoManager = new wv.codeclip.protocol.engine.ProtocolUndoManager();
         protocolPasteRouter = new wv.codeclip.protocol.engine.ProtocolPasteRouter(
                 protocolLibrary, protocolUndoManager);
@@ -211,7 +241,6 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
         actions = new ClassActions(
                 this,
-                classTextArea,
                 notesTextPane,
                 showMissingFileMessages,
                 repo,
@@ -318,6 +347,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 settings.saveClassPaths(
                         repo.getClassCodeMap().keySet().toArray(new String[0])
                 );
+                registerCurrentProjectInRecent();
                 settings.saveProperties();
             }
         });
@@ -348,9 +378,6 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 // UI
 // ------------------------------------------------------------------
     private void buildUI() {
-
-        classTextArea.setEditable(false);
-        classTextArea.setLineWrap(true);
 
 // --- Menu bar ---
         JMenuBar menuBar = new JMenuBar();
@@ -449,8 +476,15 @@ settingsMenu.add(compileCheckItem);
         extraMenu.add(copyDeleteItem);
         JMenuItem copyCodemapItem = new JMenuItem("Copy Codemap");
         copyCodemapItem.addActionListener(e -> {
-            String map = new wv.codeclip.codemap.CodeMapBuilder(repo).build(repo.getDisabledClasses());
+            wv.codeclip.codemap.CodeMapBuilder.Scope scope = promptCodemapScope();
+            if (scope == null) {
+                return; // user cancelled
+            }
+            String map = new wv.codeclip.codemap.CodeMapBuilder(repo)
+                    .build(repo.getDisabledClasses(), scope);
             new ClipboardService().write(map);
+            settings.saveCodemapScope(scope.name());
+            settings.saveProperties();
         });
         extraMenu.add(copyCodemapItem);
         copyMetaItem = new JMenuItem("Copy Meta Instructions");
@@ -474,12 +508,7 @@ settingsMenu.add(compileCheckItem);
                     JOptionPane.WARNING_MESSAGE
             );
             if (confirm == JOptionPane.YES_OPTION) {
-                actions.resetAll(classPanel);
-                undoManager.clear();
-                syncUndoRedo.run();
-                versionHistory.clear();
-                versionCurrentIdx = -1;
-                refreshVersionPanel();
+                resetProjectState();
             }
         });
         systemMenu.add(resetItem);
@@ -508,6 +537,14 @@ settingsMenu.add(compileCheckItem);
             setIcon();
         });
         systemMenu.add(rerollColorItem);
+
+        recentProjectsMenu = new JMenu("Recent Projects");
+        recentProjectsMenu.addMenuListener(new javax.swing.event.MenuListener() {
+            @Override public void menuSelected(javax.swing.event.MenuEvent e) { rebuildRecentProjectsMenu(); }
+            @Override public void menuDeselected(javax.swing.event.MenuEvent e) {}
+            @Override public void menuCanceled(javax.swing.event.MenuEvent e) {}
+        });
+        systemMenu.add(recentProjectsMenu);
 
         menuBar.add(systemMenu);
 
@@ -1130,7 +1167,7 @@ private void installDnD() {
         fileDropHandler.install(this);
     }
 
-    private void openLanguageDialog() {
+private void openLanguageDialog() {
         AppMode[] modes = AppMode.values();
         AppMode selected = (AppMode) JOptionPane.showInputDialog(
                 this,
@@ -1151,6 +1188,11 @@ private void installDnD() {
             updateModeLabel();
             refreshText();
             refreshPanels();
+            // Mode change can change what detectSourceRoot() returns
+            // (HtmlDirectory / GenericDirectory are consulted first in those
+            // modes). reloadProjectSettings re-detects and only re-attaches
+            // when the effective root actually differs.
+            reloadProjectSettings();
         }
     }
 
@@ -1207,22 +1249,28 @@ private void installDnD() {
         addFilesBatched(List.of(file));
     }
 
-    private void addFilesBatched(List<File> files) {
+private void addFilesBatched(List<File> files) {
         if (files.isEmpty()) {
             return;
         }
 
         List<File> toLoad = new ArrayList<>();
+        List<File> tooLarge = new ArrayList<>();
         for (File file : files) {
             String path = file.getAbsolutePath();
             if (repo.getClassCodeMap().containsKey(path)) {
                 repo.getDisabledClasses().remove(path);
-            } else {
-                toLoad.add(file);
+                continue;
             }
+            if (file.length() > MAX_FILE_BYTES) {
+                tooLarge.add(file);
+                continue;
+            }
+            toLoad.add(file);
         }
 
         if (toLoad.isEmpty()) {
+            reportSkippedLargeFiles(tooLarge);
             refreshText();
             refreshPanels();
             return;
@@ -1263,12 +1311,13 @@ private void installDnD() {
                         SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
                         if (remaining.decrementAndGet() == 0) {
                             SwingUtilities.invokeLater(() -> {
-                                if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
-                                    autoSetGodotDirectoryFromRepo(toLoad);
-                                }
+                                autoSetModeDirectoryFromRepo(toLoad);
                                 refreshText();
                                 refreshPanels();
+                                reloadProjectSettings();
+                                registerCurrentProjectInRecent();
                                 hideLoadBar();
+                                reportSkippedLargeFiles(tooLarge);
                             });
                         }
                     }
@@ -1278,7 +1327,29 @@ private void installDnD() {
         }
     }
 
-    private void addClassInternal(File file, boolean doRefresh) {
+/**
+     * Reports files that were not loaded because they exceed MAX_FILE_BYTES.
+     * Called once per batch, after the batch's remaining files finish loading,
+     * so the user gets a single aggregated dialog rather than one per file.
+     */
+    private void reportSkippedLargeFiles(List<File> skipped) {
+        if (skipped.isEmpty()) return;
+        StringBuilder msg = new StringBuilder(
+                "Skipped " + skipped.size() + " file"
+                + (skipped.size() == 1 ? "" : "s")
+                + " larger than " + (MAX_FILE_BYTES / 1024 / 1024) + " MB:\n\n");
+        for (File f : skipped) {
+            msg.append("  • ").append(f.getName())
+               .append(" (").append(f.length() / 1024 / 1024).append(" MB)\n");
+            appendTempLog("Skipped large file (" + (f.length() / 1024 / 1024) + " MB): " + f.getName());
+        }
+        msg.append("\nLikely generated or minified — not loaded. ")
+           .append("Open them directly if needed.");
+        JOptionPane.showMessageDialog(this, msg.toString(),
+                "Large Files Skipped", JOptionPane.WARNING_MESSAGE);
+    }
+
+private void addClassInternal(File file, boolean doRefresh) {
         String path = file.getAbsolutePath();
 
         if (repo.getClassCodeMap().containsKey(path)) {
@@ -1319,30 +1390,47 @@ private void installDnD() {
         worker.execute();
     }
 
-    private void loadClassPathsBatched(String[] paths) {
+private void loadClassPathsBatched(String[] paths) {
         if (paths.length == 0) {
             return;
         }
 
+        List<String> accepted = new ArrayList<>();
+        List<File> tooLarge = new ArrayList<>();
+        for (String path : paths) {
+            File f = new File(path);
+            if (f.exists() && f.length() > MAX_FILE_BYTES) {
+                tooLarge.add(f);
+                continue;
+            }
+            accepted.add(path);
+        }
+
+        if (accepted.isEmpty()) {
+            reportSkippedLargeFiles(tooLarge);
+            return;
+        }
+
         java.util.concurrent.atomic.AtomicInteger remaining
-                = new java.util.concurrent.atomic.AtomicInteger(paths.length);
+                = new java.util.concurrent.atomic.AtomicInteger(accepted.size());
         java.util.concurrent.atomic.AtomicInteger loaded
                 = new java.util.concurrent.atomic.AtomicInteger(0);
-        int total = paths.length;
+        int total = accepted.size();
 
-        for (String path : paths) {
+        for (String path : accepted) {
             File f = new File(path);
             if (!f.exists()) {
                 int done = loaded.incrementAndGet();
                 SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
                 if (remaining.decrementAndGet() == 0) {
                     SwingUtilities.invokeLater(() -> {
-                        if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
-                            autoSetGodotDirectoryFromRepo(null);
-                        }
+                        autoSetModeDirectoryFromRepo(null);
                         refreshText();
                         refreshPanels();
+                        reloadProjectSettings();
+                        registerCurrentProjectInRecent();
                         hideLoadBar();
+                        reportSkippedLargeFiles(tooLarge);
                     });
                 }
                 continue;
@@ -1355,12 +1443,13 @@ private void installDnD() {
                 SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
                 if (remaining.decrementAndGet() == 0) {
                     SwingUtilities.invokeLater(() -> {
-                        if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
-                            autoSetGodotDirectoryFromRepo(null);
-                        }
+                        autoSetModeDirectoryFromRepo(null);
                         refreshText();
                         refreshPanels();
+                        reloadProjectSettings();
+                        registerCurrentProjectInRecent();
                         hideLoadBar();
+                        reportSkippedLargeFiles(tooLarge);
                     });
                 }
                 continue;
@@ -1389,12 +1478,13 @@ private void installDnD() {
                         SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
                         if (remaining.decrementAndGet() == 0) {
                             SwingUtilities.invokeLater(() -> {
-                                if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
-                                    autoSetGodotDirectoryFromRepo(null);
-                                }
+                                autoSetModeDirectoryFromRepo(null);
                                 refreshText();
                                 refreshPanels();
+                                reloadProjectSettings();
+                                registerCurrentProjectInRecent();
                                 hideLoadBar();
+                                reportSkippedLargeFiles(tooLarge);
                             });
                         }
                     }
@@ -1498,22 +1588,16 @@ private void removeClassPanel(String path) {
 // ------------------------------------------------------------------
 // Refresh
 // ------------------------------------------------------------------
-    private void refreshText() {
-        String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
-        StringBuilder sb = new StringBuilder();
-        repo.getClassCodeMap().forEach((path, code) -> {
-            if (!repo.getDisabledClasses().contains(path)) {
-                File file = repo.getClassFileMap().get(path);
-                String name = (file != null) ? file.getName() : path;
-                sb.append(prefix).append(" ===== ").append(name).append(" =====\n");
-                sb.append(code).append("\n\n");
-            }
-        });
-        classTextArea.setText(sb.toString());
+
+private void refreshText() {
+        // In-app code display was removed. All copy operations read from the
+        // repository directly. Kept as a named method so existing callers
+        // (undo/redo, paste callbacks, reloadProjectSettings, batch loads)
+        // continue to work unchanged.
         refreshStats();
     }
 
-    private void refreshStats() {
+private void refreshStats() {
         long enabled = repo.getClassCodeMap().size() - repo.getDisabledClasses().size();
         enabledCountLabel.setText("Enabled Classes: " + enabled);
         int totalChars = repo.getClassCodeMap().entrySet().stream()
@@ -1904,6 +1988,10 @@ private void restoreBuildInfoTitle() {
     }
 
 private void stampBuildInfo() {
+        // Bind project-scoped settings to the current project's folder before
+        // we check or prompt for name/tint — otherwise a rename prompt would
+        // save to global ~/codeclip.properties and leak across instances.
+        reloadProjectSettings();
         if (!projectNameManager.hasProjectName()) {
             projectNameManager.promptForNameIfMissing(this);
             titleFrozen = false;
@@ -1936,7 +2024,310 @@ private wv.codeclip.mainFrame.BuildInfoStamper getBuildInfoStamper() {
     }
 
 private java.io.File detectSourceRoot() {
-        return getBuildInfoStamper().detectSourceRoot();
+        java.io.File detected = getBuildInfoStamper().detectSourceRoot();
+        if (detected == null) {
+            return null;
+        }
+        // In Html/Generic modes, BuildInfoStamper.detectSourceRoot returns
+        // HtmlDirectory/GenericDirectory directly. If the currently loaded
+        // files aren't inside that directory (user reset and opened files
+        // from a different project without changing modes), returning it
+        // would make reloadProjectSettings attach to a folder that isn't
+        // this project's, leaking the previous project's name, tint, and
+        // protocols folder across the reset. Verify at least one loaded
+        // file lives under the detected folder; if not, return null so
+        // callers treat the source root as unknown (empty name, empty
+        // protocols folder) until a proper project is loaded.
+        if (!repo.getClassFileMap().isEmpty()) {
+            String prefix = detected.getAbsolutePath() + File.separator;
+            String detectedAbs = detected.getAbsolutePath();
+            boolean containsLoaded = false;
+            for (java.io.File f : repo.getClassFileMap().values()) {
+                if (f == null) continue;
+                String fp = f.getAbsolutePath();
+                if (fp.equals(detectedAbs) || fp.startsWith(prefix)) {
+                    containsLoaded = true;
+                    break;
+                }
+            }
+            if (!containsLoaded) {
+                return null;
+            }
+        }
+        return detected;
+    }
+
+/**
+     * Rebinds project-scoped state (name, icon tint, protocols folder) to the
+     * folder that is currently the source root. Called after class files
+     * finish loading, after a DnD batch finishes, before a build stamp (so a
+     * rename prompt writes to the right project file), and whenever the
+     * language mode changes — the only paths where the source root can change
+     * at runtime.
+     *
+     * Idempotent: no-op if the source root is unchanged, so ordinary
+     * refreshes don't thrash name/tint/protocol lookups or spam the log.
+     */
+
+private void reloadProjectSettings() {
+        java.io.File sourceRoot = detectSourceRoot();
+        if (sourceRoot == null) {
+            return;
+        }
+        // File.equals is case-insensitive on Windows, which matters because
+        // different dialogs (directory picker, source-root detection) can
+        // return the same physical folder with different letter-casing.
+        if (projectSourceRoot != null && sourceRoot.equals(projectSourceRoot)) {
+            return;
+        }
+        projectSourceRoot = sourceRoot;
+        projectSettings = new wv.codeclip.io.ProjectSettings(
+                sourceRoot,
+                () -> syncBuildInfoFromDisk(sourceRoot));
+
+        String oldName = projectNameManager.getProjectName();
+        long oldSeed = projectNameManager.getIconTintSeed();
+        java.io.File oldProtocolsDir = protocolDirectoryManager.getProtocolsDir().toFile();
+
+        projectNameManager.attachProjectSettings(projectSettings);
+        protocolDirectoryManager.attachProjectSettings(projectSettings);
+
+        boolean nameOrTintChanged = !java.util.Objects.equals(
+                oldName, projectNameManager.getProjectName())
+                || oldSeed != projectNameManager.getIconTintSeed();
+        if (nameOrTintChanged) {
+            titleFrozen = false;
+            refreshTitle();
+            setIcon();
+        }
+
+        java.io.File newProtocolsDir = protocolDirectoryManager.getProtocolsDir().toFile();
+        if (!newProtocolsDir.equals(oldProtocolsDir)) {
+            this.protocolLibrary = protocolDirectoryManager.buildLibrary();
+            this.protocolPasteRouter = new wv.codeclip.protocol.engine.ProtocolPasteRouter(
+                    protocolLibrary, protocolUndoManager);
+            if (protocolManagerDialog != null && protocolManagerDialog.isDisplayable()) {
+                protocolManagerDialog.rebind(this.protocolLibrary);
+            }
+            appendTempLog("Project protocols folder: " + this.protocolLibrary.getProtocolsDir());
+        }
+
+        // Project-scoped backup settings may differ — resync the checkpoint dialog
+        if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
+            checkpointDialog.refresh();
+        }
+    }
+
+/**
+     * Re-reads buildinfo.properties from disk and refreshes CodeClip's
+     * in-memory copy of it. Called after ProjectSettings writes, so the repo
+     * map (used by undo, checkpoint state, Versions tab) doesn't lie about
+     * what's on disk. Checkpoint is advanced to the new content — a rename or
+     * protocols-folder pick is an intentional save, not an unsynced drift.
+     */
+    private void syncBuildInfoFromDisk(java.io.File sourceRoot) {
+        if (sourceRoot == null) {
+            return;
+        }
+        java.io.File file = new java.io.File(sourceRoot, BUILD_INFO_FILE);
+        if (!file.exists()) {
+            return;
+        }
+        try {
+            String content = Files.readString(file.toPath());
+            String path = file.getAbsolutePath();
+            repo.getClassCodeMap().put(path, content);
+            repo.getClassFileMap().put(path, file);
+            repo.setCheckpoint(path, content);
+            refreshText();
+        } catch (java.io.IOException ignored) {
+        }
+    }
+
+/**
+     * Clears everything project-scoped in memory without touching disk.
+     * Used by Reset and by Recent Projects restore. Recent Projects itself
+     * is NOT cleared — that list is app-level history, not project state.
+     */
+    private void resetProjectState() {
+        actions.resetAll(classPanel);
+        undoManager.clear();
+        syncUndoRedo.run();
+        versionHistory.clear();
+        versionCurrentIdx = -1;
+        refreshVersionPanel();
+
+        projectSourceRoot = null;
+        projectSettings = null;
+        projectNameManager.resetToUnattached();
+        protocolDirectoryManager.resetToUnattached();
+
+        // Reset means "fresh directories for the next project". The pending
+        // flag is the reliable mechanism (works regardless of how
+        // *Directory.load handles empty strings); the save+load below is only
+        // best-effort cleanup of the intermediate state so dialogs opened
+        // between Reset and the first drop don't show the stale value.
+        pendingDirectoryAutoSet = true;
+        settings.saveGodotDirectory("");
+        settings.saveHtmlDirectory("");
+        settings.saveGenericDirectory("");
+        wv.codeclip.godot.GodotDirectory.load(settings);
+        wv.codeclip.html.HtmlDirectory.load(settings);
+        wv.codeclip.generic.GenericDirectory.load(settings);
+
+        protocolLibrary = protocolDirectoryManager.buildLibrary();
+        protocolPasteRouter = new wv.codeclip.protocol.engine.ProtocolPasteRouter(
+                protocolLibrary, protocolUndoManager);
+        if (protocolManagerDialog != null && protocolManagerDialog.isDisplayable()) {
+            protocolManagerDialog.dispose();
+        }
+        protocolManagerDialog = null;
+        titleFrozen = false;
+        refreshTitle();
+        setIcon();
+
+        // Reset also wipes the persistent log. Without this, a session that
+        // cycles reset->load many times piles up styled log lines in the
+        // JTextPane and slowly fragments the heap. Recent Projects history
+        // is app-level state and deliberately survives (it lives in
+        // ~/codeclip.properties, not in the reset surface).
+        logRawLines.clear();
+        if (persistentLogPane != null) {
+            try {
+                persistentLogPane.getStyledDocument().remove(
+                        0, persistentLogPane.getStyledDocument().getLength());
+            } catch (javax.swing.text.BadLocationException ignored) {
+            }
+        }
+    }
+
+    /** Rebuilds the Recent Projects submenu on demand — before the user
+     *  opens the menu, so it reflects the latest set of entries. */
+    private void rebuildRecentProjectsMenu() {
+        if (recentProjectsMenu == null) return;
+        recentProjectsMenu.removeAll();
+        if (recentProjects.isEmpty()) {
+            JMenuItem empty = new JMenuItem("(no recent projects)");
+            empty.setEnabled(false);
+            recentProjectsMenu.add(empty);
+            return;
+        }
+        for (wv.codeclip.io.RecentProjects.Entry entry : recentProjects.getEntries()) {
+            JMenuItem item = new JMenuItem(entry.menuLabel());
+            item.setToolTipText("<html>" + entry.sourceRoot()
+                    + "<br>" + entry.filePaths().size() + " file(s)</html>");
+            item.addActionListener(e -> restoreRecentProject(entry));
+            recentProjectsMenu.add(item);
+        }
+    }
+
+    /**
+     * Reloads a project from Recent Projects: reset in-memory state, then
+     * load the recorded file set. reloadProjectSettings re-attaches as part
+     * of loading, and registerCurrentProjectInRecent bumps this entry to the
+     * top so it stays first next time.
+     */
+    private void restoreRecentProject(wv.codeclip.io.RecentProjects.Entry entry) {
+        if (entry.sourceRoot() == null || entry.sourceRoot().isBlank()) return;
+
+        java.io.File rootDir = new java.io.File(entry.sourceRoot());
+        if (!rootDir.exists() || !rootDir.isDirectory()) {
+            int choice = JOptionPane.showConfirmDialog(this,
+                    "The project folder no longer exists:\n" + entry.sourceRoot()
+                    + "\n\nRemove it from Recent Projects?",
+                    "Project Missing", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (choice == JOptionPane.YES_OPTION) {
+                recentProjects.remove(entry.sourceRoot());
+                settings.saveProperties();
+            }
+            return;
+        }
+
+        List<File> existing = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        for (String path : entry.filePaths()) {
+            File f = new File(path);
+            if (f.exists()) existing.add(f);
+            else missing.add(path);
+        }
+        if (existing.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "None of the files recorded for this project could be found on disk.\n"
+                    + "Source root: " + entry.sourceRoot(),
+                    "Files Missing", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        if (!missing.isEmpty()) {
+            int choice = JOptionPane.showConfirmDialog(this,
+                    missing.size() + " file(s) for this project are missing from disk.\n\n"
+                    + "Continue loading the remaining " + existing.size() + " file(s)?",
+                    "Some Files Missing", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (choice != JOptionPane.YES_OPTION) return;
+        }
+
+        resetProjectState();
+        addFilesBatched(existing);
+    }
+
+    /**
+     * Registers the currently attached project in Recent Projects. Only files
+     * under the source root are recorded, so a session that briefly mixed
+     * files from two folders doesn't pollute one project's entry with the
+     * other's files.
+     */
+
+/**
+     * Registers the currently loaded files in Recent Projects. Records only
+     * files under the attached source root when available, so a mixed
+     * session doesn't pollute one project's entry with another's files.
+     * Falls back to the loaded files' common parent dir when no source root
+     * was attached — otherwise Recent Projects would silently stay empty
+     * for projects that detectSourceRoot can't resolve (default-package
+     * files, or files dropped while in a mismatched mode).
+     */
+    private void registerCurrentProjectInRecent() {
+        if (repo.getClassCodeMap().isEmpty()) return;
+
+        String rootPath = projectSourceRoot != null
+                ? projectSourceRoot.getAbsolutePath()
+                : null;
+
+        List<String> paths = new ArrayList<>();
+        if (rootPath != null) {
+            String prefix = rootPath + File.separator;
+            for (String path : repo.getClassCodeMap().keySet()) {
+                if (path.equals(rootPath) || path.startsWith(prefix)) {
+                    paths.add(path);
+                }
+            }
+        }
+        if (paths.isEmpty()) {
+            for (String path : repo.getClassCodeMap().keySet()) {
+                paths.add(path);
+            }
+            rootPath = commonParentDirOf(paths);
+            if (rootPath == null) return;
+        }
+        recentProjects.add(rootPath, projectNameManager.getProjectName(), paths);
+        recentProjects.save(settings);
+        settings.saveProperties();
+    }
+
+    private String commonParentDirOf(List<String> filePaths) {
+        if (filePaths.isEmpty()) return null;
+        java.io.File common = new java.io.File(filePaths.get(0)).getParentFile();
+        if (common == null) return null;
+        for (String p : filePaths) {
+            java.io.File parent = new java.io.File(p).getParentFile();
+            if (parent == null) return null;
+            while (common != null
+                    && !parent.getAbsolutePath().equals(common.getAbsolutePath())
+                    && !parent.getAbsolutePath().startsWith(common.getAbsolutePath() + File.separator)) {
+                common = common.getParentFile();
+            }
+            if (common == null) return null;
+        }
+        return common.getAbsolutePath();
     }
 
 private void openCheckpointDialog() {
@@ -1948,7 +2339,7 @@ private void openCheckpointDialog() {
                 if (pendingIsCheckpoint) {
                     addCheckpointVersionEvent();
                 }
-            });
+            }, () -> projectSettings);
         } else {
             checkpointDialog.setRefreshCallback(() -> {
                 refreshText();
@@ -2095,8 +2486,10 @@ private void updateDirectoryButton() {
             int result = chooser.showOpenDialog(dialog);
             if (result == JFileChooser.APPROVE_OPTION) {
                 java.io.File chosen = chooser.getSelectedFile();
-                wv.codeclip.godot.GodotDirectory.set(chosen);
+                setCurrentModeDirectory(chosen); // routes through the flag-clearing setter
                 dirDisplay.setText(chosen.getAbsolutePath());
+                projectSourceRoot = null;
+                reloadProjectSettings();
             }
         });
 
@@ -2155,8 +2548,10 @@ private void openHtmlDirectoryDialog() {
             int result = chooser.showOpenDialog(dialog);
             if (result == JFileChooser.APPROVE_OPTION) {
                 java.io.File chosen = chooser.getSelectedFile();
-                wv.codeclip.html.HtmlDirectory.set(chosen);
+                setCurrentModeDirectory(chosen);
                 dirDisplay.setText(chosen.getAbsolutePath());
+                projectSourceRoot = null;
+                reloadProjectSettings();
             }
         });
 
@@ -2215,8 +2610,10 @@ private void openGenericDirectoryDialog() {
             int result = chooser.showOpenDialog(dialog);
             if (result == JFileChooser.APPROVE_OPTION) {
                 java.io.File chosen = chooser.getSelectedFile();
-                wv.codeclip.generic.GenericDirectory.set(chosen);
+                setCurrentModeDirectory(chosen);
                 dirDisplay.setText(chosen.getAbsolutePath());
+                projectSourceRoot = null;
+                reloadProjectSettings();
             }
         });
 
@@ -2226,33 +2623,43 @@ private void openGenericDirectoryDialog() {
         dialog.setVisible(true);
     }
 
-/**
-     * Sets the Godot directory from loaded files if not already set. Prefers
-     * the most common parent directory among .gd files. hint: files from the
-     * current DnD batch (may be null to scan repo).
+    /**
+     * Auto-sets the mode-specific main directory (Godot / HTML / Generic)
+     * from the first loaded batch, if not already set. Java mode is excluded
+     * — it uses source-root / main-class detection instead. Once set (by this
+     * method or by the user), the directory is never overridden automatically.
+     *
+     * hint: files from the current DnD batch (may be null to scan the repo).
      */
-    private void autoSetGodotDirectoryFromRepo(List<File> hint) {
-        if (wv.codeclip.godot.GodotDirectory.isSet()) {
+
+private void autoSetModeDirectoryFromRepo(List<File> hint) {
+        AppMode mode = wv.codeclip.modecontext.ModeContext.getMode();
+        if (mode == AppMode.JAVA) {
+            return; // Java uses main-class / source-root detection, not batch-based auto-set
+        }
+
+        boolean unset = getCurrentModeDirectory() == null;
+        // Respect an existing directory UNLESS Reset was pressed and the flag
+        // is still waiting to be satisfied by the next batch.
+        if (!unset && !pendingDirectoryAutoSet) {
             return;
         }
 
-        List<File> candidates = new ArrayList<>();
+        List<File> source = new ArrayList<>();
         if (hint != null) {
-            for (File f : hint) {
-                if (f.getName().endsWith(".gd")) {
-                    candidates.add(f);
-                }
+            source.addAll(hint);
+        } else {
+            source.addAll(repo.getClassFileMap().values());
+        }
+
+        List<File> candidates = new ArrayList<>();
+        for (File f : source) {
+            if (f != null && mode.accepts(f.getName())) {
+                candidates.add(f);
             }
         }
         if (candidates.isEmpty()) {
-            for (File f : repo.getClassFileMap().values()) {
-                if (f != null && f.getName().endsWith(".gd")) {
-                    candidates.add(f);
-                }
-            }
-        }
-        if (candidates.isEmpty()) {
-            return;
+            return; // leave flag set — next batch with real files retries
         }
 
         java.util.LinkedHashMap<File, Long> freq = new java.util.LinkedHashMap<>();
@@ -2273,12 +2680,46 @@ private void openGenericDirectoryDialog() {
         }
 
         if (best != null) {
-            wv.codeclip.godot.GodotDirectory.set(best);
-            appendTempLog("Godot directory auto-set: " + best.getAbsolutePath());
+            setCurrentModeDirectory(best); // also clears pendingDirectoryAutoSet
+            appendTempLog(modeDirectoryLabel(mode) + " directory auto-set: "
+                    + best.getAbsolutePath());
         }
     }
 
-    private void appendToPersistentLog(String message) {
+private File getCurrentModeDirectory() {
+        return switch (wv.codeclip.modecontext.ModeContext.getMode()) {
+            case GODOT -> wv.codeclip.godot.GodotDirectory.isSet()
+                    ? wv.codeclip.godot.GodotDirectory.get() : null;
+            case HTML -> wv.codeclip.html.HtmlDirectory.isSet()
+                    ? wv.codeclip.html.HtmlDirectory.get() : null;
+            case GENERIC -> wv.codeclip.generic.GenericDirectory.isSet()
+                    ? wv.codeclip.generic.GenericDirectory.get() : null;
+            default -> null;
+        };
+    }
+
+private void setCurrentModeDirectory(File dir) {
+        switch (wv.codeclip.modecontext.ModeContext.getMode()) {
+            case GODOT -> wv.codeclip.godot.GodotDirectory.set(dir);
+            case HTML -> wv.codeclip.html.HtmlDirectory.set(dir);
+            case GENERIC -> wv.codeclip.generic.GenericDirectory.set(dir);
+            default -> { }
+        }
+        // Any set — auto or manual — satisfies the post-Reset "fresh dirs"
+        // intent, so subsequent batches must not override this choice.
+        pendingDirectoryAutoSet = false;
+    }
+
+private static String modeDirectoryLabel(AppMode mode) {
+        return switch (mode) {
+            case GODOT -> "Godot";
+            case HTML -> "HTML";
+            case GENERIC -> "Generic";
+            default -> mode.name();
+        };
+    }
+
+private void appendToPersistentLog(String message) {
         if (persistentLogPane == null) {
             return;
         }
@@ -2635,10 +3076,14 @@ private Color resolveLogLineColor(String line) {
     private record RawLogLine(String text, boolean isSeparator) {
 
     }
+    private static final int MAX_RAW_LOG_LINES = 10_000;
     private final java.util.List<RawLogLine> logRawLines = new java.util.ArrayList<>();
 
     private void addRawLogLine(String text, boolean isSep) {
         logRawLines.add(0, new RawLogLine(text, isSep));
+        while (logRawLines.size() > MAX_RAW_LOG_LINES) {
+            logRawLines.remove(logRawLines.size() - 1);
+        }
     }
 
 private void showVersionDetail(VersionEvent ev, boolean active) {
@@ -2987,13 +3432,12 @@ return null;
      */
 
 private void openProtocolManagerDialog() {
-        wv.codeclip.protocol.ui.ProtocolManagerDialog dialog =
-                new wv.codeclip.protocol.ui.ProtocolManagerDialog(this,
-                        protocolDirectoryManager,
-                        protocolUndoManager,
-                        this::logProtocolLine,
-                        this::onProtocolLibraryChanged);
-        dialog.setVisible(true);
+        protocolManagerDialog = new wv.codeclip.protocol.ui.ProtocolManagerDialog(this,
+                protocolDirectoryManager,
+                protocolUndoManager,
+                this::logProtocolLine,
+                this::onProtocolLibraryChanged);
+        protocolManagerDialog.setVisible(true);
     }
 
 /**
@@ -3020,9 +3464,22 @@ private void openProtocolManagerDialog() {
      * other content (e.g. a @@PATCH block) sitting alongside it in the same
      * clipboard payload. Safe to call unconditionally before every paste.
      */
-    private void handleProtocolPasteIfPresent() {
+
+private void handleProtocolPasteIfPresent() {
         String text = new ClipboardService().read();
         if (!wv.codeclip.protocol.engine.ProtocolPasteRouter.containsProtocolBlock(text)) {
+            return;
+        }
+        // No project attached — protocolsBaseDir is a placeholder (user.dir)
+        // and must not be written into. Refuse rather than silently route to
+        // the wrong place. The rest of the clipboard still flows through
+        // normal paste handling untouched.
+        if (!protocolDirectoryManager.isAttached()) {
+            JOptionPane.showMessageDialog(this,
+                "Protocol commands found in clipboard, but no project is loaded yet.\n"
+                + "Load a project first — protocols are per-project.\n\n"
+                + "Any non-protocol content in the clipboard will still be applied normally.",
+                "No Project Loaded", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
@@ -3125,5 +3582,37 @@ private void openProtocolManagerDialog() {
         refreshVersionPanel();
         flashNewestVersionRow();
     }
+
+private wv.codeclip.codemap.CodeMapBuilder.Scope promptCodemapScope() {
+    // Default selection reflects the last-used scope, so repeat use of the
+    // same choice is a single Enter keypress instead of a re-decision.
+    wv.codeclip.codemap.CodeMapBuilder.Scope last =
+            wv.codeclip.codemap.CodeMapBuilder.Scope.ENABLED;
+    try {
+        last = wv.codeclip.codemap.CodeMapBuilder.Scope.valueOf(settings.loadCodemapScope());
+    } catch (IllegalArgumentException ignored) {
+        // Stored value missing or corrupted — fall back to ENABLED.
+    }
+    int defaultIdx = (last == wv.codeclip.codemap.CodeMapBuilder.Scope.ALL) ? 1 : 0;
+    Object[] options = {"Enabled Only", "All Files", "Cancel"};
+    int choice = JOptionPane.showOptionDialog(
+            this,
+            "Which files should the codemap include?\n\n"
+            + "  • Enabled Only\n"
+            + "  • All Files",
+            "Copy Codemap",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+            null,
+            options,
+            options[defaultIdx]);
+    if (choice == 0) {
+        return wv.codeclip.codemap.CodeMapBuilder.Scope.ENABLED;
+    }
+    if (choice == 1) {
+        return wv.codeclip.codemap.CodeMapBuilder.Scope.ALL;
+    }
+    return null; // Cancel / dialog dismissed
+}
 
 }

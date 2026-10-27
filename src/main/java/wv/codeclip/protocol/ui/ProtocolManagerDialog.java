@@ -85,6 +85,26 @@ private JPanel buildTopBar() {
         changeFolderBtn.setToolTipText("Choose where this project's .prtcl files live");
         changeFolderBtn.addActionListener(e -> changeProtocolsFolder());
         leftTop.add(changeFolderBtn);
+
+        JButton openFolderBtn = new JButton("Open Folder");
+        openFolderBtn.setToolTipText("Open the protocols folder in the system file browser");
+        openFolderBtn.addActionListener(e -> {
+            try {
+                java.io.File dir = library.getProtocolsDir().toFile();
+                if (!dir.exists()) {
+                    statusBar.setText("Protocols folder does not exist yet — nothing to open.");
+                    return;
+                }
+                if (java.awt.Desktop.isDesktopSupported()) {
+                    java.awt.Desktop.getDesktop().open(dir);
+                } else {
+                    statusBar.setText("Desktop API not supported on this system.");
+                }
+            } catch (Exception ex) {
+                statusBar.setText("Could not open folder: " + ex.getMessage());
+            }
+        });
+        leftTop.add(openFolderBtn);
         topBar.add(leftTop, BorderLayout.WEST);
 
         JPanel rightTop = new JPanel(new FlowLayout(FlowLayout.RIGHT));
@@ -131,12 +151,17 @@ private JPanel buildTopBar() {
     }
 
 private void refreshFolderLabel() {
+        if (!directoryManager.isAttached()) {
+            folderLabel.setText("Protocols folder: (no project loaded)");
+            folderLabel.setToolTipText(null);
+            return;
+        }
         String full = library.getProtocolsDir().toAbsolutePath().toString();
         folderLabel.setText("Protocols folder: " + shortenPath(full));
         folderLabel.setToolTipText(full);
     }
 
-    /**
+/**
      * Opens the folder chooser via ProtocolDirectoryManager, and if a new
      * folder was picked, rebuilds this dialog's ProtocolLibrary and every
      * panel that holds a reference to the old one, so nothing keeps writing
@@ -182,6 +207,54 @@ private void refreshFolderLabel() {
         // the dialog moves to the new folder but the rest of the app silently
         // keeps using the old one for the rest of the session.
         onLibraryChanged.accept(library);
+    }
+
+/**
+     * Called by CodeClipFrame when the active project (and therefore its
+     * protocols folder) changes underneath a still-open dialog. Without this,
+     * the dialog keeps reading/writing the previous project's protocols
+     * folder for the rest of the session.
+     *
+     * No-ops when the effective protocols dir is unchanged.
+     */
+    public void rebind(ProtocolLibrary newLibrary) {
+        if (newLibrary == null) return;
+        java.io.File oldDir = this.library.getProtocolsDir().toFile();
+        java.io.File newDir = newLibrary.getProtocolsDir().toFile();
+        if (oldDir.equals(newDir)) return;
+
+        if (editorPanel.hasUnsavedChanges()) {
+            int choice = JOptionPane.showConfirmDialog(this,
+                "The active project changed while you have unsaved edits in the protocol editor.\n\n"
+                + "Discard those edits and switch to the new project's protocols folder?",
+                "Unsaved Changes", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (choice != JOptionPane.YES_OPTION) {
+                statusBar.setText("Project changed — editor still points at the previous project.");
+                return;
+            }
+        }
+
+        this.library = newLibrary;
+        protocolUndoManager.clear();
+
+        listPanel = new ProtocolListPanel(library);
+        editorPanel = new StructuredProtocolEditorPanel(library);
+        listPanel.setOnFileSelected(editorPanel::showFile);
+        editorPanel.setOnSavedCallback(listPanel::refresh);
+        editorPanel.setOnRequestNextFile(listPanel::selectNextFile);
+
+        mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, listPanel, editorPanel);
+        mainSplit.setDividerLocation(300);
+        centerHolder.removeAll();
+        centerHolder.add(mainSplit, BorderLayout.CENTER);
+        centerHolder.revalidate();
+        centerHolder.repaint();
+
+        masterLockIndicator.setLocked(library.isMasterLocked());
+        refreshFolderLabel();
+        statusBar.setText("Switched to project protocols folder: " + library.getProtocolsDir());
+        protocolLogCallback.accept("Protocol Manager rebound to: " + library.getProtocolsDir());
+        syncProtocolUndoRedoButtons();
     }
 
 private void syncProtocolUndoRedoButtons() {

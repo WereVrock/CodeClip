@@ -3,7 +3,8 @@ package wv.codeclip;
 public enum AppMode {
 
     JAVA(
-        new String[]{".java"},
+        new String[]{".java", ".kt", ".xml", ".properties",
+                     ".gradle", ".kts", ".json", ".yml", ".yaml", ".toml"},
         wv.codeclip.config.AiInstructions.TEXT
     ),
     GODOT(

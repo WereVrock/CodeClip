@@ -21,7 +21,23 @@ public final class CodeMapBuilder {
         );
     }
 
+    /**
+     * Controls which loaded files are included in the codemap output.
+     * ENABLED = current behaviour (skip disabled classes).
+     * ALL     = include every loaded file, whether disabled or not.
+     *
+     * The scope is a user-facing choice (Copy Codemap dialog) and is
+     * deliberately independent of AppMode — the analyzers in this class
+     * already handle Java/JS/CSS/HTML/Generic by file extension.
+     */
+    public enum Scope { ENABLED, ALL }
+
     public String build(Set<String> disabledPaths) {
+        return build(disabledPaths, Scope.ENABLED);
+    }
+
+    public String build(Set<String> disabledPaths, Scope scope) {
+        boolean includeAll = (scope == Scope.ALL);
         StringBuilder sb = new StringBuilder();
         sb.append("Codemap\n");
         sb.append("=======\n");
@@ -30,7 +46,7 @@ public final class CodeMapBuilder {
         List<Map.Entry<String, File>> included = new ArrayList<>();
         for (Map.Entry<String, File> entry : repo.getClassFileMap().entrySet()) {
             String path = entry.getKey();
-            if (disabledPaths.contains(path)) continue;
+            if (!includeAll && disabledPaths.contains(path)) continue;
             if (entry.getValue() == null) continue;
             included.add(entry);
         }

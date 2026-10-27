@@ -1,0 +1,6 @@
+!id project_specific
+properties hold project specific information. 
+
+!id codeclip_properties
+codeclip properties should hold codeclip' own project specific data. codeclip is used for developing codeclip itself. it is only used for that. codeclip shows its build info for user to check which version of codeclip it is running but other than that it shouldnt refer to codeclip's own properties file when developing another project
+

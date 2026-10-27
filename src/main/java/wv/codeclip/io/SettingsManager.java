@@ -213,4 +213,35 @@ public void saveIconTintSeed(long seed) {
     properties.setProperty("iconTintSeed", Long.toString(seed));
 }
 
+public String loadCodemapScope() {
+    return properties.getProperty("codemap.scope", "ENABLED");
+}
+
+    public void saveCodemapScope(String scope) {
+        properties.setProperty("codemap.scope", scope == null ? "ENABLED" : scope);
+    }
+
+// ---------------------------------------------------------------
+    // Raw access — used by RecentProjects, which manages its own key
+    // namespace and serialization rather than one method-per-field.
+    // ---------------------------------------------------------------
+
+    public String getRawProperty(String key, String defaultValue) {
+        return properties.getProperty(key, defaultValue);
+    }
+
+    public void setRawProperty(String key, String value) {
+        properties.setProperty(key, value);
+    }
+
+    public void clearRawProperties(String prefix) {
+        java.util.List<String> toRemove = new java.util.ArrayList<>();
+        for (Object k : properties.keySet()) {
+            if (k instanceof String s && s.startsWith(prefix)) {
+                toRemove.add(s);
+            }
+        }
+        for (String k : toRemove) properties.remove(k);
+    }
+
 }

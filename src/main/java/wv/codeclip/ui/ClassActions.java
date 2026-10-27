@@ -21,7 +21,6 @@ public class ClassActions {
     private static final String NOTES_END_MARK = "\n// === END NOTES ===";
 
     private final JFrame parent;
-    private final JTextArea classTextArea;
     private final JTextComponent notesComponent;
     private final JCheckBox showMissingFileMessages;
     private final ClassRepository repo;
@@ -29,31 +28,42 @@ public class ClassActions {
     // Supplier so ClassActions always reads the current value from CodeClipFrame
     private final Supplier<Boolean> includeInstructions;
 
-    public ClassActions(
+public ClassActions(
             JFrame parent,
-            JTextArea classTextArea,
             JTextComponent notesComponent,
             JCheckBox showMissingFileMessages,
             ClassRepository repo,
             Supplier<Boolean> includeInstructions
     ) {
         this.parent = parent;
-        this.classTextArea = classTextArea;
         this.notesComponent = notesComponent;
         this.showMissingFileMessages = showMissingFileMessages;
         this.repo = repo;
         this.includeInstructions = includeInstructions;
     }
 
-    public void resetAll(JPanel classPanel) {
+public void resetAll(JPanel classPanel) {
         repo.clear();
         classPanel.removeAll();
-        classTextArea.setText("");
         classPanel.revalidate();
         classPanel.repaint();
     }
 
-    /**
+private String buildAllContent() {
+        StringBuilder sb = new StringBuilder();
+        String prefix = ModeContext.getCommentPrefix();
+        repo.getClassCodeMap().forEach((path, code) -> {
+            if (!repo.getDisabledClasses().contains(path)) {
+                File file = repo.getClassFileMap().get(path);
+                String name = (file != null) ? file.getName() : path;
+                sb.append(prefix).append(" ===== ").append(name).append(" =====\n");
+                sb.append(code).append("\n\n");
+            }
+        });
+        return sb.toString();
+    }
+
+/**
      * Copies code + (optionally) instructions + notes to clipboard.
      * Order: code → instructions (if ticked) → notes
      */
@@ -72,9 +82,10 @@ public class ClassActions {
      * use the two-arg overload) to omit it entirely.
      * Order: code → instructions (if ticked) → notes → protocol appendix (if present)
      */
-    public void copyAll(Runnable clearLogsCallback, String cleanNotes, String protocolAppendix) {
+
+public void copyAll(Runnable clearLogsCallback, String cleanNotes, String protocolAppendix) {
         StringBuilder sb = new StringBuilder();
-        sb.append(classTextArea.getText());
+        sb.append(buildAllContent());
 
         if (Boolean.TRUE.equals(includeInstructions.get())) {
             sb.append("\n\n").append(ModeContext.getMode().getInstructions());
@@ -98,10 +109,10 @@ public class ClassActions {
 public void copyCodeOnly() {
         Toolkit.getDefaultToolkit()
                 .getSystemClipboard()
-                .setContents(new StringSelection(classTextArea.getText()), null);
+                .setContents(new StringSelection(buildAllContent()), null);
     }
 
-    public void copyArchitecture() {
+public void copyArchitecture() {
         Object[] options = {"Copy Enabled", "Copy Added", "Copy All", "Cancel"};
         int choice = JOptionPane.showOptionDialog(
                 parent,

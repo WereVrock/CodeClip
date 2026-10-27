@@ -16,18 +16,21 @@ public final class ProtocolLibrary {
     private final Path protocolsDir;
     private final ProtocolFileParser parser = new ProtocolFileParser();
 
-    public ProtocolLibrary(Path baseDir) {
-        this.protocolsDir = baseDir.resolve("protocols");
-        try {
-            Files.createDirectories(protocolsDir);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Could not create protocols directory: " + protocolsDir, e);
-        }
+    public ProtocolLibrary(Path protocolsDir) {
+        // protocolsDir IS the folder containing .prtcl files — not a base that
+        // gets "protocols" appended. The old resolve("protocols") is what
+        // created the ".../protocols/protocols" nesting when the user picked
+        // a folder that was already a protocols folder. No disk side effect
+        // on construction either: folder is created lazily on first write.
+        this.protocolsDir = protocolsDir;
     }
 
     public Path getProtocolsDir() { return protocolsDir; }
 
     public List<String> listFileNames() {
+        if (!Files.isDirectory(protocolsDir)) {
+            return List.of();
+        }
         try (Stream<Path> stream = Files.list(protocolsDir)) {
             return stream
                 .filter(p -> p.getFileName().toString().endsWith(EXTENSION))
@@ -53,10 +56,6 @@ public final class ProtocolLibrary {
         }
     }
 
-    /**
-     * Same as load(), but never throws. If the file is missing, unreadable, or
-     * fails to parse, returns empty and puts a message in the error holder.
-     */
     public ProtocolFile loadSafely(String fileName, StringBuilder errorHolder) {
         try {
             return load(fileName);
@@ -74,6 +73,7 @@ public final class ProtocolLibrary {
     public void save(ProtocolFile file) {
         Path path = resolvePath(file.getFileName());
         try {
+            Files.createDirectories(protocolsDir);
             Files.writeString(path, file.render(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new UncheckedIOException("Could not write protocol file: " + path, e);
@@ -106,6 +106,7 @@ public final class ProtocolLibrary {
         Path lockPath = protocolsDir.resolve(MASTER_LOCK_FILE);
         try {
             if (locked) {
+                Files.createDirectories(protocolsDir);
                 Files.writeString(lockPath, "locked", StandardCharsets.UTF_8);
             } else {
                 Files.deleteIfExists(lockPath);

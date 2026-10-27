@@ -5,6 +5,9 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.Insets;
+import java.util.function.Supplier;
+import wv.codeclip.io.ProjectSettings;
 import wv.codeclip.model.ClassRepository;
 
 import javax.swing.*;
@@ -35,6 +38,9 @@ public class CheckpointDialog extends JDialog {
     private Runnable onCheckpointSetCallback;
 
     private final ClassRepository repo;
+    private final Supplier<ProjectSettings> projectSettingsSupplier;
+    private final JCheckBox permanentCheckpointCheck = new JCheckBox("Permanent Checkpoint");
+    private boolean suppressCheckboxEvents = false;
 
     private final JLabel statusLabel    = new JLabel();
     private final JLabel detailLabel    = new JLabel();
@@ -49,18 +55,20 @@ public class CheckpointDialog extends JDialog {
     /** Tracks which paths are currently restored (diverge from checkpoint). */
     private final Map<String, String> pendingRestores = new HashMap<>();
 
-    public CheckpointDialog(JFrame parent, ClassRepository repo, Runnable refreshCallback) {
-        super(parent, "Checkpoint Manager", false);
-        this.repo = repo;
-        this.refreshCallback = refreshCallback;
+public CheckpointDialog(JFrame parent, ClassRepository repo, Runnable refreshCallback,
+                        Supplier<ProjectSettings> projectSettingsSupplier) {
+    super(parent, "Checkpoint Manager", false);
+    this.repo = repo;
+    this.refreshCallback = refreshCallback;
+    this.projectSettingsSupplier = projectSettingsSupplier;
 
-        buildUI();
-        pack();
-        setMinimumSize(new Dimension(480, 260));
-        setLocationRelativeTo(parent);
-    }
+    buildUI();
+    pack();
+    setMinimumSize(new Dimension(480, 260));
+    setLocationRelativeTo(parent);
+}
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // UI
     // ------------------------------------------------------------------
 
@@ -109,12 +117,40 @@ public class CheckpointDialog extends JDialog {
         JButton closeBtn = new JButton("Close");
         closeBtn.addActionListener(e -> setVisible(false));
 
+        JPanel backupRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        permanentCheckpointCheck.addActionListener(e -> {
+            if (suppressCheckboxEvents) return;
+            ProjectSettings ps = projectSettingsSupplier.get();
+            if (ps != null) {
+                ps.savePermanentCheckpointEnabled(permanentCheckpointCheck.isSelected());
+            }
+        });
+        backupRow.add(permanentCheckpointCheck);
+
+        JButton backupDirBtn = new JButton("...");
+        backupDirBtn.setToolTipText("Configure backup directory");
+        backupDirBtn.setMargin(new Insets(0, 4, 0, 4));
+        backupDirBtn.setFocusable(false);
+        backupDirBtn.addActionListener(e -> {
+            String chosen = promptForBackupDirectory();
+            if (chosen != null) {
+                JOptionPane.showMessageDialog(this,
+                        "Backup directory set to:\n" + chosen,
+                        "Backup Directory", JOptionPane.INFORMATION_MESSAGE);
+            }
+        });
+        backupRow.add(backupDirBtn);
+
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         btnPanel.add(restoreBtn);
         btnPanel.add(commitBtn);
         btnPanel.add(setCheckBtn);
         btnPanel.add(closeBtn);
-        add(btnPanel, BorderLayout.SOUTH);
+
+        JPanel southPanel = new JPanel(new BorderLayout(0, 6));
+        southPanel.add(backupRow, BorderLayout.NORTH);
+        southPanel.add(btnPanel, BorderLayout.SOUTH);
+        add(southPanel, BorderLayout.SOUTH);
     }
 
     // ------------------------------------------------------------------
@@ -131,6 +167,8 @@ public void setRefreshCallback(Runnable refreshCallback) {
 
 /** Called by CodeClipFrame whenever something may have changed. */
     public void refresh() {
+        syncPermanentCheckpointUI();
+
         boolean hasPending = !pendingRestores.isEmpty();
         boolean hasCheckpointDiff = repo.hasPendingRestores();
 
@@ -352,6 +390,8 @@ private void onSetCheckpoint() {
         repo.setAllCheckpoints();
         pendingRestores.clear();
 
+        String backupInfo = permanentCheckpointCheck.isSelected() ? backupCheckpointFiles() : null;
+
         boolean hadChanges = !updated.isEmpty();
         if (onCheckpointSetCallback != null) {
             onCheckpointSetCallback.run();
@@ -367,8 +407,127 @@ private void onSetCheckpoint() {
                .append(updated.size() == 1 ? "" : "s").append(":\n\n");
             for (String name : updated) msg.append("  • ").append(name).append("\n");
         }
+        if (backupInfo != null) {
+            msg.append("\n\n").append(backupInfo);
+        }
 
         JOptionPane.showMessageDialog(this, msg.toString(), "Checkpoint Set", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+// ------------------------------------------------------------------
+    // Permanent checkpoint backup
+    // ------------------------------------------------------------------
+
+    /** Backs up every checkpointed file to the configured backup directory. Returns a user-facing summary, or null if nothing to report. */
+    private String backupCheckpointFiles() {
+        if (repo.getCheckpointCodeMap().isEmpty()) return null;
+
+        String backupDir = resolveBackupDirectory();
+        if (backupDir == null) return null; // user cancelled
+
+        File dir = new File(backupDir);
+        if (!dir.exists() && !dir.mkdirs()) {
+            JOptionPane.showMessageDialog(this,
+                    "Could not create backup directory:\n" + backupDir,
+                    "Backup Failed", JOptionPane.ERROR_MESSAGE);
+            return null;
+        }
+
+        List<String> failures = new ArrayList<>();
+        int count = 0;
+        for (Map.Entry<String, String> entry : repo.getCheckpointCodeMap().entrySet()) {
+            String path = entry.getKey();
+            String content = entry.getValue();
+            if (content == null) continue;
+
+            File source = repo.getClassFileMap().get(path);
+            String name = source != null ? source.getName() : new File(path).getName();
+            File dest = new File(dir, name);
+            try {
+                Files.writeString(dest.toPath(), content);
+                count++;
+            } catch (IOException e) {
+                failures.add(name + ": " + e.getMessage());
+            }
+        }
+
+        if (count == 0 && failures.isEmpty()) return null;
+        if (!failures.isEmpty()) {
+            return "Backed up " + count + " file(s) to:\n" + backupDir
+                    + "\n\nBut some failed:\n" + String.join("\n", failures);
+        }
+        return "Backed up " + count + " file(s) to:\n" + backupDir;
+    }
+
+    /** Returns a usable backup directory path, creating it if missing. Prompts the user once if none is configured. Returns null on cancel. */
+
+/** Returns a usable backup directory path (per project), creating it if missing. Prompts the user once if none is configured. Returns null on cancel or when no project is loaded. */
+    private String resolveBackupDirectory() {
+        ProjectSettings ps = projectSettingsSupplier.get();
+        if (ps == null) return null;
+
+        String saved = ps.loadBackupDirectory();
+        if (saved != null && !saved.isBlank()) {
+            File dir = new File(saved);
+            if (dir.exists() || dir.mkdirs()) return saved;
+            ps.saveBackupDirectory(""); // stale — clear so we prompt again
+        }
+        return promptForBackupDirectory();
+    }
+
+/** Opens a directory chooser starting at the current backup dir (or the first loaded file's folder). Saves the chosen dir. */
+
+/** Opens a directory chooser starting at the current backup dir (or the first loaded file's folder). Saves the chosen dir to the current project. Returns null on cancel or when no project is loaded. */
+    private String promptForBackupDirectory() {
+        ProjectSettings ps = projectSettingsSupplier.get();
+        if (ps == null) return null;
+
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setDialogTitle("Select Backup Directory for This Project's Checkpoints");
+
+        String current = ps.loadBackupDirectory();
+        if (current != null && !current.isBlank()) {
+            File cur = new File(current);
+            if (cur.exists()) chooser.setCurrentDirectory(cur);
+        } else {
+            File startDir = findFirstFileParent();
+            if (startDir != null) chooser.setCurrentDirectory(startDir);
+        }
+
+        int result = chooser.showOpenDialog(this);
+        if (result != JFileChooser.APPROVE_OPTION) return null;
+
+        String chosen = chooser.getSelectedFile().getAbsolutePath();
+        ps.saveBackupDirectory(chosen);
+        return chosen;
+    }
+
+/** First loaded file's parent directory — used as the initial folder for the backup-dir picker. */
+    private File findFirstFileParent() {
+        for (File f : repo.getClassFileMap().values()) {
+            if (f != null && f.getParentFile() != null && f.getParentFile().exists()) {
+                return f.getParentFile();
+            }
+        }
+        return null;
+    }
+
+/** Syncs the checkbox state and enabled-ness with the current project's settings. */
+    private void syncPermanentCheckpointUI() {
+        ProjectSettings ps = projectSettingsSupplier.get();
+        suppressCheckboxEvents = true;
+        if (ps == null) {
+            permanentCheckpointCheck.setSelected(false);
+            permanentCheckpointCheck.setEnabled(false);
+            permanentCheckpointCheck.setToolTipText("Load a project to enable permanent checkpoints");
+        } else {
+            permanentCheckpointCheck.setEnabled(true);
+            permanentCheckpointCheck.setSelected(ps.loadPermanentCheckpointEnabled());
+            permanentCheckpointCheck.setToolTipText(
+                    "When enabled, checkpointed files are also saved to this project's backup directory");
+        }
+        suppressCheckboxEvents = false;
     }
 
 }

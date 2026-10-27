@@ -1,38 +1,85 @@
-// ===== ProjectNameManager.java =====
 package wv.codeclip.mainFrame;
 
-import wv.codeclip.io.SettingsManager;
+import wv.codeclip.io.ProjectSettings;
 
 import javax.swing.*;
 import java.awt.*;
 
 /**
- * Owns the user-facing "project name" — a short label the person assigns to
- * distinguish this CodeClip instance/workspace from others. Persisted via
- * SettingsManager so it survives restarts. Also owns the icon tint seed,
- * since re-rolling the tint is exposed alongside renaming in the same menu.
+ * Owns the project name and icon tint seed.
+ *
+ * Model:
+ *   - Before any project is loaded: random tint for this session, nothing
+ *     written anywhere.
+ *   - Once a project is attached: reads from / writes to that project's
+ *     buildinfo.properties only. No global ~/codeclip.properties involvement.
+ *   - Renaming before any project loads is stashed (pending) and flushed to
+ *     the first project attached.
  */
 public final class ProjectNameManager {
 
-    private static final String DEFAULT_NAME = "";
+    private ProjectSettings projectSettings;
 
-    private final SettingsManager settings;
-    private String projectName;
-    private long iconTintSeed;
+    private String projectName = "";
+    private long iconTintSeed = System.nanoTime();
 
-    public ProjectNameManager(SettingsManager settings) {
-        this.settings = settings;
-        this.projectName = settings.loadProjectName();
-        this.iconTintSeed = settings.loadIconTintSeed();
-        if (this.iconTintSeed == 0L) {
-            // First run: seed deterministically from whatever name we have
-            // (possibly empty), so the tint is stable until re-rolled.
-            this.iconTintSeed = seedFromString(this.projectName);
-            settings.saveIconTintSeed(this.iconTintSeed);
+    private String pendingProjectName = null;
+    private Long pendingIconTint = null;
+
+    public ProjectNameManager() {}
+
+    /**
+     * Rebinds to a specific project's settings file. Called by CodeClipFrame
+     * once the project's source root is known.
+     */
+    public void attachProjectSettings(ProjectSettings ps) {
+        if (ps == null) {
+            return;
+        }
+        this.projectSettings = ps;
+
+        if (pendingProjectName != null) {
+            ps.saveProjectName(pendingProjectName);
+            pendingProjectName = null;
+        }
+        if (pendingIconTint != null) {
+            ps.saveIconTintSeed(pendingIconTint);
+            pendingIconTint = null;
+        }
+
+        String storedName = ps.loadProjectName();
+        this.projectName = (storedName == null) ? "" : storedName;
+
+        long storedSeed = ps.loadIconTintSeed();
+        if (storedSeed != 0L) {
+            this.iconTintSeed = storedSeed;
+        } else if (!projectName.isBlank()) {
+            this.iconTintSeed = seedFromString(projectName);
+            ps.saveIconTintSeed(iconTintSeed);
+        } else {
+            // Unnamed with no saved seed: fresh random for this session,
+            // not persisted. An explicit reroll or rename will save a seed.
+            this.iconTintSeed = System.nanoTime() ^ (long) (Math.random() * Long.MAX_VALUE);
         }
     }
 
-    public boolean hasProjectName() {
+/**
+     * Clears in-memory project state and detaches from any project file.
+     * Used by Reset, which is in-memory-only (files, versions, undo all
+     * cleared; the project's buildinfo.properties on disk is left untouched
+     * — re-loading that project later re-reads it as usual). Name becomes
+     * empty so the title stops showing it; tint gets a fresh random so the
+     * icon visibly changes.
+     */
+    public void resetToUnattached() {
+        this.projectSettings = null;
+        this.pendingProjectName = null;
+        this.pendingIconTint = null;
+        this.projectName = "";
+        this.iconTintSeed = System.nanoTime() ^ (long) (Math.random() * Long.MAX_VALUE);
+    }
+
+public boolean hasProjectName() {
         return projectName != null && !projectName.isBlank();
     }
 
@@ -44,11 +91,6 @@ public final class ProjectNameManager {
         return iconTintSeed;
     }
 
-    /**
-     * Prompts the user for a project name (used on first run, or whenever a
-     * build event happens and no name has been set yet). Returns true if a
-     * name was set as a result of this call.
-     */
     public boolean promptForNameIfMissing(Component parent) {
         if (hasProjectName()) {
             return false;
@@ -59,7 +101,6 @@ public final class ProjectNameManager {
                         + "multiple open instances apart.");
     }
 
-    /** Opens a rename dialog regardless of whether a name is already set. */
     public boolean promptForRename(Component parent) {
         return promptForName(parent, "Rename Project",
                 "Enter a new project name:");
@@ -78,7 +119,6 @@ public final class ProjectNameManager {
 
         int result = JOptionPane.showConfirmDialog(
                 parent, panel, title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-
         if (result != JOptionPane.OK_OPTION) {
             return false;
         }
@@ -88,33 +128,41 @@ public final class ProjectNameManager {
         }
         boolean nameChanged = !newName.equals(projectName);
         this.projectName = newName;
-        settings.saveProjectName(projectName);
+        persistProjectName();
 
-        // If this is effectively the first time a real name is set, and the
-        // tint seed was only ever derived from an empty string, refresh the
-        // seed from the new name so the color reflects the project.
         if (nameChanged) {
             this.iconTintSeed = seedFromString(projectName);
-            settings.saveIconTintSeed(iconTintSeed);
+            persistIconTint();
         }
-        settings.saveProperties();
         return true;
     }
 
-    /** Assigns a brand-new random tint, independent of the project name. */
     public void rerollIconTint() {
         this.iconTintSeed = System.nanoTime() ^ (long) (Math.random() * Long.MAX_VALUE);
-        settings.saveIconTintSeed(iconTintSeed);
-        settings.saveProperties();
+        persistIconTint();
+    }
+
+    private void persistProjectName() {
+        if (projectSettings != null) {
+            projectSettings.saveProjectName(projectName);
+        } else {
+            pendingProjectName = projectName;
+        }
+    }
+
+    private void persistIconTint() {
+        if (projectSettings != null) {
+            projectSettings.saveIconTintSeed(iconTintSeed);
+        } else {
+            pendingIconTint = iconTintSeed;
+        }
     }
 
     private static long seedFromString(String s) {
         if (s == null || s.isEmpty()) {
-            // Still produce a stable-for-this-run seed rather than 0, so an
-            // unnamed project doesn't collapse to "no tint" every time.
             return System.nanoTime();
         }
-        long h = 1125899906842597L; // arbitrary large prime seed
+        long h = 1125899906842597L;
         for (int i = 0; i < s.length(); i++) {
             h = 31 * h + s.charAt(i);
         }
