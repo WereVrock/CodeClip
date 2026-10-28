@@ -199,4 +199,55 @@ public void copyArchitecture() {
         };
         worker.execute();
     }
+
+/**
+ * Auto-triggered variant of updateAll used after paste.
+ *
+ * Reads every loaded file from disk and refreshes classCodeMap, but:
+ *   - never shows "file missing" dialogs (a paste could trigger several
+ *     of them at once and would be pure noise)
+ *   - never removes missing files from the repo (they may come back,
+ *     and silent removal is too destructive)
+ *   - reports missing files to the caller so they can be logged
+ *
+ * The manual "Update All" button intentionally keeps the interactive
+ * behavior because the user pressing it explicitly is asking for a
+ * review of what's changed.
+ */
+public void updateAllSilent(Runnable refreshCallback,
+                            java.util.function.Consumer<java.util.List<String>> missingReporter) {
+    SwingWorker<java.util.List<String>, Void> worker = new SwingWorker<>() {
+        @Override
+        protected java.util.List<String> doInBackground() {
+            java.util.List<String> missing = new ArrayList<>();
+            for (Map.Entry<String, File> entry
+                    : new ArrayList<>(repo.getClassFileMap().entrySet())) {
+                String path = entry.getKey();
+                File file = entry.getValue();
+                if (file == null) continue;
+                try {
+                    String updated = Files.readString(file.toPath());
+                    repo.getClassCodeMap().put(path, updated);
+                } catch (IOException ex) {
+                    missing.add(path);
+                }
+            }
+            return missing;
+        }
+
+        @Override
+        protected void done() {
+            try {
+                java.util.List<String> missing = get();
+                if (!missing.isEmpty() && missingReporter != null) {
+                    missingReporter.accept(missing);
+                }
+                refreshCallback.run();
+            } catch (Exception ignored) {
+            }
+        }
+    };
+    worker.execute();
+}
+
 }

@@ -91,17 +91,20 @@ public boolean hasProjectName() {
         return iconTintSeed;
     }
 
-    public boolean promptForNameIfMissing(Component parent) {
-        if (hasProjectName()) {
-            return false;
-        }
-        return promptForName(parent, "Name This Project",
-                "Give this CodeClip workspace a short name.\n"
-                        + "It will appear in the window title so you can tell\n"
-                        + "multiple open instances apart.");
+public boolean promptForNameIfMissing(Component parent) {
+    System.out.println("[PNM] promptForNameIfMissing hasProjectName="
+            + hasProjectName() + " projectSettings=" + (projectSettings != null)
+            + " pendingName='" + pendingProjectName + "'");
+    if (hasProjectName()) {
+        return false;
     }
+    return promptForName(parent, "Name This Project",
+            "Give this CodeClip workspace a short name.\n"
+                    + "It will appear in the window title so you can tell\n"
+                    + "multiple open instances apart.");
+}
 
-    public boolean promptForRename(Component parent) {
+public boolean promptForRename(Component parent) {
         return promptForName(parent, "Rename Project",
                 "Enter a new project name:");
     }
@@ -142,15 +145,42 @@ public boolean hasProjectName() {
         persistIconTint();
     }
 
-    private void persistProjectName() {
-        if (projectSettings != null) {
-            projectSettings.saveProjectName(projectName);
-        } else {
-            pendingProjectName = projectName;
-        }
+private void persistProjectName() {
+    System.out.println("[PNM] persistProjectName name='" + projectName
+            + "' projectSettings=" + (projectSettings != null));
+    if (projectSettings != null) {
+        projectSettings.saveProjectName(projectName);
+        System.out.println("[PNM] saveProjectName readback='"
+                + projectSettings.loadProjectName() + "'");
+    } else {
+        pendingProjectName = projectName;
+        System.out.println("[PNM] STASHED pendingProjectName='" + pendingProjectName + "'");
     }
+}
 
-    private void persistIconTint() {
+public boolean hasPendingName() {
+    return pendingProjectName != null;
+}
+
+/**
+ * Applies any name that was stashed before projectSettings was attached.
+ * Safe to call repeatedly — no-op when nothing is pending.
+ */
+public void flushPendingName() {
+    if (pendingProjectName != null && projectSettings != null) {
+        System.out.println("[PNM] flushPendingName applying '" + pendingProjectName + "'");
+        projectSettings.saveProjectName(pendingProjectName);
+        System.out.println("[PNM] flushPendingName readback='"
+                + projectSettings.loadProjectName() + "'");
+        pendingProjectName = null;
+    } else {
+        System.out.println("[PNM] flushPendingName no-op pending="
+                + (pendingProjectName != null)
+                + " projectSettings=" + (projectSettings != null));
+    }
+}
+
+private void persistIconTint() {
         if (projectSettings != null) {
             projectSettings.saveIconTintSeed(iconTintSeed);
         } else {

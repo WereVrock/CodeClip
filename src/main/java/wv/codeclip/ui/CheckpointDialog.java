@@ -36,6 +36,7 @@ public class CheckpointDialog extends JDialog {
 
     private Runnable refreshCallback;
     private Runnable onCheckpointSetCallback;
+    private Runnable onRestoreCallback;
 
     private final ClassRepository repo;
     private final Supplier<ProjectSettings> projectSettingsSupplier;
@@ -45,6 +46,10 @@ public class CheckpointDialog extends JDialog {
     private final JLabel statusLabel    = new JLabel();
     private final JLabel detailLabel    = new JLabel();
     private final JPanel warningBanner  = new JPanel(new BorderLayout(6, 4));
+
+    private final JPanel permanentWarningBanner = new JPanel(new BorderLayout(6, 4));
+    private final JLabel permanentWarningLabel  = new JLabel();
+    private final JButton convertToPermanentBtn = new JButton("Convert to Permanent");
 
     private final JButton restoreBtn    = new JButton("Restore to Checkpoint");
     private final JButton commitBtn     = new JButton("Commit to Disk");
@@ -93,7 +98,39 @@ public CheckpointDialog(JFrame parent, ClassRepository repo, Runnable refreshCal
         labelStack.add(detailLabel);
 
         warningBanner.add(labelStack, BorderLayout.CENTER);
-        add(warningBanner, BorderLayout.NORTH);
+
+        // Second banner (initially hidden): shows when "Permanent Checkpoint"
+        // is checked but the current in-memory checkpoint has never been
+        // written to the backup folder — typically because the user ticked
+        // permanent AFTER setting the checkpoint. Without converting, the
+        // checkpoint is lost on the next launch.
+        permanentWarningBanner.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(200, 130, 0), 1, true),
+                BorderFactory.createEmptyBorder(6, 12, 6, 12)
+        ));
+        permanentWarningBanner.setBackground(WARN_BG);
+        permanentWarningLabel.setForeground(WARN_FG);
+        permanentWarningLabel.setFont(permanentWarningLabel.getFont()
+                .deriveFont(Font.PLAIN, 12f));
+        permanentWarningLabel.setText(
+                "⚠  Permanent Checkpoint is on, but the current checkpoint was never backed up.");
+        permanentWarningBanner.add(permanentWarningLabel, BorderLayout.CENTER);
+
+        convertToPermanentBtn.setToolTipText(
+                "Write the current checkpoint to the backup folder so it survives restart.");
+        convertToPermanentBtn.addActionListener(e -> onConvertToPermanent());
+        JPanel convertHolder = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        convertHolder.setOpaque(false);
+        convertHolder.add(convertToPermanentBtn);
+        permanentWarningBanner.add(convertHolder, BorderLayout.EAST);
+        permanentWarningBanner.setVisible(false);
+
+        JPanel northStack = new JPanel();
+        northStack.setLayout(new BoxLayout(northStack, BoxLayout.Y_AXIS));
+        northStack.add(warningBanner);
+        northStack.add(Box.createVerticalStrut(6));
+        northStack.add(permanentWarningBanner);
+        add(northStack, BorderLayout.NORTH);
 
         // --- Explanation panel ---
         JTextArea explainArea = new JTextArea(
@@ -121,9 +158,39 @@ public CheckpointDialog(JFrame parent, ClassRepository repo, Runnable refreshCal
         permanentCheckpointCheck.addActionListener(e -> {
             if (suppressCheckboxEvents) return;
             ProjectSettings ps = projectSettingsSupplier.get();
-            if (ps != null) {
-                ps.savePermanentCheckpointEnabled(permanentCheckpointCheck.isSelected());
+            if (ps == null) return;
+            boolean wasSelected = ps.loadPermanentCheckpointEnabled();
+            boolean nowEnabled = permanentCheckpointCheck.isSelected();
+            ps.savePermanentCheckpointEnabled(nowEnabled);
+            System.out.println("[CPDialog] permanent=" + nowEnabled
+                    + " wasSelected=" + wasSelected
+                    + " currentBackupDir='" + ps.loadBackupDirectory() + "'");
+
+            if (nowEnabled && !wasSelected) {
+                String dir = ps.loadBackupDirectory();
+                if (dir == null || dir.isBlank()) {
+                    String chosen = promptForBackupDirectory();
+                    if (chosen == null || chosen.isBlank()) {
+                        File root = projectRootOrNull();
+                        if (root != null) {
+                            File fallback = new File(root.getParentFile(),
+                                    root.getName() + "_codeclip_backups");
+                            ps.saveBackupDirectory(fallback.getAbsolutePath());
+                            System.out.println("[CPDialog] default backup dir: "
+                                    + fallback.getAbsolutePath());
+                            JOptionPane.showMessageDialog(this,
+                                    "No folder was chosen — using default:\n"
+                                            + fallback.getAbsolutePath()
+                                            + "\n\nChange it later with the \"...\" button.",
+                                    "Backup Directory", JOptionPane.INFORMATION_MESSAGE);
+                        }
+                    }
+                }
             }
+            // Refresh immediately so the "permanent is on but the current
+            // checkpoint isn't backed up" banner appears without having to
+            // close and reopen the dialog.
+            refresh();
         });
         backupRow.add(permanentCheckpointCheck);
 
@@ -165,33 +232,49 @@ public void setRefreshCallback(Runnable refreshCallback) {
         this.onCheckpointSetCallback = callback;
     }
 
+    /** Called AFTER the "N files restored" dialog is shown, so the frame
+     *  can clear the undo stack and truncate version history to the
+     *  checkpoint boundary. */
+    public void setOnRestoreCallback(Runnable callback) {
+        this.onRestoreCallback = callback;
+    }
+
 /** Called by CodeClipFrame whenever something may have changed. */
-    public void refresh() {
+
+public void refresh() {
         syncPermanentCheckpointUI();
 
+        String backupSuffix = formatBackupSuffix();
         boolean hasPending = !pendingRestores.isEmpty();
-        boolean hasCheckpointDiff = repo.hasPendingRestores();
+        // hasPendingRestores() only walks the checkpoint map; files created
+        // AFTER the checkpoint are not in that map and used to be invisible,
+        // so the dialog reported "all files match" and Set New Checkpoint
+        // stayed disabled even though memory had clearly moved on.
+        boolean hasNewFiles = hasFilesNotInCheckpoint();
+        boolean hasCheckpointDiff = repo.hasPendingRestores() || hasNewFiles;
+        System.out.println("[CPDialog] refresh hasPending=" + hasPending
+                + " hasNewFiles=" + hasNewFiles
+                + " hasCheckpointDiff=" + hasCheckpointDiff);
 
         if (hasPending) {
-            // Restored in-memory but not yet committed to disk
             int count = pendingRestores.size();
             warningBanner.setBackground(WARN_BG);
             statusLabel.setForeground(WARN_FG);
             detailLabel.setForeground(WARN_FG);
             statusLabel.setText("⚠  " + count + " file" + (count == 1 ? "" : "s") +
-                    " restored in memory — disk has NOT been updated");
+                    " restored in memory — disk has NOT been updated" + backupSuffix);
             detailLabel.setText("Press \"Commit to Disk\" to write restored code to disk, or close to keep working with restored copy.");
         } else if (hasCheckpointDiff) {
             warningBanner.setBackground(WARN_BG);
             statusLabel.setForeground(WARN_FG);
             detailLabel.setForeground(WARN_FG);
-            statusLabel.setText("⚠  In-memory code differs from checkpoint");
+            statusLabel.setText("⚠  In-memory code differs from checkpoint" + backupSuffix);
             detailLabel.setText("You can restore to the last checkpoint, or set a new checkpoint from the current state.");
         } else {
             warningBanner.setBackground(OK_BG);
             statusLabel.setForeground(OK_FG);
             detailLabel.setForeground(OK_FG);
-            statusLabel.setText("✓  All files match their checkpoints");
+            statusLabel.setText("✓  All files match their checkpoints" + backupSuffix);
             detailLabel.setText("No pending restores. Disk and memory are in sync.");
         }
 
@@ -200,46 +283,284 @@ public void setRefreshCallback(Runnable refreshCallback) {
         commitBtn.setEnabled(true);
         setCheckBtn.setEnabled(!allInSync);
         setCheckBtn.setForeground(allInSync ? BTN_OK_FG : UIManager.getColor("Button.foreground"));
+
+        updatePermanentConversionBanner();
     }
 
-    // ------------------------------------------------------------------
+/** True when any loaded file is NOT represented in the checkpoint map —
+ *  i.e. it was created after the last "Set New Checkpoint". */
+private boolean hasFilesNotInCheckpoint() {
+    for (String path : repo.getClassCodeMap().keySet()) {
+        if (!repo.getCheckpointCodeMap().containsKey(path)) {
+            System.out.println("[CPDialog] new-file divergence: " + path);
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+     * Decides whether the "Permanent is on but current checkpoint isn't
+     * backed up" banner should be visible, and shows it if so. Compares
+     * every checkpointed file's content against the backup folder — file
+     * existence alone isn't enough because the backup may hold a stale
+     * snapshot from an older checkpoint.
+     */
+    private void updatePermanentConversionBanner() {
+        ProjectSettings ps = projectSettingsSupplier.get();
+        boolean needsConversion = ps != null
+                && ps.loadPermanentCheckpointEnabled()
+                && !repo.getCheckpointCodeMap().isEmpty()
+                && !currentCheckpointIsFullyBackedUp(ps);
+        System.out.println("[CPDialog] conversionBanner needsConversion=" + needsConversion
+                + " permanent=" + (ps != null && ps.loadPermanentCheckpointEnabled())
+                + " checkpointFiles=" + repo.getCheckpointCodeMap().size());
+        permanentWarningBanner.setVisible(needsConversion);
+        if (needsConversion) {
+            revalidate();
+            repaint();
+        }
+    }
+
+    /** True when every checkpointed file has an identical backup copy. */
+
+private boolean currentCheckpointIsFullyBackedUp(ProjectSettings ps) {
+    File subfolder = ps.resolveBackupFolder();
+    if (subfolder == null || !subfolder.isDirectory()) return false;
+
+    File[] backupFiles = subfolder.listFiles(File::isFile);
+    if (backupFiles == null || backupFiles.length == 0) return false;
+
+    Map<String, String> backupByName = new HashMap<>();
+    for (File f : backupFiles) {
+        try { backupByName.put(f.getName(), Files.readString(f.toPath())); }
+        catch (IOException ignored) {}
+    }
+
+    for (Map.Entry<String, String> e : repo.getCheckpointCodeMap().entrySet()) {
+        String path = e.getKey();
+        if (isAutoGenerated(path)) continue;
+        String checkpoint = e.getValue();
+        if (checkpoint == null) continue;
+        File source = repo.getClassFileMap().get(path);
+        String name = source != null ? source.getName() : new File(path).getName();
+        String backup = backupByName.get(name);
+        if (backup == null || !backup.equals(checkpoint)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+private void onConvertToPermanent() {
+    ProjectSettings ps = projectSettingsSupplier.get();
+    if (ps == null) return;
+    if (repo.getCheckpointCodeMap().isEmpty()) {
+        JOptionPane.showMessageDialog(this,
+                "There is no checkpoint yet. Set one first, then convert it.",
+                "Nothing to Convert", JOptionPane.INFORMATION_MESSAGE);
+        return;
+    }
+
+    String base = ps.loadBackupDirectory();
+    if (base == null || base.isBlank()) {
+        String chosen = promptForBackupDirectory();
+        if (chosen == null || chosen.isBlank()) {
+            File root = projectRootOrNull();
+            if (root == null) {
+                JOptionPane.showMessageDialog(this,
+                        "Could not determine a backup folder. Pick one with the \"...\" button.",
+                        "Conversion Cancelled", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            File fallback = new File(root.getParentFile(),
+                    root.getName() + "_codeclip_backups");
+            ps.saveBackupDirectory(fallback.getAbsolutePath());
+        }
+    }
+
+    // Single-checkpoint semantics: the backup must represent ONLY the
+    // current checkpoint. Stale files from previous checkpoints would
+    // otherwise accumulate and make currentCheckpointIsFullyBackedUp
+    // see name collisions (e.g. multiple buildinfo.properties) that
+    // hide real writes and keep the banner up forever.
+    File subfolder = ps.resolveBackupFolder();
+    if (subfolder == null) {
+        JOptionPane.showMessageDialog(this,
+                "Could not resolve a backup folder.", "Conversion Cancelled",
+                JOptionPane.WARNING_MESSAGE);
+        return;
+    }
+    wipeBackupFolder(subfolder);
+
+    String summary;
+    try {
+        summary = backupCheckpointFiles();
+    } catch (Exception ex) {
+        ex.printStackTrace();
+        summary = null;
+    }
+
+    refresh();
+
+    ProjectSettings ps2 = projectSettingsSupplier.get();
+    boolean actuallyBackedUp = ps2 != null && currentCheckpointIsFullyBackedUp(ps2);
+
+    if (!actuallyBackedUp) {
+        StringBuilder msg = new StringBuilder(
+                "Could not back up every checkpoint file. Check the backup folder\n"
+                + "permissions and that it isn't the same as the source root.\n\n");
+        if (summary != null && !summary.isBlank()) msg.append(summary);
+        JOptionPane.showMessageDialog(this, msg.toString(),
+                "Conversion Incomplete", JOptionPane.WARNING_MESSAGE);
+        return;
+    }
+
+    // Register the version entry NOW, chronologically at the moment the
+    // checkpoint was actually created. The old flow added it only on the
+    // next dialog open (via applyBackupCheckpointsIfNeeded), which placed
+    // it after any patches applied in between — the user saw "checkpoint"
+    // as newer than a patch that predated it.
+    if (onCheckpointSetCallback != null) {
+        onCheckpointSetCallback.run();
+    }
+    refresh();
+
+    JOptionPane.showMessageDialog(this,
+            summary != null ? summary : "Checkpoint backed up.",
+            "Converted to Permanent", JOptionPane.INFORMATION_MESSAGE);
+}
+
+/** Empties a folder recursively. Silent on individual failures — a locked
+ *  file shouldn't abort the whole conversion; the post-check will still
+ *  catch anything that genuinely couldn't be written. */
+private void wipeBackupFolder(File folder) {
+    if (folder == null || !folder.isDirectory()) return;
+    File[] files = folder.listFiles();
+    if (files == null) return;
+    for (File f : files) {
+        try {
+            if (f.isFile()) java.nio.file.Files.delete(f.toPath());
+            else deleteRecursively(f);
+        } catch (IOException ignored) {}
+    }
+}
+
+private void deleteRecursively(File dir) throws IOException {
+    File[] files = dir.listFiles();
+    if (files != null) {
+        for (File f : files) {
+            if (f.isFile()) java.nio.file.Files.delete(f.toPath());
+            else deleteRecursively(f);
+        }
+    }
+    java.nio.file.Files.delete(dir.toPath());
+}
+
+private static boolean isAutoGenerated(String path) {
+    if (path == null) return false;
+    String name = new File(path).getName().toLowerCase();
+    // buildinfo.properties lives at every source root AND at parent levels
+    // that CodeClip attached to. Backing it up under a flat folder causes
+    // name collisions with itself across projects, so exclude it from
+    // both the write side and the completeness check.
+    return name.equals("buildinfo.properties");
+}
+
+/** Suffix showing checkpoint name + backup file count. Empty when nothing to show. */
+    private String formatBackupSuffix() {
+        ProjectSettings ps = projectSettingsSupplier.get();
+        if (ps == null) return "";
+
+        StringBuilder sb = new StringBuilder();
+        String name = ps.loadCheckpointName();
+        if (name != null && !name.isBlank() && !name.equals("Checkpoint set")) {
+            sb.append("  —  \"").append(name).append("\"");
+        }
+
+        if (ps.loadPermanentCheckpointEnabled()) {
+            File subfolder = ps.resolveBackupFolder();
+            if (subfolder != null && subfolder.exists()) {
+                File[] files = subfolder.listFiles(File::isFile);
+                if (files != null && files.length > 0) {
+                    sb.append(sb.length() > 0 ? " · " : "  —  ")
+                      .append(files.length).append(" backup file")
+                      .append(files.length == 1 ? "" : "s");
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+// ------------------------------------------------------------------
     // Actions
     // ------------------------------------------------------------------
 
 private void onRestore() {
-        pendingRestores.clear();
-        List<String> restored = new ArrayList<>();
+    pendingRestores.clear();
+    List<String> restored = new ArrayList<>();
+    List<String> deleted  = new ArrayList<>();
 
-        for (Map.Entry<String, String> entry : repo.getCheckpointCodeMap().entrySet()) {
-            String path = entry.getKey();
-            String checkpoint = entry.getValue();
-            String current = repo.getClassCodeMap().get(path);
-            if (!checkpoint.equals(current)) {
-                pendingRestores.put(path, current);
-                repo.getClassCodeMap().put(path, checkpoint);
-                File file = repo.getClassFileMap().get(path);
-                restored.add(file != null ? file.getName() : path);
-            }
+    // 1) Revert files that exist in the checkpoint back to checkpoint content.
+    for (Map.Entry<String, String> entry : repo.getCheckpointCodeMap().entrySet()) {
+        String path = entry.getKey();
+        String checkpoint = entry.getValue();
+        String current = repo.getClassCodeMap().get(path);
+        if (!java.util.Objects.equals(checkpoint, current)) {
+            pendingRestores.put(path, current);
+            repo.getClassCodeMap().put(path, checkpoint);
+            File file = repo.getClassFileMap().get(path);
+            restored.add(file != null ? file.getName() : path);
         }
+    }
 
-        if (restored.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
-                    "All files already match their checkpoints.",
-                    "Nothing to Restore", JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
+    // 2) Files created AFTER the checkpoint are not in checkpointCodeMap.
+    //    Rewinding to the checkpoint means they must not exist in CodeClip's
+    //    in-memory view. Disk is intentionally left untouched — that's what
+    //    "Commit to Disk" is for.
+    for (String path : new ArrayList<>(repo.getClassCodeMap().keySet())) {
+        if (repo.getCheckpointCodeMap().containsKey(path)) continue;
+        File file = repo.getClassFileMap().get(path);
+        deleted.add(file != null ? file.getName() : path);
+        repo.getClassCodeMap().remove(path);
+        repo.getClassFileMap().remove(path);
+        repo.getDisabledClasses().remove(path);
+    }
 
-        refreshCallback.run();
-        refresh();
+    if (restored.isEmpty() && deleted.isEmpty()) {
+        JOptionPane.showMessageDialog(this,
+                "All files already match their checkpoints.",
+                "Nothing to Restore", JOptionPane.INFORMATION_MESSAGE);
+        return;
+    }
 
-        StringBuilder msg = new StringBuilder();
+    refreshCallback.run();
+    refresh();
+
+    StringBuilder msg = new StringBuilder();
+    if (!restored.isEmpty()) {
         msg.append(restored.size()).append(" file")
            .append(restored.size() == 1 ? "" : "s")
            .append(" restored in memory:\n\n");
         for (String name : restored) msg.append("  • ").append(name).append("\n");
+    }
+    if (!deleted.isEmpty()) {
+        if (msg.length() > 0) msg.append("\n");
+        msg.append(deleted.size()).append(" file")
+           .append(deleted.size() == 1 ? "" : "s")
+           .append(" created after checkpoint — removed from CodeClip view (file stays on disk):\n\n");
+        for (String name : deleted) msg.append("  • ").append(name).append("\n");
+    }
         msg.append("\nDisk has NOT been changed. Press \"Commit to Disk\" to write.");
 
         JOptionPane.showMessageDialog(this, msg.toString(), "Restored", JOptionPane.INFORMATION_MESSAGE);
+
+        // Undo history and version events after the checkpoint no longer
+        // correspond to reachable states — clear them now that the restore
+        // itself has succeeded and the user has been notified.
+        if (onRestoreCallback != null) {
+            onRestoreCallback.run();
+        }
     }
 
 /**
@@ -419,47 +740,92 @@ private void onSetCheckpoint() {
     // ------------------------------------------------------------------
 
     /** Backs up every checkpointed file to the configured backup directory. Returns a user-facing summary, or null if nothing to report. */
-    private String backupCheckpointFiles() {
-        if (repo.getCheckpointCodeMap().isEmpty()) return null;
 
-        String backupDir = resolveBackupDirectory();
-        if (backupDir == null) return null; // user cancelled
+/** Backs up every checkpointed file to the project's subfolder inside the base backup directory. */
 
-        File dir = new File(backupDir);
-        if (!dir.exists() && !dir.mkdirs()) {
-            JOptionPane.showMessageDialog(this,
-                    "Could not create backup directory:\n" + backupDir,
-                    "Backup Failed", JOptionPane.ERROR_MESSAGE);
-            return null;
-        }
+private String backupCheckpointFiles() {
+    if (repo.getCheckpointCodeMap().isEmpty()) return null;
+    if (resolveBackupDirectory() == null) return null;
 
-        List<String> failures = new ArrayList<>();
-        int count = 0;
-        for (Map.Entry<String, String> entry : repo.getCheckpointCodeMap().entrySet()) {
-            String path = entry.getKey();
-            String content = entry.getValue();
-            if (content == null) continue;
+    ProjectSettings ps = projectSettingsSupplier.get();
+    if (ps == null) return null;
 
-            File source = repo.getClassFileMap().get(path);
-            String name = source != null ? source.getName() : new File(path).getName();
-            File dest = new File(dir, name);
-            try {
-                Files.writeString(dest.toPath(), content);
-                count++;
-            } catch (IOException e) {
-                failures.add(name + ": " + e.getMessage());
-            }
-        }
+    File subfolder = ps.resolveBackupFolder();
+    if (subfolder == null) return null;
 
-        if (count == 0 && failures.isEmpty()) return null;
-        if (!failures.isEmpty()) {
-            return "Backed up " + count + " file(s) to:\n" + backupDir
-                    + "\n\nBut some failed:\n" + String.join("\n", failures);
-        }
-        return "Backed up " + count + " file(s) to:\n" + backupDir;
+    migrateStrayBackupFiles(ps, subfolder);
+
+    if (!subfolder.exists() && !subfolder.mkdirs()) {
+        JOptionPane.showMessageDialog(this,
+                "Could not create backup folder:\n" + subfolder.getAbsolutePath(),
+                "Backup Failed", JOptionPane.ERROR_MESSAGE);
+        return null;
     }
 
-    /** Returns a usable backup directory path, creating it if missing. Prompts the user once if none is configured. Returns null on cancel. */
+    List<String> failures = new ArrayList<>();
+    int count = 0;
+    for (Map.Entry<String, String> entry : repo.getCheckpointCodeMap().entrySet()) {
+        String path = entry.getKey();
+        if (isAutoGenerated(path)) continue;
+        String content = entry.getValue();
+        if (content == null) continue;
+
+        File source = repo.getClassFileMap().get(path);
+        String name = source != null ? source.getName() : new File(path).getName();
+        File dest = new File(subfolder, name);
+        try {
+            Files.writeString(dest.toPath(), content);
+            count++;
+        } catch (IOException e) {
+            failures.add(name + ": " + e.getMessage());
+        }
+    }
+
+    if (count == 0 && failures.isEmpty()) return null;
+
+    StringBuilder sb = new StringBuilder();
+    if (count > 0) {
+        sb.append("Backed up ").append(count).append(" file(s) to:\n")
+          .append(subfolder.getAbsolutePath());
+    }
+    if (!failures.isEmpty()) {
+        if (sb.length() > 0) sb.append("\n\n");
+        sb.append("Some files failed:\n").append(String.join("\n", failures));
+    }
+    return sb.toString();
+}
+
+/**
+     * One-time migration: files written by the old flat-in-base-folder scheme
+     * are moved into the new project subfolder. Never overwrites files already
+     * present in the subfolder — those are considered live backups.
+     */
+    private int migrateStrayBackupFiles(ProjectSettings ps, File subfolder) {
+        String basePath = ps.loadBackupDirectory();
+        if (basePath == null || basePath.isBlank()) return 0;
+        File base = new File(basePath);
+        if (!base.exists() || !base.isDirectory()) return 0;
+        if (base.getAbsolutePath().equals(subfolder.getAbsolutePath())) return 0;
+
+        File[] strays = base.listFiles(File::isFile);
+        if (strays == null || strays.length == 0) return 0;
+
+        if (!subfolder.exists() && !subfolder.mkdirs()) return 0;
+
+        int migrated = 0;
+        for (File f : strays) {
+            File dest = new File(subfolder, f.getName());
+            if (dest.exists()) continue;
+            try {
+                java.nio.file.Files.move(f.toPath(), dest.toPath());
+                migrated++;
+            } catch (IOException ignored) {
+            }
+        }
+        return migrated;
+    }
+
+/** Returns a usable backup directory path, creating it if missing. Prompts the user once if none is configured. Returns null on cancel. */
 
 /** Returns a usable backup directory path (per project), creating it if missing. Prompts the user once if none is configured. Returns null on cancel or when no project is loaded. */
     private String resolveBackupDirectory() {
@@ -478,30 +844,35 @@ private void onSetCheckpoint() {
 /** Opens a directory chooser starting at the current backup dir (or the first loaded file's folder). Saves the chosen dir. */
 
 /** Opens a directory chooser starting at the current backup dir (or the first loaded file's folder). Saves the chosen dir to the current project. Returns null on cancel or when no project is loaded. */
-    private String promptForBackupDirectory() {
-        ProjectSettings ps = projectSettingsSupplier.get();
-        if (ps == null) return null;
 
-        JFileChooser chooser = new JFileChooser();
-        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        chooser.setDialogTitle("Select Backup Directory for This Project's Checkpoints");
+private String promptForBackupDirectory() {
+    ProjectSettings ps = projectSettingsSupplier.get();
+    if (ps == null) return null;
 
-        String current = ps.loadBackupDirectory();
-        if (current != null && !current.isBlank()) {
-            File cur = new File(current);
-            if (cur.exists()) chooser.setCurrentDirectory(cur);
-        } else {
-            File startDir = findFirstFileParent();
-            if (startDir != null) chooser.setCurrentDirectory(startDir);
-        }
+    JFileChooser chooser = new JFileChooser();
+    chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+    chooser.setDialogTitle("Select Backup Directory for This Project's Checkpoints");
 
-        int result = chooser.showOpenDialog(this);
-        if (result != JFileChooser.APPROVE_OPTION) return null;
-
-        String chosen = chooser.getSelectedFile().getAbsolutePath();
-        ps.saveBackupDirectory(chosen);
-        return chosen;
+    File start = null;
+    String current = ps.loadBackupDirectory();
+    if (current != null && !current.isBlank()) {
+        File cur = new File(current);
+        if (cur.exists() && cur.isDirectory()) start = cur;
     }
+    if (start == null && ps.getFile() != null) {
+        File sourceRoot = ps.getFile().getParentFile();
+        if (sourceRoot != null && sourceRoot.exists()) start = sourceRoot;
+    }
+    if (start == null) start = findFirstFileParent();
+    if (start != null && start.exists()) chooser.setCurrentDirectory(start);
+
+    int result = chooser.showOpenDialog(this);
+    if (result != JFileChooser.APPROVE_OPTION) return null;
+
+    String chosen = chooser.getSelectedFile().getAbsolutePath();
+    ps.saveBackupDirectory(chosen);
+    return chosen;
+}
 
 /** First loaded file's parent directory — used as the initial folder for the backup-dir picker. */
     private File findFirstFileParent() {
@@ -512,6 +883,21 @@ private void onSetCheckpoint() {
         }
         return null;
     }
+
+/** Best-guess project source root: first loaded file's ancestor that
+ *  contains buildinfo.properties, else the first file's grandparent. */
+private File projectRootOrNull() {
+    for (File f : repo.getClassFileMap().values()) {
+        if (f == null) continue;
+        File dir = f.getParentFile();
+        for (int depth = 0; depth < 8 && dir != null; depth++) {
+            if (new File(dir, "buildinfo.properties").exists()) return dir;
+            dir = dir.getParentFile();
+        }
+    }
+    File first = findFirstFileParent();
+    return first != null ? first.getParentFile() : null;
+}
 
 /** Syncs the checkbox state and enabled-ness with the current project's settings. */
     private void syncPermanentCheckpointUI() {

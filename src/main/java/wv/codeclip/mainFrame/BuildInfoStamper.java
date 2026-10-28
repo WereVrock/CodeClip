@@ -52,99 +52,75 @@ public final class BuildInfoStamper {
     }
 
     /** Stamps a fresh timestamp + incremented build number, writes to disk. */
-    public void stamp() {
-        String timestamp = LocalDateTime.now()
-                .format(DateTimeFormatter.ofPattern("EEE-HH:mm:ss"));
 
-        File sourceRoot = detectSourceRoot();
-        if (sourceRoot == null) {
-            return;
+public void stamp() {
+    String timestamp = LocalDateTime.now()
+            .format(DateTimeFormatter.ofPattern("EEE-HH:mm:ss"));
+
+    File sourceRoot = detectSourceRoot();
+    if (sourceRoot == null) {
+        System.out.println("[Stamper] no source root, aborting");
+        return;
+    }
+    System.out.println("[Stamper] writing to: " + sourceRoot.getAbsolutePath());
+
+    int nextBuildNo = 1;
+    File file = new File(sourceRoot, BUILD_INFO_FILE);
+    if (file.exists()) {
+        String oldContent = repo.getClassCodeMap().get(file.getAbsolutePath());
+        if (oldContent == null) {
+            try { oldContent = Files.readString(file.toPath()); }
+            catch (IOException ignored) {}
         }
-
-        int nextBuildNo = 1;
-        File file = new File(sourceRoot, BUILD_INFO_FILE);
-        if (file.exists()) {
-            String oldContent = repo.getClassCodeMap().get(file.getAbsolutePath());
-            if (oldContent == null) {
-                try {
-                    oldContent = Files.readString(file.toPath());
-                } catch (IOException ignored) {
+        if (oldContent != null) {
+            for (String line : oldContent.split("\n")) {
+                if (line.startsWith("BUILD_NO=")) {
+                    String oldNo = line.substring("BUILD_NO=".length()).trim();
+                    try { nextBuildNo = Integer.parseInt(oldNo, 36) + 1; }
+                    catch (NumberFormatException ignored) {}
+                    break;
                 }
             }
-            if (oldContent != null) {
-                for (String line : oldContent.split("\n")) {
-                    if (line.startsWith("BUILD_NO=")) {
-                        String oldNo = line.substring("BUILD_NO=".length()).trim();
-                        try {
-                            nextBuildNo = Integer.parseInt(oldNo, 36) + 1;
-                        } catch (NumberFormatException ignored) {
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-        String buildNo36 = Integer.toString(nextBuildNo, 36);
-
-        // Load whatever is currently in the file (projectName, iconTintSeed,
-        // protocols.directory, anything else) and only update the two build
-        // keys. Writing a fresh two-line file here is what used to make it
-        // impossible to store project-scoped state in buildinfo.properties.
-        java.util.Properties props = new java.util.Properties();
-        if (file.exists()) {
-            try (java.io.FileReader r = new java.io.FileReader(file)) {
-                props.load(r);
-            } catch (IOException ignored) {
-            }
-        }
-        props.setProperty("LAST_UPDATED", timestamp);
-        props.setProperty("BUILD_NO", buildNo36);
-        String content;
-        try {
-            java.io.StringWriter sw = new java.io.StringWriter();
-            props.store(sw, null);
-            content = sw.toString();
-        } catch (IOException e) {
-            // StringWriter never throws in practice; fall back defensively.
-            content = "LAST_UPDATED=" + timestamp + "\nBUILD_NO=" + buildNo36 + "\n";
-        }
-
-        setPendingTargetBuild.accept(buildNo36);
-        logSink.accept("Target Build: #" + buildNo36 + " --- " + timestamp);
-        setPendingTargetBuild.accept(buildNo36);
-
-        String path = file.getAbsolutePath();
-        String oldContent = repo.getClassCodeMap().get(path);
-        if (oldContent == null && file.exists()) {
-            try {
-                oldContent = Files.readString(file.toPath());
-            } catch (IOException ignored) {
-            }
-        }
-
-        try {
-            Files.writeString(file.toPath(), content);
-            repo.getClassCodeMap().put(path, content);
-            repo.getClassFileMap().put(path, file);
-            repo.setCheckpoint(path, content);
-
-            if (oldContent != null) {
-                undoManager.mergeTimestampSnapshot(path, oldContent);
-            }
-
-            if (!panelExistsForPath.test(path)) {
-                addClassPanel.accept(path, file.getName());
-            }
-
-            refreshText.run();
-            refreshTitle.run();
-
-        } catch (IOException ex) {
-            ex.printStackTrace();
         }
     }
+    String buildNo36 = Integer.toString(nextBuildNo, 36);
 
-    /** Writes buildinfo.properties with the exact content given (used by undo/redo restore). */
+    String path = file.getAbsolutePath();
+    String oldContent = repo.getClassCodeMap().get(path);
+    if (oldContent == null && file.exists()) {
+        try { oldContent = Files.readString(file.toPath()); }
+        catch (IOException ignored) {}
+    }
+
+    setPendingTargetBuild.accept(buildNo36);
+    logSink.accept("Target Build: #" + buildNo36 + " --- " + timestamp);
+
+    // Read-modify-write via ProjectSettings — same lock, same format,
+    // same encoding as saveProjectName. Properties.load/store round-trips
+    // via FileReader (platform charset) and misreads UTF-8; alternating
+    // with saveProjectName is exactly how projectName was getting lost.
+    new wv.codeclip.io.ProjectSettings(sourceRoot, null)
+            .saveBuildInfo(timestamp, buildNo36);
+
+    String content;
+    try { content = Files.readString(file.toPath()); }
+    catch (IOException ex) { ex.printStackTrace(); return; }
+
+    repo.getClassCodeMap().put(path, content);
+    repo.getClassFileMap().put(path, file);
+    repo.setCheckpoint(path, content);
+
+    if (oldContent != null) {
+        undoManager.mergeTimestampSnapshot(path, oldContent);
+    }
+    if (!panelExistsForPath.test(path)) {
+        addClassPanel.accept(path, file.getName());
+    }
+    refreshText.run();
+    refreshTitle.run();
+}
+
+/** Writes buildinfo.properties with the exact content given (used by undo/redo restore). */
 
 public void stampWithContent(String content, Consumer<String> setPendingTargetBuild) {
         File sourceRoot = detectSourceRoot();

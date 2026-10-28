@@ -20,6 +20,7 @@ import java.util.Set;
 import wv.codeclip.AppMode;
 import wv.codeclip.ui.CheckpointDialog;
 import wv.codeclip.io.PasteClassHandler;
+import wv.codeclip.io.ProjectSettings;
 import wv.codeclip.modecontext.ModeColors;
 import wv.codeclip.patch.InsertMethodConflictDialog;
 import wv.codeclip.ui.ClassActions;
@@ -29,6 +30,7 @@ import wv.codeclip.ui.SmartPasteSettingsDialog;
 import wv.codeclip.patch.PatchApplier;
 import wv.codeclip.patch.PatchErrorDialog;
 import wv.codeclip.ui.ClassTreePanel;
+import wv.codeclip.ui.TreeViewIcons;
 
 public class CodeClipFrame extends JFrame implements java.awt.event.FocusListener {
 
@@ -55,6 +57,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private final JPanel classPanel = new JPanel();
     private ClassTreePanel classTreePanel;
     private boolean treeViewActive = false;
+    private JButton treeCollapseBtn;
     private JSplitPane split;
 
     private final JCheckBox showMissingFileMessages
@@ -147,6 +150,14 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
      *  are currently bound to. Null until the first successful detection. */
     private java.io.File projectSourceRoot = null;
     private wv.codeclip.io.ProjectSettings projectSettings = null;
+    /**
+     * Absolute path of the project root for which backup checkpoints have
+     * already been restored this session. Set once per project attach so
+     * additional batches, mode changes, and pre-stamp reloads do not
+     * re-apply the backup. Cleared by Reset so the next project can restore
+     * from its own backup independently.
+     */
+    private String backupCheckpointsAppliedForRoot = null;
     /**
      * True immediately after Reset. The first batch that lands while this is
      * true forces auto-set of the current mode's directory — even if one is
@@ -382,6 +393,15 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 // --- Menu bar ---
         JMenuBar menuBar = new JMenuBar();
 
+        JMenu fileMenu = new JMenu("File");
+        JMenuItem quickSetupItem = new JMenuItem("Quick Setup…");
+        quickSetupItem.setToolTipText(
+                "Pick a parent folder. Creates <name>/{files,protocol,backup}, "
+                + "resets current state, and rebinds everything to the new project.");
+        quickSetupItem.addActionListener(e -> quickSetup());
+        fileMenu.add(quickSetupItem);
+        menuBar.add(fileMenu);
+
         JMenu settingsMenu = new JMenu("Settings");
         JCheckBoxMenuItem showMissingItem = new JCheckBoxMenuItem(
                 "Show missing file messages", showMissingFileMessages.isSelected());
@@ -605,34 +625,36 @@ settingsMenu.add(compileCheckItem);
             syncUndoRedo.run();
         });
 
-        pasteHandler.setPostPasteCallback((changed) -> {
+        java.util.function.Consumer<Boolean> postPaste = (changed) -> {
             syncUndoRedo.run();
             if (changed) {
                 stampBuildInfo();
                 addVersionEventFromUndoTop();
+                // Re-read every loaded file from disk so external edits made
+                // between pastes are pulled in too. Silent variant: no
+                // missing-file dialogs, missing files stay in the repo and
+                // get refreshed once they reappear. Missing names are
+                // mirrored into the temp log for visibility without modal
+                // interruption.
+                actions.updateAllSilent(
+                        this::refreshText,
+                        missing -> {
+                            StringBuilder sb = new StringBuilder(
+                                    "Auto-update: skipped " + missing.size()
+                                            + " file(s) not found on disk:");
+                            for (String p : missing) {
+                                File f = repo.getClassFileMap().get(p);
+                                sb.append("\n  • ")
+                                  .append(f != null ? f.getName() : p);
+                            }
+                            appendTempLog(sb.toString());
+                        });
             }
-        });
-        godotPasteHandler.setPostPasteCallback((changed) -> {
-            syncUndoRedo.run();
-            if (changed) {
-                stampBuildInfo();
-                addVersionEventFromUndoTop();
-            }
-        });
-        htmlPasteHandler.setPostPasteCallback((changed) -> {
-            syncUndoRedo.run();
-            if (changed) {
-                stampBuildInfo();
-                addVersionEventFromUndoTop();
-            }
-        });
-        genericPasteHandler.setPostPasteCallback((changed) -> {
-            syncUndoRedo.run();
-            if (changed) {
-                stampBuildInfo();
-                addVersionEventFromUndoTop();
-            }
-        });
+        };
+        pasteHandler.setPostPasteCallback(postPaste);
+        godotPasteHandler.setPostPasteCallback(postPaste);
+        htmlPasteHandler.setPostPasteCallback(postPaste);
+        genericPasteHandler.setPostPasteCallback(postPaste);
 
         JPanel statsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         statsPanel.add(undoBtn);
@@ -668,6 +690,12 @@ settingsMenu.add(compileCheckItem);
             }
             classPanel.revalidate();
             classPanel.repaint();
+            // Tree view keeps its own filtered layout — rebuild it on every
+            // keystroke so results appear live instead of only after a
+            // mode switch or an expand/collapse cycle.
+            if (treeViewActive && classTreePanel != null) {
+                classTreePanel.refresh();
+            }
         }));
 // Clear + refresh helper and key bindings (Esc / Enter)
         Runnable clearAndRefresh = () -> {
@@ -704,21 +732,24 @@ settingsMenu.add(compileCheckItem);
         classViewStack.add(classScroll, "list");
         classViewStack.add(treeScroll, "tree");
 
-        JToggleButton treeToggleBtn = new JToggleButton("☰ List");
-        treeToggleBtn.setFont(treeToggleBtn.getFont().deriveFont(Font.PLAIN, 12f));
+        JToggleButton treeToggleBtn = new JToggleButton(TreeViewIcons.tree());
         treeToggleBtn.setFocusable(false);
-        treeToggleBtn.setToolTipText("Switch between list view and tree view");
+        treeToggleBtn.setMargin(new Insets(2, 6, 2, 6));
+        treeToggleBtn.setToolTipText("Switch to tree view");
         treeToggleBtn.addActionListener(e -> {
             treeViewActive = treeToggleBtn.isSelected();
             CardLayout cl = (CardLayout) classViewStack.getLayout();
             if (treeViewActive) {
                 classTreePanel.refresh();
                 cl.show(classViewStack, "tree");
-                treeToggleBtn.setText("⊞ Tree");
+                treeToggleBtn.setIcon(TreeViewIcons.list());
+                treeToggleBtn.setToolTipText("Switch to list view");
             } else {
                 cl.show(classViewStack, "list");
-                treeToggleBtn.setText("☰ List");
+                treeToggleBtn.setIcon(TreeViewIcons.tree());
+                treeToggleBtn.setToolTipText("Switch to tree view");
             }
+            updateTreeCollapseButton();
         });
 
         JButton enableAllBtn = new JButton("Enable All");
@@ -767,8 +798,31 @@ settingsMenu.add(compileCheckItem);
         searchPanel.add(clearButton, BorderLayout.WEST);
         searchPanel.add(classSearch, BorderLayout.CENTER);
 
+        // Expand All / Collapse All — visible only in tree mode. The label
+        // reflects the ACTION (what clicking will do), not the current state:
+        // "Expand All" when the tree is fully collapsed, "Collapse All"
+        // otherwise (partial or fully expanded).
+        treeCollapseBtn = new JButton("⊞");
+        treeCollapseBtn.setFont(treeCollapseBtn.getFont().deriveFont(Font.PLAIN, 14f));
+        treeCollapseBtn.setFocusable(false);
+        treeCollapseBtn.setVisible(false);
+        treeCollapseBtn.setMargin(new Insets(2, 8, 2, 8));
+        treeCollapseBtn.setToolTipText("Expand every folder in the tree");
+        treeCollapseBtn.addActionListener(e -> {
+            if (classTreePanel.isAllCollapsed()) {
+                classTreePanel.expandAll();
+            } else {
+                classTreePanel.collapseAll();
+            }
+            updateTreeCollapseButton();
+        });
+
+        JPanel treeControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        treeControls.add(treeToggleBtn);
+        treeControls.add(treeCollapseBtn);
+
         JPanel searchAndToggleRow = new JPanel(new BorderLayout(4, 0));
-        searchAndToggleRow.add(treeToggleBtn, BorderLayout.WEST);
+        searchAndToggleRow.add(treeControls, BorderLayout.WEST);
         searchAndToggleRow.add(searchPanel, BorderLayout.CENTER);
 
         JPanel classListPanel = new JPanel(new BorderLayout(0, 2));
@@ -1196,6 +1250,64 @@ private void openLanguageDialog() {
         }
     }
 
+private void quickSetup() {
+    JFileChooser chooser = new JFileChooser();
+    chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+    chooser.setDialogTitle("Quick Setup — Pick parent folder for the new project");
+    if (projectSourceRoot != null
+            && projectSourceRoot.getParentFile() != null
+            && projectSourceRoot.getParentFile().exists()) {
+        chooser.setCurrentDirectory(projectSourceRoot.getParentFile());
+    }
+    if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
+    File chosenRoot = chooser.getSelectedFile();
+    if (chosenRoot == null || !chosenRoot.isDirectory()) return;
+
+    resetProjectState();
+
+    if (!projectNameManager.promptForRename(this)) return;
+    String name = projectNameManager.getProjectName();
+    if (name == null || name.isBlank()) return;
+
+    String safeName = name.trim().replaceAll("[\\\\/:*?\"<>|]", "_");
+    File anaKlasor = new File(chosenRoot, safeName);
+    if (!anaKlasor.exists() && !anaKlasor.mkdirs()) {
+        JOptionPane.showMessageDialog(this,
+                "Could not create project folder:\n" + anaKlasor,
+                "Quick Setup Failed", JOptionPane.ERROR_MESSAGE);
+        return;
+    }
+    File filesDir    = new File(anaKlasor, "files");    filesDir.mkdirs();
+    File protocolDir = new File(anaKlasor, "protocol"); protocolDir.mkdirs();
+    File backupDir   = new File(anaKlasor, "backup");   backupDir.mkdirs();
+
+    projectSourceRoot = filesDir;
+    projectSettings = new ProjectSettings(filesDir,
+            () -> syncBuildInfoFromDisk(filesDir));
+    projectNameManager.attachProjectSettings(projectSettings);
+    projectSettings.saveProjectName(name);
+    projectSettings.saveBackupDirectory(backupDir.getAbsolutePath());
+    projectSettings.saveProtocolsDirectory(protocolDir.getAbsolutePath());
+    projectSettings.savePermanentCheckpointEnabled(true);
+
+    projectNameManager.rerollIconTint();
+    setCurrentModeDirectory(filesDir);
+    reloadProjectSettings();
+
+    protocolDirectoryManager.attachProjectSettings(projectSettings);
+    protocolLibrary = protocolDirectoryManager.buildLibrary();
+    protocolPasteRouter = new wv.codeclip.protocol.engine.ProtocolPasteRouter(
+            protocolLibrary, protocolUndoManager);
+
+    titleFrozen = false;
+    refreshTitle();
+    setIcon();
+    appendTempLog("Quick Setup: project=" + name
+            + " | files=" + filesDir.getAbsolutePath()
+            + " | protocol=" + protocolDir.getAbsolutePath()
+            + " | backup=" + backupDir.getAbsolutePath());
+}
+
 /**
      * Lets the user clear or directly retype the saved "preferred main class"
      * used by SourceRootDetector to decide which folder new pasted classes
@@ -1250,82 +1362,129 @@ private void openLanguageDialog() {
     }
 
 private void addFilesBatched(List<File> files) {
-        if (files.isEmpty()) {
-            return;
-        }
+    if (files.isEmpty()) return;
+    files = filterBackupFolderFiles(files);
+    if (files.isEmpty()) return;
 
-        List<File> toLoad = new ArrayList<>();
-        List<File> tooLarge = new ArrayList<>();
-        for (File file : files) {
-            String path = file.getAbsolutePath();
-            if (repo.getClassCodeMap().containsKey(path)) {
-                repo.getDisabledClasses().remove(path);
-                continue;
+    List<File> toLoad = new ArrayList<>();
+    List<File> tooLarge = new ArrayList<>();
+    for (File file : files) {
+        String path = file.getAbsolutePath();
+        if (repo.getClassCodeMap().containsKey(path)) {
+            repo.getDisabledClasses().remove(path);
+            continue;
+        }
+        if (file.length() > MAX_FILE_BYTES) {
+            tooLarge.add(file);
+            continue;
+        }
+        toLoad.add(file);
+    }
+
+    if (toLoad.isEmpty()) {
+        reportSkippedLargeFiles(tooLarge);
+        refreshText();
+        refreshPanels();
+        return;
+    }
+
+    int total = toLoad.size();
+    if (loadBarWindow == null || !loadBarWindow.isVisible()) {
+        showLoadBar();
+    }
+
+    java.util.concurrent.atomic.AtomicInteger remaining
+            = new java.util.concurrent.atomic.AtomicInteger(total);
+    java.util.concurrent.atomic.AtomicInteger loaded
+            = new java.util.concurrent.atomic.AtomicInteger(0);
+
+    for (File file : toLoad) {
+        String path = file.getAbsolutePath();
+        SwingWorker<String, Void> worker = new SwingWorker<>() {
+            @Override
+            protected String doInBackground() throws Exception {
+                return Files.readString(file.toPath());
             }
-            if (file.length() > MAX_FILE_BYTES) {
-                tooLarge.add(file);
-                continue;
-            }
-            toLoad.add(file);
-        }
 
-        if (toLoad.isEmpty()) {
-            reportSkippedLargeFiles(tooLarge);
-            refreshText();
-            refreshPanels();
-            return;
-        }
-
-        int total = toLoad.size();
-        if (loadBarWindow == null || !loadBarWindow.isVisible()) {
-            showLoadBar();
-        }
-
-        java.util.concurrent.atomic.AtomicInteger remaining
-                = new java.util.concurrent.atomic.AtomicInteger(total);
-        java.util.concurrent.atomic.AtomicInteger loaded
-                = new java.util.concurrent.atomic.AtomicInteger(0);
-
-        for (File file : toLoad) {
-            String path = file.getAbsolutePath();
-            SwingWorker<String, Void> worker = new SwingWorker<>() {
-                @Override
-                protected String doInBackground() throws Exception {
-                    return Files.readString(file.toPath());
-                }
-
-                @Override
-                protected void done() {
-                    try {
-                        String code = get();
-                        repo.getClassCodeMap().put(path, code);
-                        repo.getClassFileMap().put(path, file);
-                        repo.setCheckpoint(path, code);
-                        addClassPanel(path, file.getName());
-                        if (file.getName().equals(BUILD_INFO_FILE)) {
-                            refreshTitle();
-                        }
-                    } catch (Exception ignored) {
-                    } finally {
-                        int done = loaded.incrementAndGet();
-                        SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
-                        if (remaining.decrementAndGet() == 0) {
-                            SwingUtilities.invokeLater(() -> {
-                                autoSetModeDirectoryFromRepo(toLoad);
-                                refreshText();
-                                refreshPanels();
-                                reloadProjectSettings();
-                                registerCurrentProjectInRecent();
-                                hideLoadBar();
-                                reportSkippedLargeFiles(tooLarge);
-                            });
-                        }
+            @Override
+            protected void done() {
+                try {
+                    String code = get();
+                    repo.getClassCodeMap().put(path, code);
+                    repo.getClassFileMap().put(path, file);
+                    repo.setCheckpoint(path, code);
+                    addClassPanel(path, file.getName());
+                    if (file.getName().equals(BUILD_INFO_FILE)) {
+                        refreshTitle();
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    int done = loaded.incrementAndGet();
+                    SwingUtilities.invokeLater(() -> updateLoadBar(done, total));
+                    if (remaining.decrementAndGet() == 0) {
+                        SwingUtilities.invokeLater(() -> {
+                            autoSetModeDirectoryFromRepo(toLoad);
+                            refreshText();
+                            refreshPanels();
+                            reloadProjectSettings();
+                            registerCurrentProjectInRecent();
+                            hideLoadBar();
+                            reportSkippedLargeFiles(tooLarge);
+                        });
                     }
                 }
-            };
-            worker.execute();
-        }
+            }
+        };
+        worker.execute();
     }
+}
+
+/**
+ * Prompts the user when the incoming batch contains files that live inside
+ * the project's backup folder. Adding those makes backup copies editable
+ * through CodeClip, which usually defeats the point of having them.
+ * Declining removes only the backup-resident files; everything else in the
+ * same drop still loads.
+ */
+private List<File> filterBackupFolderFiles(List<File> files) {
+    if (projectSettings == null || files.isEmpty()) return files;
+    String backupDir = projectSettings.loadBackupDirectory();
+    if (backupDir == null || backupDir.isBlank()) return files;
+
+    File backupRoot = new File(backupDir);
+    String prefix;
+    try {
+        prefix = backupRoot.getCanonicalPath() + File.separator;
+    } catch (java.io.IOException e) {
+        prefix = backupRoot.getAbsolutePath() + File.separator;
+    }
+
+    List<File> inBackup = new ArrayList<>();
+    for (File f : files) {
+        String abs;
+        try { abs = f.getCanonicalPath(); }
+        catch (java.io.IOException e) { abs = f.getAbsolutePath(); }
+        if (abs.startsWith(prefix)) inBackup.add(f);
+    }
+    if (inBackup.isEmpty()) return files;
+
+    StringBuilder msg = new StringBuilder();
+    msg.append(inBackup.size()).append(" file(s) are inside your backup folder:\n\n");
+    for (File f : inBackup) msg.append("  • ").append(f.getName()).append("\n");
+    msg.append("\nAdding them makes backup copies editable through CodeClip. ")
+       .append("Add them anyway?");
+
+    int choice = JOptionPane.showConfirmDialog(this, msg.toString(),
+            "Backup Folder Files Detected",
+            JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+    if (choice == JOptionPane.YES_OPTION) return files;
+
+    List<File> filtered = new ArrayList<>();
+    for (File f : files) {
+        if (!inBackup.contains(f)) filtered.add(f);
+    }
+    return filtered;
+}
 
 /**
      * Reports files that were not loaded because they exceed MAX_FILE_BYTES.
@@ -1607,70 +1766,78 @@ private void refreshStats() {
         charCountLabel.setText("Code Characters: " + totalChars);
     }
 
-    private void refreshPanels() {
-        List<PanelEntry> entries = new ArrayList<>();
-        List<String> insertionOrder = new ArrayList<>(repo.getClassCodeMap().keySet());
+private void refreshPanels() {
+    // Drop panels whose path is no longer in the repo. Needed when
+    // "Restore to Checkpoint" removes files created after the checkpoint —
+    // without this the panel sticks around even though classCodeMap no
+    // longer knows about the path, so the UI lies.
+    for (Component c : classPanel.getComponents()) {
+        if (c instanceof JPanel panel) {
+            Object storedPath = panel.getClientProperty("path");
+            if (storedPath instanceof String path && !repo.getClassCodeMap().containsKey(path)) {
+                classPanel.remove(panel);
+            }
+        }
+    }
 
-        for (Component c : classPanel.getComponents()) {
-            if (c instanceof JPanel panel) {
-                Object storedPath = panel.getClientProperty("path");
-                if (storedPath instanceof String path) {
-                    boolean disabled = repo.getDisabledClasses().contains(path);
-                    File file = repo.getClassFileMap().get(path);
-                    String name = (file != null) ? file.getName() : path;
-                    int insertionIdx = insertionOrder.indexOf(path);
-                    entries.add(new PanelEntry(panel, path, name, disabled, insertionIdx));
+    List<PanelEntry> entries = new ArrayList<>();
+    List<String> insertionOrder = new ArrayList<>(repo.getClassCodeMap().keySet());
 
-                    panel.setBackground(disabled
-                            ? ModeColors.getDisabledBackground()
-                            : ModeColors.getEnabledBackground());
-                    boolean unsynced = isUnsynced(path);
-                    Object labelObj = panel.getClientProperty("label");
-                    if (labelObj instanceof JLabel lbl) {
-                        lbl.setForeground(unsynced ? UNSYNCED_COLOR : UIManager.getColor("Label.foreground"));
-                        lbl.setToolTipText(unsynced ? "Modified since last checkpoint" : "In sync with checkpoint");
-                    }
-                    for (Component child : panel.getComponents()) {
-                        if (child instanceof JButton btn
-                                && (btn.getText().equals("Enable") || btn.getText().equals("Disable"))) {
-                            btn.setText(disabled ? "Enable" : "Disable");
-                        }
+    for (Component c : classPanel.getComponents()) {
+        if (c instanceof JPanel panel) {
+            Object storedPath = panel.getClientProperty("path");
+            if (storedPath instanceof String path) {
+                boolean disabled = repo.getDisabledClasses().contains(path);
+                File file = repo.getClassFileMap().get(path);
+                String name = (file != null) ? file.getName() : path;
+                int insertionIdx = insertionOrder.indexOf(path);
+                entries.add(new PanelEntry(panel, path, name, disabled, insertionIdx));
+
+                panel.setBackground(disabled
+                        ? ModeColors.getDisabledBackground()
+                        : ModeColors.getEnabledBackground());
+                boolean unsynced = isUnsynced(path);
+                Object labelObj = panel.getClientProperty("label");
+                if (labelObj instanceof JLabel lbl) {
+                    lbl.setForeground(unsynced ? UNSYNCED_COLOR : UIManager.getColor("Label.foreground"));
+                    lbl.setToolTipText(unsynced ? "Modified since last checkpoint" : "In sync with checkpoint");
+                }
+                for (Component child : panel.getComponents()) {
+                    if (child instanceof JButton btn
+                            && (btn.getText().equals("Enable") || btn.getText().equals("Disable"))) {
+                        btn.setText(disabled ? "Enable" : "Disable");
                     }
                 }
             }
         }
-
-        Comparator<PanelEntry> comparator = switch (sortMode) {
-            case 0 ->
-                Comparator.comparingInt(PanelEntry::insertionIdx);
-            case 1 ->
-                Comparator.comparing(e -> e.name().toLowerCase());
-            case 2 ->
-                Comparator
-                .comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
-                .thenComparingInt(PanelEntry::insertionIdx);
-            case 3 ->
-                Comparator
-                .comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
-                .thenComparing(e -> e.name().toLowerCase());
-            default ->
-                Comparator.comparingInt(PanelEntry::insertionIdx);
-        };
-        entries.sort(comparator);
-
-        classPanel.removeAll();
-        for (PanelEntry entry : entries) {
-            classPanel.add(entry.panel());
-        }
-        classPanel.revalidate();
-        classPanel.repaint();
-
-        if (treeViewActive && classTreePanel != null) {
-            classTreePanel.refresh();
-        }
     }
 
-    private record PanelEntry(JPanel panel, String path, String name,
+    Comparator<PanelEntry> comparator = switch (sortMode) {
+        case 0 -> Comparator.comparingInt(PanelEntry::insertionIdx);
+        case 1 -> Comparator.comparing(e -> e.name().toLowerCase());
+        case 2 -> Comparator
+                .comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
+                .thenComparingInt(PanelEntry::insertionIdx);
+        case 3 -> Comparator
+                .comparingInt((PanelEntry e) -> e.disabled() ? 1 : 0)
+                .thenComparing(e -> e.name().toLowerCase());
+        default -> Comparator.comparingInt(PanelEntry::insertionIdx);
+    };
+    entries.sort(comparator);
+
+    classPanel.removeAll();
+    for (PanelEntry entry : entries) {
+        classPanel.add(entry.panel());
+    }
+    classPanel.revalidate();
+    classPanel.repaint();
+
+    if (treeViewActive && classTreePanel != null) {
+        classTreePanel.refresh();
+    }
+}
+
+private record PanelEntry(JPanel panel, String path, String name,
             boolean disabled, int insertionIdx) {
 
     }
@@ -1730,16 +1897,18 @@ private void refreshStats() {
         btn.setForeground(UIManager.getColor("Button.foreground"));
     }
 
-    private boolean isUnsynced(String path) {
-        String current = repo.getClassCodeMap().get(path);
-        String checkpoint = repo.getCheckpointCodeMap().get(path);
-        if (current == null || checkpoint == null) {
-            return false;
-        }
-        return !current.equals(checkpoint);
-    }
+private boolean isUnsynced(String path) {
+    String current = repo.getClassCodeMap().get(path);
+    String checkpoint = repo.getCheckpointCodeMap().get(path);
+    if (current == null) return false;
+    // File exists in memory but not in the checkpoint map = created after
+    // the last checkpoint. Returning false here made new-file rows render
+    // as "in sync" in the panel, which is what made the bug invisible.
+    if (checkpoint == null) return true;
+    return !current.equals(checkpoint);
+}
 
-    private void restoreTimestampFromSnapshot(wv.codeclip.patch.PatchUndoManager.Entry entry) {
+private void restoreTimestampFromSnapshot(wv.codeclip.patch.PatchUndoManager.Entry entry) {
         if (entry == null) {
             return;
         }
@@ -1988,16 +2157,28 @@ private void restoreBuildInfoTitle() {
     }
 
 private void stampBuildInfo() {
-        // Bind project-scoped settings to the current project's folder before
-        // we check or prompt for name/tint — otherwise a rename prompt would
-        // save to global ~/codeclip.properties and leak across instances.
+    System.out.println("[Frame] stampBuildInfo start projectSourceRoot="
+            + projectSourceRoot + " projectSettings=" + (projectSettings != null));
+    reloadProjectSettings();
+    System.out.println("[Frame] after reloadProjectSettings root=" + projectSourceRoot
+            + " settings=" + (projectSettings != null)
+            + " hasName=" + projectNameManager.hasProjectName());
+    if (!projectNameManager.hasProjectName()) {
+        projectNameManager.promptForNameIfMissing(this);
+        titleFrozen = false;
+        System.out.println("[Frame] after prompt hasName="
+                + projectNameManager.hasProjectName()
+                + " hasPending=" + projectNameManager.hasPendingName());
+        // The paste just created a file — source root is usually detectable
+        // now even if the first reload ran before the file existed. Without
+        // this retry, pendingProjectName stays stashed forever.
         reloadProjectSettings();
-        if (!projectNameManager.hasProjectName()) {
-            projectNameManager.promptForNameIfMissing(this);
-            titleFrozen = false;
-        }
-        getBuildInfoStamper().stamp();
+        projectNameManager.flushPendingName();
+        System.out.println("[Frame] after retry settings=" + (projectSettings != null)
+                + " hasPending=" + projectNameManager.hasPendingName());
     }
+    getBuildInfoStamper().stamp();
+}
 
 private wv.codeclip.mainFrame.BuildInfoStamper getBuildInfoStamper() {
         if (buildInfoStamper == null) {
@@ -2091,6 +2272,7 @@ private void reloadProjectSettings() {
 
         projectNameManager.attachProjectSettings(projectSettings);
         protocolDirectoryManager.attachProjectSettings(projectSettings);
+        applyBackupCheckpointsIfNeeded();
 
         boolean nameOrTintChanged = !java.util.Objects.equals(
                 oldName, projectNameManager.getProjectName())
@@ -2145,6 +2327,230 @@ private void reloadProjectSettings() {
     }
 
 /**
+     * Restores checkpoint entries from the project's backup directory.
+     *
+     * Called from reloadProjectSettings on project attach. Restores only
+     * when:
+     *   - permanent checkpoint is enabled in this project's buildinfo.properties
+     *   - backup.directory is set and the folder exists with files
+     *   - at least one loaded file lives under the current project root
+     *
+     * Applies only to files that are loaded AND have an unambiguous backup
+     * match (exactly one loaded file with that name). Files in backup but
+     * not loaded are skipped — never resurrect deleted files from stale
+     * backup. Files loaded but not in backup keep their disk-content
+     * checkpoint (they were added after the last backup).
+     *
+     * The effect: after this runs, checkpointCodeMap holds the backup
+     * contents, classCodeMap holds disk contents. Any file where they
+     * differ triggers hasPendingRestores() → CheckpointDialog shows
+     * "you have pending restores" and Restore to Checkpoint pulls the
+     * backup state back in-memory. Persists across app restarts because
+     * the backup lives on disk.
+     */
+
+private void applyBackupCheckpointsIfNeeded() {
+    System.out.println("[Frame] applyBackup start settings="
+            + (projectSettings != null) + " root=" + projectSourceRoot
+            + " repoSize=" + repo.getClassCodeMap().size()
+            + " alreadyApplied=" + backupCheckpointsAppliedForRoot);
+    if (projectSettings == null || projectSourceRoot == null) {
+        System.out.println("[Frame] applyBackup: no project");
+        return;
+    }
+    if (repo.getClassCodeMap().isEmpty()) {
+        System.out.println("[Frame] applyBackup: repo empty");
+        return;
+    }
+
+    String rootKey = projectSourceRoot.getAbsolutePath();
+    if (rootKey.equals(backupCheckpointsAppliedForRoot)) {
+        System.out.println("[Frame] applyBackup: already applied for " + rootKey);
+        return;
+    }
+
+    String rootPrefix = rootKey + java.io.File.separator;
+    boolean anyFileUnderRoot = false;
+    for (java.io.File f : repo.getClassFileMap().values()) {
+        if (f == null) continue;
+        String fp = f.getAbsolutePath();
+        if (fp.equals(rootKey) || fp.startsWith(rootPrefix)) {
+            anyFileUnderRoot = true;
+            break;
+        }
+    }
+    if (!anyFileUnderRoot) {
+        System.out.println("[Frame] applyBackup: no loaded file under " + rootKey);
+        return;
+    }
+
+    try {
+        boolean enabled = projectSettings.loadPermanentCheckpointEnabled();
+        System.out.println("[Frame] applyBackup: permanentEnabled=" + enabled);
+        if (!enabled) return;
+
+        String base = projectSettings.loadBackupDirectory();
+        System.out.println("[Frame] applyBackup: baseDir='" + base + "'");
+        if (base == null || base.isBlank()) return;
+
+        java.io.File backupFolder = projectSettings.resolveBackupFolder();
+        System.out.println("[Frame] applyBackup: resolvedFolder=" + backupFolder);
+        if (backupFolder == null) return;
+
+        migrateStrayBackupsToSubfolder(projectSettings, backupFolder);
+
+        if (!backupFolder.exists() || !backupFolder.isDirectory()) {
+            appendTempLog("Backup restore: no backup folder at "
+                    + backupFolder.getAbsolutePath());
+            System.out.println("[Frame] applyBackup: folder missing");
+            return;
+        }
+
+        java.io.File[] backupFiles = backupFolder.listFiles(java.io.File::isFile);
+        if (backupFiles == null || backupFiles.length == 0) {
+            appendTempLog("Backup restore: folder is empty: "
+                    + backupFolder.getAbsolutePath());
+            System.out.println("[Frame] applyBackup: folder empty");
+            return;
+        }
+
+        int applied = 0;
+        for (java.io.File backupFile : backupFiles) {
+            String name = backupFile.getName();
+            List<String> matches = new ArrayList<>();
+            for (Map.Entry<String, java.io.File> e : repo.getClassFileMap().entrySet()) {
+                java.io.File loaded = e.getValue();
+                if (loaded != null && loaded.getName().equalsIgnoreCase(name)) {
+                    matches.add(e.getKey());
+                }
+            }
+            System.out.println("[Frame] applyBackup: file=" + name
+                    + " matches=" + matches.size());
+            if (matches.size() != 1) continue;
+            try {
+                String content = Files.readString(backupFile.toPath());
+                repo.setCheckpoint(matches.get(0), content);
+                applied++;
+            } catch (java.io.IOException ex) {
+                appendTempLog("Backup restore: read failed for " + name + ": " + ex.getMessage());
+            }
+        }
+
+        // Mark applied and register the Versions entry as soon as a backup
+        // folder with files was found — even when every file already matches
+        // its backup (applied == 0). Otherwise an unchanged checkpoint is
+        // invisible on the next launch, which is exactly the confusion this
+        // is fixing.
+        backupCheckpointsAppliedForRoot = rootKey;
+        addRestoredCheckpointVersionEntry(backupFolder, backupFiles);
+
+        if (applied > 0) {
+            appendTempLog("Restored " + applied + " checkpoint(s) from backup: "
+                    + backupFolder.getAbsolutePath());
+            refreshPanels();
+            if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
+                checkpointDialog.refresh();
+            }
+        } else {
+            appendTempLog("Backup restore: " + backupFiles.length
+                    + " backup file(s) already in sync. Folder: "
+                    + backupFolder.getAbsolutePath());
+        }
+    } catch (Exception ex) {
+        appendTempLog("Backup restore failed: " + ex);
+        ex.printStackTrace();
+    }
+}
+
+/**
+     * Moves files from the old flat-in-base-folder layout into the project
+     * subfolder. Idempotent — safe to call on every open. Skips files that
+     * already exist in the subfolder so live backups are never overwritten.
+     */
+    private void migrateStrayBackupsToSubfolder(wv.codeclip.io.ProjectSettings ps,
+                                                 java.io.File subfolder) {
+        String basePath = ps.loadBackupDirectory();
+        if (basePath == null || basePath.isBlank()) return;
+        java.io.File base = new java.io.File(basePath);
+        if (!base.exists() || !base.isDirectory()) return;
+        if (base.getAbsolutePath().equals(subfolder.getAbsolutePath())) return;
+
+        java.io.File[] strays = base.listFiles(java.io.File::isFile);
+        if (strays == null || strays.length == 0) return;
+        if (!subfolder.exists() && !subfolder.mkdirs()) return;
+
+        int migrated = 0;
+        for (java.io.File f : strays) {
+            java.io.File dest = new java.io.File(subfolder, f.getName());
+            if (dest.exists()) continue;
+            try {
+                Files.move(f.toPath(), dest.toPath());
+                migrated++;
+            } catch (java.io.IOException ignored) {
+            }
+        }
+        if (migrated > 0) {
+            appendTempLog("Migrated " + migrated
+                    + " backup file(s) from base folder to: "
+                    + subfolder.getAbsolutePath());
+        }
+    }
+
+/**
+     * Adds a single Versions-tab entry for the checkpoint restored from backup.
+     * Only runs on a fresh session (empty versionHistory) so later patches
+     * naturally stack above it — leaving the checkpoint entry at the bottom,
+     * marking "state on disk was at this point when you last saved".
+     *
+     * No-op when no name is persisted (user never named a checkpoint) or when
+     * versionHistory already has entries (user did something before this ran).
+     */
+
+    private boolean checkpointVersionEntryAdded = false;
+
+    private void addRestoredCheckpointVersionEntry(java.io.File backupFolder,
+                                                       java.io.File[] backupFiles) {
+            if (projectSettings == null) return;
+            if (checkpointVersionEntryAdded) return;
+            // A checkpoint entry may already exist if the user just pressed
+            // "Convert to Permanent" in this session (that path registers
+            // one immediately). Adding a second on the next dialog open
+            // would append a duplicate row that appears chronologically
+            // newer than patches that actually followed it.
+            boolean hasCheckpointEntry = versionHistory.stream()
+                    .anyMatch(VersionEvent::isCheckpoint);
+            if (hasCheckpointEntry) {
+                checkpointVersionEntryAdded = true;
+                return;
+            }
+            if (backupFiles == null || backupFiles.length == 0) return;
+            checkpointVersionEntryAdded = true;
+
+    String name = projectSettings.loadCheckpointName();
+    if (name == null || name.isBlank() || "Checkpoint set".equals(name)) {
+        name = "Checkpoint";
+    }
+
+    String time = "--:--:--";
+    List<String> fileNames = new ArrayList<>();
+    long newestMtime = 0;
+    for (java.io.File f : backupFiles) {
+        fileNames.add(f.getName());
+        newestMtime = Math.max(newestMtime, f.lastModified());
+    }
+    if (newestMtime > 0) {
+        time = new java.text.SimpleDateFormat("HH:mm:ss")
+                .format(new java.util.Date(newestMtime));
+    }
+
+    String filesStr = String.join(", ", fileNames);
+    versionHistory.add(new VersionEvent(name, filesStr, time, "?", List.of(name), true));
+    versionCurrentIdx = versionHistory.size() - 1;
+    refreshVersionPanel();
+    flashNewestVersionRow();
+}
+
+/**
      * Clears everything project-scoped in memory without touching disk.
      * Used by Reset and by Recent Projects restore. Recent Projects itself
      * is NOT cleared — that list is app-level history, not project state.
@@ -2155,10 +2561,12 @@ private void reloadProjectSettings() {
         syncUndoRedo.run();
         versionHistory.clear();
         versionCurrentIdx = -1;
+        checkpointVersionEntryAdded = false;
         refreshVersionPanel();
 
         projectSourceRoot = null;
         projectSettings = null;
+        backupCheckpointsAppliedForRoot = null;
         projectNameManager.resetToUnattached();
         protocolDirectoryManager.resetToUnattached();
 
@@ -2331,28 +2739,81 @@ private void reloadProjectSettings() {
     }
 
 private void openCheckpointDialog() {
-        if (checkpointDialog == null || !checkpointDialog.isDisplayable()) {
-            checkpointDialog = new CheckpointDialog(this, repo, () -> {
-                refreshText();
-                refreshPanels();
-                stampBuildInfo();
-                if (pendingIsCheckpoint) {
-                    addCheckpointVersionEvent();
-                }
-            }, () -> projectSettings);
-        } else {
-            checkpointDialog.setRefreshCallback(() -> {
-                refreshText();
-                refreshPanels();
-                stampBuildInfo();
-                if (pendingIsCheckpoint) {
-                    addCheckpointVersionEvent();
-                }
-            });
+    // Force a retry here — this covers the case where the initial restore
+    // at file-load time bailed out before the user's backup settings or
+    // project name were fully in place.
+    applyBackupCheckpointsIfNeeded();
+
+    if (checkpointDialog == null || !checkpointDialog.isDisplayable()) {
+        checkpointDialog = new CheckpointDialog(this, repo, () -> {
+            refreshText();
+            refreshPanels();
+            stampBuildInfo();
+            if (pendingIsCheckpoint) {
+                addCheckpointVersionEvent();
+            }
+        }, () -> projectSettings);
+    } else {
+        checkpointDialog.setRefreshCallback(() -> {
+            refreshText();
+            refreshPanels();
+            stampBuildInfo();
+            if (pendingIsCheckpoint) {
+                addCheckpointVersionEvent();
+            }
+        });
+    }
+    checkpointDialog.setOnCheckpointSetCallback(this::markNextVersionAsCheckpoint);
+    checkpointDialog.setOnRestoreCallback(this::onCheckpointRestored);
+    checkpointDialog.refresh();
+    checkpointDialog.setVisible(true);
+    }
+
+    /**
+     * Called by CheckpointDialog after Restore-to-Checkpoint succeeds.
+     *
+     * Clearing the undo stack is required: restore moved in-memory state
+     * back to the checkpoint, so every undo entry created AFTER the
+     * checkpoint now describes a state that no longer follows from the
+     * current one. If left in the stack, pressing Undo would jump the
+     * user to some intermediate pre-restore state (e.g. state B when the
+     * checkpoint was A and pre-restore was C). Undoing PAST the checkpoint
+     * is also undesirable after a deliberate restore — "I want to be at
+     * the checkpoint" means starting fresh from there.
+     *
+     * Version history is truncated to the checkpoint event for the same
+     * reason: entries after it describe patches whose effects no longer
+     * exist. Leaving them would show zombie "undone" rows the user can
+     * never reach.
+     */
+    private void onCheckpointRestored() {
+        System.out.println("[Frame] onCheckpointRestored: clearing undo, truncating versions");
+        undoManager.clear();
+        syncUndoRedo.run();
+
+        int checkpointIdx = -1;
+        int scanFrom = Math.min(versionCurrentIdx, versionHistory.size() - 1);
+        for (int i = scanFrom; i >= 0; i--) {
+            if (versionHistory.get(i).isCheckpoint()) {
+                checkpointIdx = i;
+                break;
+            }
         }
-        checkpointDialog.setOnCheckpointSetCallback(this::markNextVersionAsCheckpoint);
-        checkpointDialog.refresh();
-        checkpointDialog.setVisible(true);
+        if (checkpointIdx >= 0) {
+            while (versionHistory.size() > checkpointIdx + 1) {
+                versionHistory.remove(versionHistory.size() - 1);
+            }
+            versionCurrentIdx = checkpointIdx;
+            System.out.println("[Frame] version history truncated to index " + checkpointIdx);
+            refreshVersionPanel();
+        } else {
+            // Edge case: no checkpoint event in history (e.g. user set
+            // checkpoint before this session's version tracking started,
+            // or history was lost). Don't touch it — undoing is disabled
+            // anyway, and the current version pointer being slightly
+            // stale is less confusing than wiping everything.
+            System.out.println("[Frame] no checkpoint entry in version history; left as-is");
+        }
     }
 
 public void setLastPatchError(List<PatchApplier.PatchResult> results) {
@@ -2364,16 +2825,18 @@ public void setLastPatchError(List<PatchApplier.PatchResult> results) {
         }
     }
 
-    public void onCodeChanged(String path, String code) {
-        if (!repo.getCheckpointCodeMap().containsKey(path)) {
-            repo.setCheckpoint(path, code);
-        }
-        if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
-            checkpointDialog.refresh();
-        }
-        refreshPanels();
-        updateCheckpointButtonColor(null);
+public void onCodeChanged(String path, String code) {
+    // Intentionally does NOT touch repo.setCheckpoint. This method fires
+    // for patches (existing files) and new pastes. Auto-promoting any path
+    // that wasn't already in the checkpoint map silently absorbed the very
+    // first edit after project load, which is exactly why "Set New
+    // Checkpoint" stayed disabled until a second edit.
+    if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
+        checkpointDialog.refresh();
     }
+    refreshPanels();
+    updateCheckpointButtonColor(null);
+}
 
 private void updateDirectoryButton() {
         if (godotDirMenuItem == null) {
@@ -2742,14 +3205,33 @@ private void appendToPersistentLog(String message) {
 /** Creates a dedicated version-history entry for a manual "Set New Checkpoint"
      *  action, so the star reliably lands on its own row instead of waiting to
      *  piggyback on some future unrelated edit. */
-    private void addCheckpointVersionEvent() {
+
+private void addCheckpointVersionEvent() {
         String time = java.time.LocalTime.now()
                 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         String build = pendingTargetBuild != null ? pendingTargetBuild : "?";
+
         while (versionHistory.size() > versionCurrentIdx + 1) {
             versionHistory.remove(versionHistory.size() - 1);
         }
-        String title = "Checkpoint set";
+
+        // Inherit name: prefer the version immediately below this new one
+        // (the last non-undone version), else fall back to the persisted name
+        // from buildinfo (survives app restarts where versionHistory starts empty).
+        String previousTitle = (versionCurrentIdx >= 0 && versionCurrentIdx < versionHistory.size())
+                ? versionHistory.get(versionCurrentIdx).title()
+                : null;
+        String title = (previousTitle != null && !previousTitle.isBlank())
+                ? previousTitle
+                : (projectSettings != null ? projectSettings.loadCheckpointName() : null);
+        if (title == null || title.isBlank()) {
+            title = "Checkpoint set";
+        }
+
+        if (projectSettings != null) {
+            projectSettings.saveCheckpointName(title);
+        }
+
         versionHistory.add(new VersionEvent(title, "", time, build, List.of(title), true));
         versionCurrentIdx = versionHistory.size() - 1;
         pendingTargetBuild = null;
@@ -2979,11 +3461,21 @@ private JPanel createVersionRow(VersionEvent ev, boolean active) {
         row.add(icon, BorderLayout.WEST);
         row.add(content, BorderLayout.CENTER);
 
-        // Click → show detail popup
+        // Single click → detail dialog (delayed to detect double-click).
+        // Double click → inline rename (persists name for checkpoints).
         row.addMouseListener(new java.awt.event.MouseAdapter() {
+            private javax.swing.Timer singleClickTimer;
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
-                showVersionDetail(ev, active);
+                if (e.getClickCount() == 2) {
+                    if (singleClickTimer != null) singleClickTimer.stop();
+                    renameVersionEvent(ev);
+                } else if (e.getClickCount() == 1) {
+                    singleClickTimer = new javax.swing.Timer(250,
+                            evt -> showVersionDetail(ev, active));
+                    singleClickTimer.setRepeats(false);
+                    singleClickTimer.start();
+                }
             }
         });
 
@@ -2994,32 +3486,70 @@ private JPanel createVersionRow(VersionEvent ev, boolean active) {
      * Inserts a single styled line at the top of the persistent log pane.
      */
 
+private static final java.util.regex.Pattern FILE_PATH_IN_LOG_PATTERN =
+        java.util.regex.Pattern.compile(
+            "[\\w\\-\\\\./\\\\:]*\\.(?:java|py|yaml|yml|html|htm|js|ts|"
+            + "txt|properties|xml|json|md|css|gradle|bat|sh|cs|gd|gdscript|"
+            + "sql|ini|cfg|conf|toml)\\b"
+        );
+
 private void insertPersistentLogLine(String message, boolean isSeparator) {
-        StyledDocument doc = persistentLogPane.getStyledDocument();
-        try {
-            SimpleAttributeSet attrs = new SimpleAttributeSet();
-            StyleConstants.setFontFamily(attrs, Font.MONOSPACED);
-            StyleConstants.setFontSize(attrs, 12);
+    StyledDocument doc = persistentLogPane.getStyledDocument();
+    try {
+        SimpleAttributeSet baseStyle = new SimpleAttributeSet();
+        StyleConstants.setFontFamily(baseStyle, Font.MONOSPACED);
+        StyleConstants.setFontSize(baseStyle, 12);
 
-            if (isSeparator) {
-                StyleConstants.setForeground(attrs, LOG_SEP_COLOR);
-                StyleConstants.setBold(attrs, false);
-                doc.insertString(0, message + "\n", attrs);
-                SwingUtilities.invokeLater(() -> persistentLogPane.setCaretPosition(0));
-                return;
-            }
-
-            Color fg = resolveLogLineColor(message);
-            boolean bold = fg != null && !fg.equals(UIManager.getColor("TextArea.foreground"));
-            StyleConstants.setForeground(attrs, fg != null ? fg
-                    : (UIManager.getColor("TextArea.foreground") != null
-                    ? UIManager.getColor("TextArea.foreground") : Color.BLACK));
-            StyleConstants.setBold(attrs, bold);
-            doc.insertString(0, message + "\n", attrs);
+        if (isSeparator) {
+            StyleConstants.setForeground(baseStyle, LOG_SEP_COLOR);
+            doc.insertString(0, message + "\n", baseStyle);
             SwingUtilities.invokeLater(() -> persistentLogPane.setCaretPosition(0));
-        } catch (BadLocationException ignored) {
+            return;
         }
-    }
+
+        Color lineColor = resolveLogLineColor(message);
+        Color defaultFg = UIManager.getColor("TextArea.foreground");
+        if (defaultFg == null) defaultFg = Color.BLACK;
+
+        boolean lineHasOwnColor = lineColor != null && !lineColor.equals(defaultFg);
+        if (lineHasOwnColor) {
+            // "Class Created:", "✓", "✗", "Target Build:", section headers —
+            // respect the existing whole-line coloring.
+            StyleConstants.setForeground(baseStyle, lineColor);
+            StyleConstants.setBold(baseStyle, true);
+            doc.insertString(0, message + "\n", baseStyle);
+            SwingUtilities.invokeLater(() -> persistentLogPane.setCaretPosition(0));
+            return;
+        }
+
+        // Base-colored line — split it so file names come out in blue,
+        // matching the class-name highlight in the Notes view.
+        StyleConstants.setForeground(baseStyle, defaultFg);
+        SimpleAttributeSet pathStyle = new SimpleAttributeSet(baseStyle);
+        StyleConstants.setForeground(pathStyle, LOG_CLASS_COLOR);
+        StyleConstants.setBold(pathStyle, true);
+
+        String full = message + "\n";
+        java.util.regex.Matcher m = FILE_PATH_IN_LOG_PATTERN.matcher(full);
+        int last = 0;
+        int pos = 0;
+        while (m.find()) {
+            if (m.start() > last) {
+                String seg = full.substring(last, m.start());
+                doc.insertString(pos, seg, baseStyle);
+                pos += seg.length();
+            }
+            String pathSeg = m.group();
+            doc.insertString(pos, pathSeg, pathStyle);
+            pos += pathSeg.length();
+            last = m.end();
+        }
+        if (last < full.length()) {
+            doc.insertString(pos, full.substring(last), baseStyle);
+        }
+        SwingUtilities.invokeLater(() -> persistentLogPane.setCaretPosition(0));
+    } catch (BadLocationException ignored) {}
+}
 
 private Color resolveLogLineColor(String line) {
         if (line.startsWith("Copy ERROR:")) {
@@ -3198,7 +3728,11 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
             if (result == JOptionPane.OK_OPTION) {
                 String newTitle = titleField.getText();
                 if (newTitle != null && !newTitle.trim().isEmpty()) {
-                    ev.setTitle(newTitle.trim());
+                    String trimmed = newTitle.trim();
+                    ev.setTitle(trimmed);
+                    if (ev.isCheckpoint() && projectSettings != null) {
+                        projectSettings.saveCheckpointName(trimmed);
+                    }
                     refreshVersionPanel();
                     dlg.dispose();
                 }
@@ -3273,7 +3807,36 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
         dlg.setVisible(true);
     }
 
-    /** Parses ev.files() ("Foo.java, bar.js, ...") into a lowercase name list for matching. */
+/** Prompts for a new title and applies it. For checkpoints, persists to project buildinfo. */
+    private void renameVersionEvent(VersionEvent ev) {
+        if (ev == null) return;
+        JTextField titleField = new JTextField(ev.title());
+        titleField.setFont(titleField.getFont().deriveFont(14f));
+        titleField.setPreferredSize(new Dimension(420, 32));
+        titleField.selectAll();
+
+        JPanel panel = new JPanel(new BorderLayout(0, 8));
+        panel.add(new JLabel("Enter new title:"), BorderLayout.NORTH);
+        panel.add(titleField, BorderLayout.CENTER);
+        panel.setPreferredSize(new Dimension(440, 70));
+
+        int result = JOptionPane.showConfirmDialog(
+                this, panel, ev.isCheckpoint() ? "Rename Checkpoint" : "Rename Version",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (result != JOptionPane.OK_OPTION) return;
+
+        String newTitle = titleField.getText();
+        if (newTitle == null || newTitle.trim().isEmpty()) return;
+        newTitle = newTitle.trim();
+
+        ev.setTitle(newTitle);
+        if (ev.isCheckpoint() && projectSettings != null) {
+            projectSettings.saveCheckpointName(newTitle);
+        }
+        refreshVersionPanel();
+    }
+
+/** Parses ev.files() ("Foo.java, bar.js, ...") into a lowercase name list for matching. */
     private java.util.List<String> versionEventFileTargets(VersionEvent ev) {
         java.util.List<String> targetNames = new java.util.ArrayList<>();
         String filesStr = ev.files();
@@ -3614,5 +4177,17 @@ private wv.codeclip.codemap.CodeMapBuilder.Scope promptCodemapScope() {
     }
     return null; // Cancel / dialog dismissed
 }
+
+/** Keeps the Expand All / Collapse All button in sync with tree state. */
+    private void updateTreeCollapseButton() {
+        if (treeCollapseBtn == null || classTreePanel == null) return;
+        treeCollapseBtn.setVisible(treeViewActive);
+        if (!treeViewActive) return;
+        boolean allCollapsed = classTreePanel.isAllCollapsed();
+        treeCollapseBtn.setText(allCollapsed ? "⊞" : "⊟");
+        treeCollapseBtn.setToolTipText(allCollapsed
+                ? "Expand every folder in the tree"
+                : "Collapse every folder in the tree");
+    }
 
 }

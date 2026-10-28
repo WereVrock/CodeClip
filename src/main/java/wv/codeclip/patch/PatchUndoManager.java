@@ -81,35 +81,86 @@ public void clear() {
         }
         return current;
     }
-    private void restore(Map<String, String> snapshot, ClassRepository repo) throws IOException {
-        for (Map.Entry<String, String> entry : snapshot.entrySet()) {
-            String path = entry.getKey();
-            String code = entry.getValue();
-            File file = repo.getClassFileMap().get(path);
-            if (code == null) {
-                File target = (file != null) ? file : new File(path);
-                if (target.exists()) {
-                    Files.delete(target.toPath());
-                }
-                repo.getClassCodeMap().remove(path);
-                repo.getClassFileMap().remove(path);
-                repo.getDisabledClasses().remove(path);
-                if (panelRemovalCallback != null) {
-                    panelRemovalCallback.accept(path);
-                }
-            } else {
-                File target = (file != null) ? file : new File(path);
-                Files.writeString(target.toPath(), code);
-                boolean wasAbsent = !repo.getClassCodeMap().containsKey(path);
-                repo.getClassCodeMap().put(path, code);
-                repo.getClassFileMap().put(path, target);
-                repo.getDisabledClasses().remove(path);
-                if (wasAbsent && panelAddCallback != null) {
-                    panelAddCallback.accept(path, target.getName());
-                }
+
+private void restore(Map<String, String> snapshot, ClassRepository repo) throws IOException {
+    for (Map.Entry<String, String> entry : snapshot.entrySet()) {
+        String path = entry.getKey();
+        String code = entry.getValue();
+        File file = repo.getClassFileMap().get(path);
+        if (code == null) {
+            File target = (file != null) ? file : new File(path);
+            File parent = target.getParentFile();
+            if (target.exists()) {
+                Files.delete(target.toPath());
+            }
+            repo.getClassCodeMap().remove(path);
+            repo.getClassFileMap().remove(path);
+            repo.getDisabledClasses().remove(path);
+            if (panelRemovalCallback != null) panelRemovalCallback.accept(path);
+            deleteEmptyAncestors(parent);
+        } else {
+            File target = (file != null) ? file : new File(path);
+            File parentDir = target.getParentFile();
+            // Undo may have deleted the package folders. Redo must recreate
+            // them, otherwise Files.writeString throws NoSuchFileException
+            // and the whole redo silently fails.
+            if (parentDir != null && !parentDir.exists()) {
+                parentDir.mkdirs();
+            }
+            Files.writeString(target.toPath(), code);
+            boolean wasAbsent = !repo.getClassCodeMap().containsKey(path);
+            repo.getClassCodeMap().put(path, code);
+            repo.getClassFileMap().put(path, target);
+            repo.getDisabledClasses().remove(path);
+            if (wasAbsent && panelAddCallback != null) {
+                panelAddCallback.accept(path, target.getName());
             }
         }
     }
+}
+
+/**
+ * Deletes dir and its ancestors while they are empty and contain no
+ * project marker. The marker check is the safety net: any folder with
+ * buildinfo.properties, .git, pom.xml, build.gradle, settings.gradle,
+ * .project or Makefile is treated as user-meaningful and left alone.
+ */
+private void deleteEmptyAncestors(File dir) {
+    int safety = 20;
+    while (dir != null && safety-- > 0) {
+        if (hasProjectMarker(dir)) return;
+        File[] children = dir.listFiles();
+        if (children == null || children.length > 0) return;
+        try {
+            Files.delete(dir.toPath());
+            System.out.println("[Undo] deleted empty dir: " + dir);
+        } catch (IOException e) {
+            return;
+        }
+        dir = dir.getParentFile();
+    }
+}
+
+// Structural folder names are never deleted even when empty — otherwise
+// undoing a single new class in a fresh project would shred src/main/java
+// and break Redo (which then has nowhere to put the file back).
+private static final java.util.Set<String> PROTECTED_DIR_NAMES = java.util.Set.of(
+        "src", "main", "java", "test", "resources", "target", "build",
+        "dist", "out", "bin", "obj", "node_modules", "META-INF", "WEB-INF",
+        ".git", ".idea", ".vscode");
+
+private static boolean hasProjectMarker(File dir) {
+    if (dir == null) return true;
+    String name = dir.getName();
+    if (name != null && PROTECTED_DIR_NAMES.contains(name)) return true;
+    return new File(dir, "buildinfo.properties").exists()
+        || new File(dir, ".git").exists()
+        || new File(dir, ".project").exists()
+        || new File(dir, "pom.xml").exists()
+        || new File(dir, "build.gradle").exists()
+        || new File(dir, "settings.gradle").exists()
+        || new File(dir, "Makefile").exists();
+}
 
 public Entry peekUndo() {
     return undoStack.peekFirst();

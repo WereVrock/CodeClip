@@ -410,4 +410,37 @@ private JPanel buildClassRow(String path, int depth) {
         Color c = UIManager.getColor("Separator.foreground");
         return c != null ? c : new Color(180, 180, 180, 80);
     }
+
+/** True when every folder in the tree is currently collapsed. */
+    public boolean isAllCollapsed() {
+        return allFoldersCollapsed(buildTree());
+    }
+
+    private boolean allFoldersCollapsed(FolderNode node) {
+        for (FolderNode child : node.children.values()) {
+            if (!collapsed.getOrDefault(child.fullPath, true)) return false;
+            if (!allFoldersCollapsed(child)) return false;
+        }
+        return true;
+    }
+
+    /** Collapses every folder in the tree. */
+    public void collapseAll() {
+        setAllFoldersCollapsed(buildTree(), true);
+        refresh();
+    }
+
+    /** Expands every folder in the tree. */
+    public void expandAll() {
+        setAllFoldersCollapsed(buildTree(), false);
+        refresh();
+    }
+
+    private void setAllFoldersCollapsed(FolderNode node, boolean state) {
+        for (FolderNode child : node.children.values()) {
+            collapsed.put(child.fullPath, state);
+            setAllFoldersCollapsed(child, state);
+        }
+    }
+
 }

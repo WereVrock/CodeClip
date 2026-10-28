@@ -16,16 +16,23 @@ public class ClassFileWriter {
     /**
      * Creates a new .java file under the given source root + package path.
      */
-    public File createFile(String packageName, String className, String code, File sourceRoot)
-            throws IOException {
-        File dir = resolvePackageDir(packageName, sourceRoot);
-        if (!dir.exists()) dir.mkdirs();
-        File file = new File(dir, className + ".java");
-        Files.writeString(file.toPath(), code);
-        return file;
-    }
 
-    /**
+public File createFile(String packageName, String className, String code, File sourceRoot)
+        throws IOException {
+    File dir = resolvePackageDir(packageName, sourceRoot);
+    if (!dir.exists()) dir.mkdirs();
+    File file = new File(dir, className + ".java");
+    Files.writeString(file.toPath(), code);
+    // A newly created file is the baseline for its own future edits, so
+    // it starts in sync with its checkpoint. Placed here (not in
+    // onCodeChanged) so every paste handler benefits and only the "new
+    // file" path is affected — existing-file updates must remain visible
+    // as divergence.
+    repo.setCheckpoint(file.getAbsolutePath(), code);
+    return file;
+}
+
+/**
      * Overwrites an existing .java file.
      */
     public void updateFile(File file, String code) throws IOException {
