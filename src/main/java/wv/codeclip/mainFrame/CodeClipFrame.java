@@ -1247,6 +1247,24 @@ private void openLanguageDialog() {
             // modes). reloadProjectSettings re-detects and only re-attaches
             // when the effective root actually differs.
             reloadProjectSettings();
+
+            // Persist the mode change immediately. Without this, "mode" and
+            // "recent.projects.N.mode" stay at whatever was last written (the
+            // startup mode, or the last close) until the app is closed —
+            // so the on-disk file lies about the current mode, and restoring
+            // a project from Recent resets the session back to its
+            // originally-recorded mode (typically JAVA), not the mode the
+            // user most recently chose.
+            settings.saveMode(currentMode.name());
+            if (!repo.getClassCodeMap().isEmpty()) {
+                // Re-register the current project so its recent entry picks
+                // up the new mode. Without this, the entry keeps its original
+                // (stale) mode, and restoring it will override currentMode
+                // back to that stale mode.
+                registerCurrentProjectInRecent();
+            } else {
+                settings.saveProperties();
+            }
         }
     }
 
