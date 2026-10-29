@@ -45,7 +45,7 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <destination>${project.build.directory}/jpackage</destination>
+                    <destination>${project.basedir}/dist</destination>
                     <name>CodeClip</name>
                     <mainClass>wv.codeclip.CodeClip</mainClass>
                     <input>${project.build.directory}</input>
