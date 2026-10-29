@@ -18,11 +18,11 @@ import java.util.List;
  */
 public final class RecentProjects {
 
-    public static final int MAX_ENTRIES = 5;
+    public static final int MAX_ENTRIES = 10;
     private static final String KEY_PREFIX = "recent.projects.";
     private static final String FILE_SEPARATOR = "|";
 
-    public record Entry(String sourceRoot, String projectName, List<String> filePaths) {
+    public record Entry(String sourceRoot, String projectName, List<String> filePaths, String mode) {
         public String folderName() {
             if (sourceRoot == null || sourceRoot.isBlank()) return "";
             java.io.File f = new java.io.File(sourceRoot);
@@ -48,11 +48,12 @@ public final class RecentProjects {
         return entries.isEmpty();
     }
 
-    public void add(String sourceRoot, String projectName, List<String> filePaths) {
+    public void add(String sourceRoot, String projectName, List<String> filePaths, String mode) {
         if (sourceRoot == null || sourceRoot.isBlank()) return;
         entries.removeIf(e -> e.sourceRoot().equalsIgnoreCase(sourceRoot));
         entries.add(0, new Entry(sourceRoot, projectName == null ? "" : projectName,
-                filePaths == null ? List.of() : new ArrayList<>(filePaths)));
+                filePaths == null ? List.of() : new ArrayList<>(filePaths),
+                mode == null || mode.isBlank() ? "JAVA" : mode));
         while (entries.size() > MAX_ENTRIES) {
             entries.remove(entries.size() - 1);
         }
@@ -82,7 +83,8 @@ public final class RecentProjects {
                     if (!p.isEmpty()) files.add(p);
                 }
             }
-            entries.add(new Entry(root, name, files));
+            String mode = settings.getRawProperty(KEY_PREFIX + i + ".mode", "JAVA");
+            entries.add(new Entry(root, name, files, mode));
         }
     }
 
@@ -95,6 +97,7 @@ public final class RecentProjects {
             settings.setRawProperty(prefix + "sourceRoot", e.sourceRoot());
             settings.setRawProperty(prefix + "name", e.projectName() == null ? "" : e.projectName());
             settings.setRawProperty(prefix + "files", String.join(FILE_SEPARATOR, e.filePaths()));
+            settings.setRawProperty(prefix + "mode", e.mode() == null ? "JAVA" : e.mode());
         }
     }
 }

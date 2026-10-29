@@ -169,28 +169,7 @@ public File resolveBackupFolder() {
         System.out.println("[PS] resolveBackupFolder base empty");
         return null;
     }
-    File named  = new File(base, backupSubfolderName());
-    File legacy = new File(base, "codeclip_checkpoint");
-    int namedCount  = countFilesIn(named);
-    int legacyCount = countFilesIn(legacy);
-    System.out.println("[PS] resolveBackupFolder base=" + base
-            + " named=" + named.getName() + "(files=" + namedCount + ")"
-            + " legacy=" + legacy.getName() + "(files=" + legacyCount + ")");
-    if (namedCount > 0)  return named;
-    if (legacyCount > 0) return legacy;
-    return named;
-}
-
-private static int countFilesIn(File dir) {
-    if (dir == null || !dir.isDirectory()) return 0;
-    File[] files = dir.listFiles(File::isFile);
-    return files == null ? 0 : files.length;
-}
-
-private static boolean hasFiles(File dir) {
-    if (dir == null || !dir.isDirectory()) return false;
-    File[] files = dir.listFiles(File::isFile);
-    return files != null && files.length > 0;
+    return new File(base, backupSubfolderName());
 }
 
 private String backupSubfolderName() {

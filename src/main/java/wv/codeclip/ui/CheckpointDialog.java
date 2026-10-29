@@ -753,8 +753,6 @@ private String backupCheckpointFiles() {
     File subfolder = ps.resolveBackupFolder();
     if (subfolder == null) return null;
 
-    migrateStrayBackupFiles(ps, subfolder);
-
     if (!subfolder.exists() && !subfolder.mkdirs()) {
         JOptionPane.showMessageDialog(this,
                 "Could not create backup folder:\n" + subfolder.getAbsolutePath(),
@@ -795,35 +793,7 @@ private String backupCheckpointFiles() {
     return sb.toString();
 }
 
-/**
-     * One-time migration: files written by the old flat-in-base-folder scheme
-     * are moved into the new project subfolder. Never overwrites files already
-     * present in the subfolder — those are considered live backups.
-     */
-    private int migrateStrayBackupFiles(ProjectSettings ps, File subfolder) {
-        String basePath = ps.loadBackupDirectory();
-        if (basePath == null || basePath.isBlank()) return 0;
-        File base = new File(basePath);
-        if (!base.exists() || !base.isDirectory()) return 0;
-        if (base.getAbsolutePath().equals(subfolder.getAbsolutePath())) return 0;
 
-        File[] strays = base.listFiles(File::isFile);
-        if (strays == null || strays.length == 0) return 0;
-
-        if (!subfolder.exists() && !subfolder.mkdirs()) return 0;
-
-        int migrated = 0;
-        for (File f : strays) {
-            File dest = new File(subfolder, f.getName());
-            if (dest.exists()) continue;
-            try {
-                java.nio.file.Files.move(f.toPath(), dest.toPath());
-                migrated++;
-            } catch (IOException ignored) {
-            }
-        }
-        return migrated;
-    }
 
 /** Returns a usable backup directory path, creating it if missing. Prompts the user once if none is configured. Returns null on cancel. */
 

@@ -2397,8 +2397,6 @@ private void applyBackupCheckpointsIfNeeded() {
         System.out.println("[Frame] applyBackup: resolvedFolder=" + backupFolder);
         if (backupFolder == null) return;
 
-        migrateStrayBackupsToSubfolder(projectSettings, backupFolder);
-
         if (!backupFolder.exists() || !backupFolder.isDirectory()) {
             appendTempLog("Backup restore: no backup folder at "
                     + backupFolder.getAbsolutePath());
@@ -2462,39 +2460,7 @@ private void applyBackupCheckpointsIfNeeded() {
     }
 }
 
-/**
-     * Moves files from the old flat-in-base-folder layout into the project
-     * subfolder. Idempotent — safe to call on every open. Skips files that
-     * already exist in the subfolder so live backups are never overwritten.
-     */
-    private void migrateStrayBackupsToSubfolder(wv.codeclip.io.ProjectSettings ps,
-                                                 java.io.File subfolder) {
-        String basePath = ps.loadBackupDirectory();
-        if (basePath == null || basePath.isBlank()) return;
-        java.io.File base = new java.io.File(basePath);
-        if (!base.exists() || !base.isDirectory()) return;
-        if (base.getAbsolutePath().equals(subfolder.getAbsolutePath())) return;
 
-        java.io.File[] strays = base.listFiles(java.io.File::isFile);
-        if (strays == null || strays.length == 0) return;
-        if (!subfolder.exists() && !subfolder.mkdirs()) return;
-
-        int migrated = 0;
-        for (java.io.File f : strays) {
-            java.io.File dest = new java.io.File(subfolder, f.getName());
-            if (dest.exists()) continue;
-            try {
-                Files.move(f.toPath(), dest.toPath());
-                migrated++;
-            } catch (java.io.IOException ignored) {
-            }
-        }
-        if (migrated > 0) {
-            appendTempLog("Migrated " + migrated
-                    + " backup file(s) from base folder to: "
-                    + subfolder.getAbsolutePath());
-        }
-    }
 
 /**
      * Adds a single Versions-tab entry for the checkpoint restored from backup.
@@ -2623,7 +2589,8 @@ private void applyBackupCheckpointsIfNeeded() {
         for (wv.codeclip.io.RecentProjects.Entry entry : recentProjects.getEntries()) {
             JMenuItem item = new JMenuItem(entry.menuLabel());
             item.setToolTipText("<html>" + entry.sourceRoot()
-                    + "<br>" + entry.filePaths().size() + " file(s)</html>");
+                    + "<br>" + entry.filePaths().size() + " file(s)"
+                    + "<br>Mode: " + (entry.mode() == null ? "JAVA" : entry.mode()) + "</html>");
             item.addActionListener(e -> restoreRecentProject(entry));
             recentProjectsMenu.add(item);
         }
@@ -2674,6 +2641,29 @@ private void applyBackupCheckpointsIfNeeded() {
         }
 
         resetProjectState();
+
+        // Apply the AppMode that was recorded the last time this project was
+        // registered. Must run BEFORE addFilesBatched, because the batch's
+        // completion path calls autoSetModeDirectoryFromRepo / reloadProjectSettings,
+        // both of which read ModeContext.getMode(). Unknown/missing modes fall
+        // back to the current mode (old entries, hand-edited properties).
+        if (entry.mode() != null && !entry.mode().isBlank()) {
+            try {
+                AppMode restoredMode = AppMode.valueOf(entry.mode());
+                if (restoredMode != currentMode) {
+                    currentMode = restoredMode;
+                    if (fileDropHandler != null) {
+                        fileDropHandler.setMode(currentMode);
+                    }
+                    wv.codeclip.modecontext.ModeContext.setMode(currentMode);
+                    updateDirectoryButton();
+                    updateModeLabel();
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Stored mode is not a known AppMode — keep current mode.
+            }
+        }
+
         addFilesBatched(existing);
     }
 
@@ -2716,7 +2706,7 @@ private void applyBackupCheckpointsIfNeeded() {
             rootPath = commonParentDirOf(paths);
             if (rootPath == null) return;
         }
-        recentProjects.add(rootPath, projectNameManager.getProjectName(), paths);
+        recentProjects.add(rootPath, projectNameManager.getProjectName(), paths, currentMode.name());
         recentProjects.save(settings);
         settings.saveProperties();
     }
