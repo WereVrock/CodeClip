@@ -76,6 +76,9 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private final JLabel charCountLabel = new JLabel("Code Characters: 0");
 
     private AppMode currentMode = AppMode.JAVA;
+    /** When true the real mode is picked from the project being loaded. */
+    private boolean fluidMode = false;
+    private static final String FLUID_LABEL = "FLUID (auto-detect)";
     private FileDropHandler fileDropHandler;
     private final ClassRepository repo = new ClassRepository();
     private final ClassActions actions;
@@ -96,6 +99,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private JMenuItem fuzzySettingsMenuItem;
     private JMenuItem genericFuzzySettingsMenuItem;
     private JMenuItem copyMetaItem;
+    private JMenuItem changeMainClassMenuItem;
     private final SettingsManager settings = new SettingsManager();
     private JCheckBoxMenuItem autoReplaceInsertConflictItem;
     private JCheckBoxMenuItem compileCheckItem;
@@ -158,6 +162,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
      * from its own backup independently.
      */
     private String backupCheckpointsAppliedForRoot = null;
+    /** Loaded paths whose checkpoint was already taken from the backup folder. */
+    private final java.util.Set<String> backupAppliedPaths = new java.util.HashSet<>();
+    /** Root for which a "no/empty backup folder" message was already logged. */
+    private String backupWarnedForRoot = null;
     /**
      * True immediately after Reset. The first batch that lands while this is
      * true forces auto-set of the current mode's directory — even if one is
@@ -258,10 +266,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 includeInstructionsCheck::isSelected
         );
 
-        setTitle("Code Clip");
+        setTitle("CodeClip " + wv.codeclip.config.AppVersion.getVersionLabel());
         setIcon();
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setBounds(settings.loadFrameBounds());
+        setBounds(ensureOnScreen(settings.loadFrameBounds()));
         setLayout(new BorderLayout());
 
         buildUI();
@@ -269,6 +277,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
 // Load persisted state
         currentMode = AppMode.valueOf(settings.loadMode());
+        fluidMode = Boolean.parseBoolean(settings.getRawProperty("fluid.mode", "false"));
         wv.codeclip.modecontext.ModeContext.setMode(currentMode);
         if (fileDropHandler != null) {
             fileDropHandler.setMode(currentMode);
@@ -296,12 +305,12 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         javax.swing.Timer titleTimer = new javax.swing.Timer(150, null);
         titleTimer.addActionListener(e -> {
             restoreBuildInfoTitle();
-            if (!getTitle().equals("Code Clip")) {
+            if (titleFrozen) {
                 titleTimer.stop();
                 return;
             }
             restoreBuildInfoTitleFromDisk();
-            if (!getTitle().equals("Code Clip")) {
+            if (titleFrozen) {
                 titleTimer.stop();
                 return;
             }
@@ -343,7 +352,9 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
             @Override
             public void windowClosing(java.awt.event.WindowEvent e) {
                 clearTempLogs();
-                settings.saveFrameBounds(getBounds());
+                if ((getExtendedState() & Frame.ICONIFIED) == 0) {
+                    settings.saveFrameBounds(getBounds());
+                }
                 settings.saveDividerPosition(split.getDividerLocation());
                 settings.saveNotes(notesBuffer);
                 settings.saveIncludeInstructions(includeInstructionsCheck.isSelected());
@@ -368,7 +379,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         // several Linux WMs, and Windows in certain focus states) silently
         // ignore setAlwaysOnTop calls made before the peer is realized, which
         // is why it previously only "worked" by accident depending on timing.
-        SwingUtilities.invokeLater(() -> setAlwaysOnTop(alwaysOnTopCheck.isSelected()));
+        SwingUtilities.invokeLater(() -> {
+            setAlwaysOnTop(alwaysOnTopCheck.isSelected());
+            setIcon();
+        });
     }
 
 // ------------------------------------------------------------------
@@ -400,6 +414,11 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 + "resets current state, and rebinds everything to the new project.");
         quickSetupItem.addActionListener(e -> quickSetup());
         fileMenu.add(quickSetupItem);
+        fileMenu.addSeparator();
+        JMenuItem saveStateItem = new JMenuItem("Save Project State Now");
+        saveStateItem.setToolTipText("Writes all loaded files into Recent Projects and the startup file list.");
+        saveStateItem.addActionListener(e -> saveProjectStateNow());
+        fileMenu.add(saveStateItem);
         menuBar.add(fileMenu);
 
         JMenu settingsMenu = new JMenu("Settings");
@@ -424,7 +443,8 @@ settingsMenu.add(compileCheckItem);
         JMenuItem mainClassItem = new JMenuItem("Change Main Class…");
         mainClassItem.setToolTipText("Java mode: change which class's folder new pasted classes default to.");
         mainClassItem.addActionListener(e -> openChangeMainClassDialog());
-        settingsMenu.add(mainClassItem);
+        changeMainClassMenuItem = mainClassItem;
+        fileMenu.add(mainClassItem);
         autoReplaceInsertConflictItem = new JCheckBoxMenuItem("Auto-Replace Duplicate Methods");
         autoReplaceInsertConflictItem.setToolTipText(
                 "Java mode only: when INSERT_METHOD finds an existing method with a different body, "
@@ -434,11 +454,11 @@ settingsMenu.add(compileCheckItem);
         godotDirMenuItem = new JMenuItem("Godot Directory…");
         godotDirMenuItem.addActionListener(e -> openGodotDirectoryDialog());
         godotDirMenuItem.setVisible(false);
-        settingsMenu.add(godotDirMenuItem);
+        fileMenu.add(godotDirMenuItem);
         htmlDirMenuItem = new JMenuItem("HTML Directory…");
         htmlDirMenuItem.addActionListener(e -> openHtmlDirectoryDialog());
         htmlDirMenuItem.setVisible(false);
-        settingsMenu.add(htmlDirMenuItem);
+        fileMenu.add(htmlDirMenuItem);
         fuzzySettingsMenuItem = new JMenuItem("Fuzzy Match Settings…");
         fuzzySettingsMenuItem.addActionListener(e ->
                 new wv.codeclip.html.HtmlFuzzySettingsDialog(this).setVisible(true));
@@ -447,7 +467,7 @@ settingsMenu.add(compileCheckItem);
         genericDirMenuItem = new JMenuItem("Generic Directory…");
         genericDirMenuItem.addActionListener(e -> openGenericDirectoryDialog());
         genericDirMenuItem.setVisible(false);
-        settingsMenu.add(genericDirMenuItem);
+        fileMenu.add(genericDirMenuItem);
         genericFuzzySettingsMenuItem = new JMenuItem("Generic Fuzzy Match Settings…");
         genericFuzzySettingsMenuItem.addActionListener(e ->
                 new wv.codeclip.generic.GenericFuzzySettingsDialog(this).setVisible(true));
@@ -465,16 +485,20 @@ settingsMenu.add(compileCheckItem);
         JMenuItem copyEnablerItem = new JMenuItem("Copy Enable Instructions");
         copyEnablerItem.addActionListener(e -> {
             new ClipboardService().write(
-                    "Write the command @@Enable to allow the user to enable the classes you want by copy pasting the command\n\n"
-                    + "@@Enable ClassName1, ClassName2, ClassName3" +"\n if you are working with javascripts, add .js to file end."
+                    "To see specific files, give the user ONE command line (ideally alone in a code block) that they paste into CodeClip:\n\n"
+                    + "@@Enable FileA.ext, FileB.ext, FileC.ext\n\n"
+                    + "Rules: use the exact file names WITH their extension (e.g. SceneSetup.js, Foo.java, style.css); "
+                    + "separate with commas; keep all names on that one line; put no other text on that line. "
+                    + "A relative path (js/app.js) is allowed to disambiguate duplicate names."
             );
         });
         extraMenu.add(copyEnablerItem);
         JMenuItem copyCopierItem = new JMenuItem("Copy Copier Instructions");
         copyCopierItem.addActionListener(e -> {
             new ClipboardService().write(
-                    "Use @@Copy to copy the classes you want see\n\n"
-                    + "@@Copy ClassName1, ClassName2, ClassName3"
+                    "To read specific files, give the user ONE command line (ideally alone in a code block). They paste it and CodeClip copies those files so they can send them back to you:\n\n"
+                    + "@@Copy FileA.ext, FileB.ext, FileC.ext\n\n"
+                    + "Same rules as @@Enable: exact names with extension, comma-separated, one line, nothing else on it."
             );
         });
         extraMenu.add(copyCopierItem);
@@ -529,9 +553,10 @@ settingsMenu.add(compileCheckItem);
             );
             if (confirm == JOptionPane.YES_OPTION) {
                 resetProjectState();
+                enterFluidMode();
             }
         });
-        systemMenu.add(resetItem);
+        fileMenu.add(resetItem);
         lastErrorMenuItem = new JMenuItem("Last Error");
         lastErrorMenuItem.setEnabled(false);
         lastErrorMenuItem.addActionListener(e -> {
@@ -564,7 +589,7 @@ settingsMenu.add(compileCheckItem);
             @Override public void menuDeselected(javax.swing.event.MenuEvent e) {}
             @Override public void menuCanceled(javax.swing.event.MenuEvent e) {}
         });
-        systemMenu.add(recentProjectsMenu);
+        fileMenu.add(recentProjectsMenu);
 
         menuBar.add(systemMenu);
 
@@ -630,6 +655,7 @@ settingsMenu.add(compileCheckItem);
             if (changed) {
                 stampBuildInfo();
                 addVersionEventFromUndoTop();
+                registerCurrentProjectInRecent();
                 // Re-read every loaded file from disk so external edits made
                 // between pastes are pulled in too. Silent variant: no
                 // missing-file dialogs, missing files stay in the repo and
@@ -755,11 +781,19 @@ settingsMenu.add(compileCheckItem);
         JButton enableAllBtn = new JButton("Enable All");
         JButton disableAllBtn = new JButton("Disable All");
         enableAllBtn.addActionListener(e -> {
+            if (!classSearch.getText().isBlank()) {
+                setEnabledForFiltered(classSearch.getText(), true);
+                return;
+            }
             repo.getDisabledClasses().clear();
             refreshText();
             refreshPanels();
         });
         disableAllBtn.addActionListener(e -> {
+            if (!classSearch.getText().isBlank()) {
+                setEnabledForFiltered(classSearch.getText(), false);
+                return;
+            }
             repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
             refreshText();
             refreshPanels();
@@ -781,12 +815,16 @@ settingsMenu.add(compileCheckItem);
             }
         });
 
-        JPanel enableDisablePanel = new JPanel(new GridLayout(2, 1, 0, 2));
+        JPanel enableDisablePanel = new JPanel(new GridLayout(3, 1, 0, 2));
         JPanel enableDisableRow = new JPanel(new GridLayout(1, 2, 4, 0));
         enableDisableRow.add(enableAllBtn);
         enableDisableRow.add(disableAllBtn);
         enableDisablePanel.add(enableDisableRow);
         enableDisablePanel.add(sortOrder);
+        JButton addFolderBtn = new JButton("Add Folder…");
+        addFolderBtn.setToolTipText("Add every file in a folder and its subfolders that the current mode accepts");
+        addFolderBtn.addActionListener(e -> addFolderFromChooser());
+        enableDisablePanel.add(addFolderBtn);
 
         JPanel searchPanel = new JPanel(new BorderLayout(4, 0));
         JButton clearButton = new JButton("✕");
@@ -1103,7 +1141,9 @@ settingsMenu.add(compileCheckItem);
 // ------------------------------------------------------------------
 
 private void setIcon() {
-        setIconImage(wv.codeclip.mainFrame.AppIconFactory.build(projectNameManager.getIconTintSeed()));
+        long seed = projectNameManager.getIconTintSeed();
+        setIconImages(wv.codeclip.mainFrame.AppIconFactory.buildAll(seed));
+        applyTaskbarBadge(seed);
     }
 
 private void showLoadBar() {
@@ -1223,49 +1263,39 @@ private void installDnD() {
 
 private void openLanguageDialog() {
         AppMode[] modes = AppMode.values();
-        AppMode selected = (AppMode) JOptionPane.showInputDialog(
+        Object[] options = new Object[modes.length + 1];
+        options[0] = FLUID_LABEL;
+        System.arraycopy(modes, 0, options, 1, modes.length);
+        Object initial = fluidMode ? FLUID_LABEL : currentMode;
+
+        Object selected = JOptionPane.showInputDialog(
                 this,
                 "Select language mode:",
                 "Language",
                 JOptionPane.QUESTION_MESSAGE,
                 null,
-                modes,
-                currentMode
+                options,
+                initial
         );
-        if (selected != null && selected != currentMode) {
-            currentMode = selected;
-            if (fileDropHandler != null) {
-                fileDropHandler.setMode(currentMode);
-            }
-            wv.codeclip.modecontext.ModeContext.setMode(currentMode);
-            updateDirectoryButton();
-            updateModeLabel();
-            refreshText();
-            refreshPanels();
-            // Mode change can change what detectSourceRoot() returns
-            // (HtmlDirectory / GenericDirectory are consulted first in those
-            // modes). reloadProjectSettings re-detects and only re-attaches
-            // when the effective root actually differs.
-            reloadProjectSettings();
-
-            // Persist the mode change immediately. Without this, "mode" and
-            // "recent.projects.N.mode" stay at whatever was last written (the
-            // startup mode, or the last close) until the app is closed —
-            // so the on-disk file lies about the current mode, and restoring
-            // a project from Recent resets the session back to its
-            // originally-recorded mode (typically JAVA), not the mode the
-            // user most recently chose.
-            settings.saveMode(currentMode.name());
-            if (!repo.getClassCodeMap().isEmpty()) {
-                // Re-register the current project so its recent entry picks
-                // up the new mode. Without this, the entry keeps its original
-                // (stale) mode, and restoring it will override currentMode
-                // back to that stale mode.
-                registerCurrentProjectInRecent();
-            } else {
-                settings.saveProperties();
-            }
+        if (selected == null) {
+            return;
         }
+        if (FLUID_LABEL.equals(selected)) {
+            if (fluidMode) {
+                return;
+            }
+            fluidMode = true;
+            saveFluidFlag();
+            switchMode(detectModeForFiles(repo.getClassFileMap().values()));
+            return;
+        }
+        AppMode chosen = (AppMode) selected;
+        if (!fluidMode && chosen == currentMode) {
+            return;
+        }
+        fluidMode = false;
+        saveFluidFlag();
+        switchMode(chosen);
     }
 
 private void quickSetup() {
@@ -1369,17 +1399,38 @@ private void quickSetup() {
      * modeLabel is otherwise only initialized once in buildUI() and silently
      * goes stale.
      */
-    private void updateModeLabel() {
+
+private void updateModeLabel() {
         if (modeLabel != null) {
-            modeLabel.setText(currentMode.toString());
+            modeLabel.setText(fluidMode
+                    ? "FLUID \u2192 " + currentMode
+                    : currentMode.toString());
         }
     }
 
-    private void addClass(File file) {
+private void addClass(File file) {
         addFilesBatched(List.of(file));
     }
 
 private void addFilesBatched(List<File> files) {
+    if (files.isEmpty()) return;
+    if (repo.getClassCodeMap().isEmpty()) {
+        AppMode detected = detectModeForFiles(files);
+        if (detected != currentMode) {
+            switchMode(detected);
+        }
+        appendTempLog("Project language: " + detected);
+        // The drop may have been collected in a broader mode (GENERIC accepts
+        // everything); keep only what the detected language accepts.
+        List<File> modeFiltered = new ArrayList<>();
+        for (File f : files) {
+            if (currentMode.accepts(f.getName())) {
+                modeFiltered.add(f);
+            }
+        }
+        files = modeFiltered;
+    }
+    files = skipBuildInfoOutsideJava(files);
     if (files.isEmpty()) return;
     files = filterBackupFolderFiles(files);
     if (files.isEmpty()) return;
@@ -1464,42 +1515,90 @@ private void addFilesBatched(List<File> files) {
  * Declining removes only the backup-resident files; everything else in the
  * same drop still loads.
  */
+
 private List<File> filterBackupFolderFiles(List<File> files) {
-    if (projectSettings == null || files.isEmpty()) return files;
-    String backupDir = projectSettings.loadBackupDirectory();
-    if (backupDir == null || backupDir.isBlank()) return files;
-
-    File backupRoot = new File(backupDir);
-    String prefix;
-    try {
-        prefix = backupRoot.getCanonicalPath() + File.separator;
-    } catch (java.io.IOException e) {
-        prefix = backupRoot.getAbsolutePath() + File.separator;
-    }
-
-    List<File> inBackup = new ArrayList<>();
+    // The marker file is bookkeeping, never a project file.
+    List<File> batch = new ArrayList<>();
     for (File f : files) {
-        String abs;
-        try { abs = f.getCanonicalPath(); }
-        catch (java.io.IOException e) { abs = f.getAbsolutePath(); }
-        if (abs.startsWith(prefix)) inBackup.add(f);
+        if (!f.getName().equals(CheckpointDialog.CHECKPOINT_MARKER)) batch.add(f);
     }
-    if (inBackup.isEmpty()) return files;
+    if (batch.isEmpty()) return batch;
 
-    StringBuilder msg = new StringBuilder();
-    msg.append(inBackup.size()).append(" file(s) are inside your backup folder:\n\n");
-    for (File f : inBackup) msg.append("  • ").append(f.getName()).append("\n");
-    msg.append("\nAdding them makes backup copies editable through CodeClip. ")
-       .append("Add them anyway?");
+    // Checkpoint folders: this project's own one, plus any ancestor folder of a
+    // dropped file that carries the marker file. The base backup.directory is
+    // NOT a checkpoint folder (it may be a parent of the whole workspace).
+    Map<String, File> cpFolders = new LinkedHashMap<>();
+    if (projectSettings != null) {
+        File resolved = projectSettings.resolveBackupFolder();
+        if (resolved != null && resolved.isDirectory()) {
+            cpFolders.put(canonicalPathOf(resolved), resolved);
+        }
+    }
+    for (File f : batch) {
+        File dir = f.getParentFile();
+        for (int depth = 0; depth < 6 && dir != null; depth++) {
+            if (new File(dir, CheckpointDialog.CHECKPOINT_MARKER).isFile()) {
+                cpFolders.putIfAbsent(canonicalPathOf(dir), dir);
+                break;
+            }
+            dir = dir.getParentFile();
+        }
+    }
+    if (cpFolders.isEmpty()) return batch;
 
-    int choice = JOptionPane.showConfirmDialog(this, msg.toString(),
-            "Backup Folder Files Detected",
-            JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-    if (choice == JOptionPane.YES_OPTION) return files;
+    java.util.Set<String> batchPaths = new java.util.HashSet<>();
+    for (File f : batch) batchPaths.add(canonicalPathOf(f));
 
+    java.util.Set<String> drop = new java.util.HashSet<>();
+    for (File folder : cpFolders.values()) {
+        File[] inFolder = folder.listFiles(x -> x.isFile()
+                && !x.getName().equals(CheckpointDialog.CHECKPOINT_MARKER)
+                && !x.getName().equalsIgnoreCase(BUILD_INFO_FILE)
+                && currentMode.accepts(x.getName()));
+        if (inFolder == null || inFolder.length == 0) continue;
+
+        // Only the ENTIRE folder being added is asked about.
+        boolean entire = true;
+        for (File x : inFolder) {
+            if (!batchPaths.contains(canonicalPathOf(x))) {
+                entire = false;
+                break;
+            }
+        }
+        if (!entire) continue;
+
+        StringBuilder list = new StringBuilder();
+        for (File x : inFolder) list.append("  • ").append(x.getName()).append("\n");
+        JTextArea listArea = new JTextArea(list.toString());
+        listArea.setEditable(false);
+        listArea.setCaretPosition(0);
+        JScrollPane listScroll = new JScrollPane(listArea);
+        int screenH = GraphicsEnvironment.getLocalGraphicsEnvironment()
+                .getMaximumWindowBounds().height;
+        int listH = Math.max(80, Math.min((int) (screenH * 0.5), 30 + inFolder.length * 18));
+        listScroll.setPreferredSize(new Dimension(480, listH));
+
+        JPanel panel = new JPanel(new BorderLayout(0, 8));
+        panel.add(new JLabel("<html>The entire checkpoint folder is being added (" + inFolder.length
+                + " file(s)):<br>" + folder.getAbsolutePath() + "</html>"), BorderLayout.NORTH);
+        panel.add(listScroll, BorderLayout.CENTER);
+        panel.add(new JLabel("<html>Adding it makes checkpoint backups editable through CodeClip.<br>"
+                + "Add the entire folder anyway?</html>"), BorderLayout.SOUTH);
+
+        Object[] opts = {"Add Entire Folder", "Skip Folder"};
+        int choice = JOptionPane.showOptionDialog(this, panel,
+                "Checkpoint Folder Detected",
+                JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE,
+                null, opts, opts[1]);
+        if (choice != 0) {
+            for (File x : inFolder) drop.add(canonicalPathOf(x));
+        }
+    }
+
+    if (drop.isEmpty()) return batch;
     List<File> filtered = new ArrayList<>();
-    for (File f : files) {
-        if (!inBackup.contains(f)) filtered.add(f);
+    for (File f : batch) {
+        if (!drop.contains(canonicalPathOf(f))) filtered.add(f);
     }
     return filtered;
 }
@@ -1578,6 +1677,9 @@ private void loadClassPathsBatched(String[] paths) {
             File f = new File(path);
             if (f.exists() && f.length() > MAX_FILE_BYTES) {
                 tooLarge.add(f);
+                continue;
+            }
+            if (currentMode != AppMode.JAVA && f.getName().equalsIgnoreCase(BUILD_INFO_FILE)) {
                 continue;
             }
             accepted.add(path);
@@ -2111,18 +2213,28 @@ private void refreshTitle() {
             return;
         }
         String info = wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
+        String ver = wv.codeclip.config.AppVersion.getVersionLabel();
         if (!info.equals("unknown")) {
             setTitle(buildWindowTitle(info));
             titleFrozen = true;
+        } else {
+            // No build info (typical for the packaged exe): still show the
+            // project name, and stay unfrozen so build info can apply later.
+            String project = projectNameManager.hasProjectName()
+                    ? projectNameManager.getProjectName() : null;
+            setTitle(project != null
+                    ? "CodeClip " + ver + " — " + project
+                    : "CodeClip " + ver);
         }
     }
 
 private String buildWindowTitle(String buildInfo) {
         String project = projectNameManager.hasProjectName() ? projectNameManager.getProjectName() : null;
+        String ver = wv.codeclip.config.AppVersion.getVersionLabel();
         if (project != null) {
-            return "Code Clip — " + project + " — " + buildInfo;
+            return "CodeClip " + ver + " — " + project + " — " + buildInfo;
         }
-        return "Code Clip — " + buildInfo;
+        return "CodeClip " + ver + " — " + buildInfo;
     }
 
 private void restoreBuildInfoTitle() {
@@ -2157,15 +2269,19 @@ private void restoreBuildInfoTitle() {
         }
     }
 
-    private boolean tryRegisterAndSetTitle(java.io.File candidate) {
+private boolean tryRegisterAndSetTitle(java.io.File candidate) {
         try {
             String content = java.nio.file.Files.readString(candidate.toPath());
             String timestamp = extractTimestampFromContent(content);
             if (timestamp != null) {
-                String path = candidate.getAbsolutePath();
-                repo.getClassCodeMap().put(path, content);
-                repo.getClassFileMap().put(path, candidate);
-                repo.setCheckpoint(path, content);
+                // Outside Java mode this file belongs to the edited project and
+                // must not be pulled into the file list.
+                if (currentMode == AppMode.JAVA) {
+                    String path = candidate.getAbsolutePath();
+                    repo.getClassCodeMap().put(path, content);
+                    repo.getClassFileMap().put(path, candidate);
+                    repo.setCheckpoint(path, content);
+                }
                 refreshTitle();
                 return true;
             }
@@ -2196,6 +2312,8 @@ private void stampBuildInfo() {
                 + " hasPending=" + projectNameManager.hasPendingName());
     }
     getBuildInfoStamper().stamp();
+    persistProjectMode();
+    hideBuildInfoOutsideJava();
 }
 
 private wv.codeclip.mainFrame.BuildInfoStamper getBuildInfoStamper() {
@@ -2277,6 +2395,10 @@ private void reloadProjectSettings() {
         // different dialogs (directory picker, source-root detection) can
         // return the same physical folder with different letter-casing.
         if (projectSourceRoot != null && sourceRoot.equals(projectSourceRoot)) {
+            // Root unchanged, but a later batch may have loaded more files
+            // that still carry a disk-based checkpoint — apply the backup to them.
+            persistProjectMode();
+            applyBackupCheckpointsIfNeeded();
             return;
         }
         projectSourceRoot = sourceRoot;
@@ -2312,6 +2434,7 @@ private void reloadProjectSettings() {
             appendTempLog("Project protocols folder: " + this.protocolLibrary.getProtocolsDir());
         }
 
+        persistProjectMode();
         // Project-scoped backup settings may differ — resync the checkpoint dialog
         if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
             checkpointDialog.refresh();
@@ -2336,6 +2459,9 @@ private void reloadProjectSettings() {
         try {
             String content = Files.readString(file.toPath());
             String path = file.getAbsolutePath();
+            if (currentMode != AppMode.JAVA && !repo.getClassCodeMap().containsKey(path)) {
+                return; // keep the generated properties file out of the file list outside Java mode
+            }
             repo.getClassCodeMap().put(path, content);
             repo.getClassFileMap().put(path, file);
             repo.setCheckpoint(path, content);
@@ -2368,25 +2494,11 @@ private void reloadProjectSettings() {
      */
 
 private void applyBackupCheckpointsIfNeeded() {
-    System.out.println("[Frame] applyBackup start settings="
-            + (projectSettings != null) + " root=" + projectSourceRoot
-            + " repoSize=" + repo.getClassCodeMap().size()
-            + " alreadyApplied=" + backupCheckpointsAppliedForRoot);
-    if (projectSettings == null || projectSourceRoot == null) {
-        System.out.println("[Frame] applyBackup: no project");
-        return;
-    }
-    if (repo.getClassCodeMap().isEmpty()) {
-        System.out.println("[Frame] applyBackup: repo empty");
-        return;
-    }
+    if (projectSettings == null || projectSourceRoot == null) return;
+    backupAppliedPaths.retainAll(repo.getClassCodeMap().keySet());
+    if (repo.getClassCodeMap().isEmpty()) return;
 
     String rootKey = projectSourceRoot.getAbsolutePath();
-    if (rootKey.equals(backupCheckpointsAppliedForRoot)) {
-        System.out.println("[Frame] applyBackup: already applied for " + rootKey);
-        return;
-    }
-
     String rootPrefix = rootKey + java.io.File.separator;
     boolean anyFileUnderRoot = false;
     for (java.io.File f : repo.getClassFileMap().values()) {
@@ -2397,40 +2509,40 @@ private void applyBackupCheckpointsIfNeeded() {
             break;
         }
     }
-    if (!anyFileUnderRoot) {
-        System.out.println("[Frame] applyBackup: no loaded file under " + rootKey);
-        return;
-    }
+    if (!anyFileUnderRoot) return;
 
     try {
-        boolean enabled = projectSettings.loadPermanentCheckpointEnabled();
-        System.out.println("[Frame] applyBackup: permanentEnabled=" + enabled);
-        if (!enabled) return;
+        if (!projectSettings.loadPermanentCheckpointEnabled()) return;
 
         String base = projectSettings.loadBackupDirectory();
-        System.out.println("[Frame] applyBackup: baseDir='" + base + "'");
         if (base == null || base.isBlank()) return;
 
         java.io.File backupFolder = projectSettings.resolveBackupFolder();
-        System.out.println("[Frame] applyBackup: resolvedFolder=" + backupFolder);
         if (backupFolder == null) return;
 
         if (!backupFolder.exists() || !backupFolder.isDirectory()) {
-            appendTempLog("Backup restore: no backup folder at "
-                    + backupFolder.getAbsolutePath());
-            System.out.println("[Frame] applyBackup: folder missing");
+            if (!rootKey.equals(backupWarnedForRoot)) {
+                backupWarnedForRoot = rootKey;
+                appendTempLog("Backup restore: no backup folder at "
+                        + backupFolder.getAbsolutePath());
+            }
             return;
         }
 
-        java.io.File[] backupFiles = backupFolder.listFiles(java.io.File::isFile);
+        java.io.File[] backupFiles = backupFolder.listFiles(
+                x -> x.isFile() && !x.getName().equals(CheckpointDialog.CHECKPOINT_MARKER));
         if (backupFiles == null || backupFiles.length == 0) {
-            appendTempLog("Backup restore: folder is empty: "
-                    + backupFolder.getAbsolutePath());
-            System.out.println("[Frame] applyBackup: folder empty");
+            if (!rootKey.equals(backupWarnedForRoot)) {
+                backupWarnedForRoot = rootKey;
+                appendTempLog("Backup restore: folder is empty: "
+                        + backupFolder.getAbsolutePath());
+            }
             return;
         }
 
+        boolean firstRun = !rootKey.equals(backupCheckpointsAppliedForRoot);
         int applied = 0;
+        int differing = 0;
         for (java.io.File backupFile : backupFiles) {
             String name = backupFile.getName();
             List<String> matches = new ArrayList<>();
@@ -2440,34 +2552,32 @@ private void applyBackupCheckpointsIfNeeded() {
                     matches.add(e.getKey());
                 }
             }
-            System.out.println("[Frame] applyBackup: file=" + name
-                    + " matches=" + matches.size());
             if (matches.size() != 1) continue;
+            String path = matches.get(0);
+            if (backupAppliedPaths.contains(path)) continue;
             try {
                 String content = Files.readString(backupFile.toPath());
-                repo.setCheckpoint(matches.get(0), content);
+                repo.setCheckpoint(path, content);
+                backupAppliedPaths.add(path);
                 applied++;
+                if (!content.equals(repo.getClassCodeMap().get(path))) differing++;
             } catch (java.io.IOException ex) {
                 appendTempLog("Backup restore: read failed for " + name + ": " + ex.getMessage());
             }
         }
 
-        // Mark applied and register the Versions entry as soon as a backup
-        // folder with files was found — even when every file already matches
-        // its backup (applied == 0). Otherwise an unchanged checkpoint is
-        // invisible on the next launch, which is exactly the confusion this
-        // is fixing.
         backupCheckpointsAppliedForRoot = rootKey;
         addRestoredCheckpointVersionEntry(backupFolder, backupFiles);
 
         if (applied > 0) {
-            appendTempLog("Restored " + applied + " checkpoint(s) from backup: "
+            appendTempLog("Restored " + applied + " checkpoint(s) from backup ("
+                    + differing + " differ from disk): "
                     + backupFolder.getAbsolutePath());
             refreshPanels();
             if (checkpointDialog != null && checkpointDialog.isDisplayable()) {
                 checkpointDialog.refresh();
             }
-        } else {
+        } else if (firstRun) {
             appendTempLog("Backup restore: " + backupFiles.length
                     + " backup file(s) already in sync. Folder: "
                     + backupFolder.getAbsolutePath());
@@ -2477,8 +2587,6 @@ private void applyBackupCheckpointsIfNeeded() {
         ex.printStackTrace();
     }
 }
-
-
 
 /**
      * Adds a single Versions-tab entry for the checkpoint restored from backup.
@@ -2553,6 +2661,8 @@ private void applyBackupCheckpointsIfNeeded() {
         backupCheckpointsAppliedForRoot = null;
         projectNameManager.resetToUnattached();
         protocolDirectoryManager.resetToUnattached();
+        backupAppliedPaths.clear();
+        backupWarnedForRoot = null;
 
         // Reset means "fresh directories for the next project". The pending
         // flag is the reliable mechanism (works regardless of how
@@ -2612,6 +2722,7 @@ private void applyBackupCheckpointsIfNeeded() {
             item.addActionListener(e -> restoreRecentProject(entry));
             recentProjectsMenu.add(item);
         }
+        addRemoveFromRecentSubmenu();
     }
 
     /**
@@ -2709,13 +2820,13 @@ private void applyBackupCheckpointsIfNeeded() {
                 : null;
 
         List<String> paths = new ArrayList<>();
-        if (rootPath != null) {
-            String prefix = rootPath + File.separator;
-            for (String path : repo.getClassCodeMap().keySet()) {
-                if (path.equals(rootPath) || path.startsWith(prefix)) {
-                    paths.add(path);
-                }
-            }
+        // Record every loaded file. Filtering by source root dropped files
+        // outside the detected root (in HTML/Generic modes the root is just
+        // the folder with the most files), so Recent kept a tiny subset.
+        paths.addAll(repo.getClassCodeMap().keySet());
+        if (rootPath == null) {
+            rootPath = commonParentDirOf(paths);
+            if (rootPath == null) return;
         }
         if (paths.isEmpty()) {
             for (String path : repo.getClassCodeMap().keySet()) {
@@ -2724,6 +2835,9 @@ private void applyBackupCheckpointsIfNeeded() {
             rootPath = commonParentDirOf(paths);
             if (rootPath == null) return;
         }
+        // Drop any old entry for this root first, so a stale (smaller) file
+        // list can never survive even if add() only bumps an existing entry.
+        recentProjects.remove(rootPath);
         recentProjects.add(rootPath, projectNameManager.getProjectName(), paths, currentMode.name());
         recentProjects.save(settings);
         settings.saveProperties();
@@ -2869,6 +2983,9 @@ private void updateDirectoryButton() {
         }
         if (copyMetaItem != null) {
             copyMetaItem.setVisible(isJava);
+            if (changeMainClassMenuItem != null) {
+                changeMainClassMenuItem.setVisible(isJava);
+            }
         }
         if (autoReplaceInsertConflictItem != null) {
             autoReplaceInsertConflictItem.setVisible(isJava);
@@ -4196,6 +4313,410 @@ private wv.codeclip.codemap.CodeMapBuilder.Scope promptCodemapScope() {
         treeCollapseBtn.setToolTipText(allCollapsed
                 ? "Expand every folder in the tree"
                 : "Collapse every folder in the tree");
+    }
+
+/** Colored overlay badge on the taskbar button so each project is distinguishable
+ *  even if Windows keeps showing the exe's own icon. Needs a realized window, so
+ *  failures before setVisible are ignored and the call is repeated afterwards. */
+private void applyTaskbarBadge(long seed) {
+        try {
+            if (!java.awt.Taskbar.isTaskbarSupported()) return;
+            java.awt.Taskbar tb = java.awt.Taskbar.getTaskbar();
+            if (tb.isSupported(java.awt.Taskbar.Feature.ICON_BADGE_IMAGE_WINDOW)) {
+                tb.setWindowIconBadge(this, wv.codeclip.mainFrame.AppIconFactory.buildBadge(seed));
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+/** Adds "✕ Remove from Recent ▸" (one plain menu item per project) plus a
+ *  confirmed "Clear entire list". Files on disk are never touched. */
+private void addRemoveFromRecentSubmenu() {
+    List<wv.codeclip.io.RecentProjects.Entry> entries
+            = new ArrayList<>(recentProjects.getEntries());
+    if (entries.isEmpty()) return;
+
+    recentProjectsMenu.addSeparator();
+    JMenu removeMenu = new JMenu("✕ Remove from Recent");
+    for (wv.codeclip.io.RecentProjects.Entry entry : entries) {
+        JMenuItem rm = new JMenuItem(entry.menuLabel());
+        rm.setToolTipText("Remove from the Recent list (files on disk are not touched)");
+        rm.addActionListener(e -> removeRecentEntry(entry));
+        removeMenu.add(rm);
+    }
+    removeMenu.addSeparator();
+    JMenuItem clearAll = new JMenuItem("Clear entire list");
+    clearAll.addActionListener(e -> {
+        int choice = JOptionPane.showConfirmDialog(this,
+                "Remove all " + entries.size() + " project(s) from the Recent list?\n"
+                + "Files on disk are not touched.",
+                "Clear Recent Projects", JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE);
+        if (choice == JOptionPane.YES_OPTION) {
+            for (wv.codeclip.io.RecentProjects.Entry en : entries) {
+                recentProjects.remove(en.sourceRoot());
+            }
+            recentProjects.save(settings);
+            settings.saveProperties();
+        }
+    });
+    removeMenu.add(clearAll);
+    recentProjectsMenu.add(removeMenu);
+}
+
+private void removeRecentEntry(wv.codeclip.io.RecentProjects.Entry entry) {
+    recentProjects.remove(entry.sourceRoot());
+    recentProjects.save(settings);
+    settings.saveProperties();
+    appendTempLog("Removed from Recent: " + entry.menuLabel());
+}
+
+/** Usable area (screen minus taskbar/dock) of one monitor. */
+private static Rectangle usableScreenArea(GraphicsConfiguration gc) {
+    Rectangle b = gc.getBounds();
+    Insets in = Toolkit.getDefaultToolkit().getScreenInsets(gc);
+    return new Rectangle(b.x + in.left, b.y + in.top,
+            b.width - in.left - in.right, b.height - in.top - in.bottom);
+}
+
+/** Keeps the saved bounds when the title bar is visible on some connected
+ *  monitor; otherwise moves/shrinks the window onto the best (or primary) screen. */
+private Rectangle ensureOnScreen(Rectangle saved) {
+    Rectangle r = (saved == null || saved.width <= 0 || saved.height <= 0)
+            ? new Rectangle(100, 100, 1000, 700)
+            : new Rectangle(saved);
+    try {
+        GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
+        List<Rectangle> areas = new ArrayList<>();
+        for (GraphicsDevice d : ge.getScreenDevices()) {
+            areas.add(usableScreenArea(d.getDefaultConfiguration()));
+        }
+        if (areas.isEmpty()) return r;
+
+        Rectangle titleStrip = new Rectangle(r.x, r.y, r.width, 30);
+        Rectangle best = null;
+        long bestArea = 0;
+        for (Rectangle a : areas) {
+            Rectangle t = a.intersection(titleStrip);
+            if (!t.isEmpty() && t.width >= 100 && t.height >= 20) {
+                return r; // title bar reachable — leave the position alone
+            }
+            Rectangle i = a.intersection(r);
+            if (!i.isEmpty()) {
+                long ar = (long) i.width * i.height;
+                if (ar > bestArea) {
+                    bestArea = ar;
+                    best = a;
+                }
+            }
+        }
+        Rectangle target = best != null
+                ? best
+                : usableScreenArea(ge.getDefaultScreenDevice().getDefaultConfiguration());
+
+        r.width = Math.min(r.width, target.width);
+        r.height = Math.min(r.height, target.height);
+        r.x = Math.max(target.x, Math.min(r.x, target.x + target.width - r.width));
+        r.y = Math.max(target.y, Math.min(r.y, target.y + target.height - r.height));
+    } catch (Exception ignored) {
+    }
+    return r;
+}
+
+/** Applies a new effective mode everywhere (drop filter, mode context, menus,
+ *  project settings, persisted mode, Recent entry). */
+private void switchMode(AppMode newMode) {
+    currentMode = newMode;
+    if (fileDropHandler != null) {
+        fileDropHandler.setMode(currentMode);
+    }
+    wv.codeclip.modecontext.ModeContext.setMode(currentMode);
+    updateDirectoryButton();
+    updateModeLabel();
+    refreshText();
+    refreshPanels();
+    reloadProjectSettings();
+    persistProjectMode();
+    settings.saveMode(currentMode.name());
+    if (!repo.getClassCodeMap().isEmpty()) {
+        registerCurrentProjectInRecent();
+    } else {
+        settings.saveProperties();
+    }
+}
+
+private void saveFluidFlag() {
+    settings.setRawProperty("fluid.mode", Boolean.toString(fluidMode));
+    settings.saveProperties();
+}
+
+/** Reset: go to Fluid, which starts as GENERIC until a project is dropped in. */
+private void enterFluidMode() {
+    fluidMode = true;
+    saveFluidFlag();
+    switchMode(AppMode.GENERIC);
+}
+
+/** Writes the project language into buildinfo.properties, only when that file already exists. */
+private void persistProjectMode() {
+    persistProjectModeNow();
+}
+
+/** Picks the project language: project.mode from the nearest buildinfo.properties
+ *  above the given files; for older CodeClip files without it, guesses from
+ *  .java/.gd; no properties file at all means GENERIC. */
+
+private AppMode detectModeForFiles(java.util.Collection<File> files) {
+    // 1) Locate the project's buildinfo.properties: a dropped one wins,
+    //    otherwise the nearest one above any of the files.
+    File propsDir = null;
+    for (File f : files) {
+        if (f != null && f.getName().equalsIgnoreCase(BUILD_INFO_FILE) && f.getParentFile() != null) {
+            propsDir = f.getParentFile();
+            break;
+        }
+    }
+    if (propsDir == null) {
+        outer:
+        for (File f : files) {
+            if (f == null) continue;
+            File dir = f.isDirectory() ? f : f.getParentFile();
+            for (int depth = 0; depth < 8 && dir != null; depth++) {
+                if (new File(dir, BUILD_INFO_FILE).isFile()) {
+                    propsDir = dir;
+                    break outer;
+                }
+                dir = dir.getParentFile();
+            }
+        }
+    }
+    if (propsDir == null) {
+        return fluidMode ? AppMode.GENERIC : currentMode;
+    }
+
+    // 2) The language written in the project's properties is authoritative.
+    ProjectSettings ps = new ProjectSettings(propsDir, null);
+    String stored = ps.loadProjectMode();
+    if (stored != null && !stored.isBlank()) {
+        try {
+            return AppMode.valueOf(stored.trim().toUpperCase());
+        } catch (IllegalArgumentException ignored) {
+        }
+    }
+
+    // 3) No language recorded yet: only Fluid guesses, and then records it.
+    if (!fluidMode) {
+        return currentMode;
+    }
+    AppMode guess = guessModeFromExtensions(files);
+    ps.saveProjectMode(guess.name());
+    appendTempLog("Fluid: wrote project.mode=" + guess + " to "
+            + new File(propsDir, BUILD_INFO_FILE).getAbsolutePath());
+    return guess;
+}
+
+/** Outside Java mode the generated buildinfo.properties is not loaded as a file. */
+private List<File> skipBuildInfoOutsideJava(List<File> files) {
+    if (currentMode == AppMode.JAVA) return files;
+    List<File> kept = new ArrayList<>();
+    int skipped = 0;
+    for (File f : files) {
+        if (f.getName().equalsIgnoreCase(BUILD_INFO_FILE)) skipped++;
+        else kept.add(f);
+    }
+    if (skipped > 0) {
+        appendTempLog("Skipped " + skipped + " " + BUILD_INFO_FILE + " (not loaded outside Java mode)");
+    }
+    return kept;
+}
+
+/** The build stamp still goes to disk, but outside Java mode the file is hidden
+ *  from the list and disabled so it never reaches Copy All. */
+private void hideBuildInfoOutsideJava() {
+    if (currentMode == AppMode.JAVA) return;
+    for (Map.Entry<String, File> e : new ArrayList<>(repo.getClassFileMap().entrySet())) {
+        File f = e.getValue();
+        if (f != null && f.getName().equalsIgnoreCase(BUILD_INFO_FILE)) {
+            repo.getDisabledClasses().add(e.getKey());
+            removeClassPanel(e.getKey());
+        }
+    }
+    refreshText();
+}
+
+/** Manual fallback: force-saves the full loaded set to Recent Projects and the startup list. */
+private void saveProjectStateNow() {
+    if (repo.getClassCodeMap().isEmpty()) {
+        JOptionPane.showMessageDialog(this, "No files are loaded, nothing to save.",
+                "Save Project State", JOptionPane.INFORMATION_MESSAGE);
+        return;
+    }
+    int n = repo.getClassCodeMap().size();
+    settings.saveClassPaths(repo.getClassCodeMap().keySet().toArray(new String[0]));
+    settings.saveMode(currentMode.name());
+    saveFluidFlag();
+    registerCurrentProjectInRecent();
+    boolean modeSaved = persistProjectModeNow();
+    appendTempLog("Project state saved: " + n + " file(s) written to Recent Projects"
+            + (modeSaved
+                ? "; project.mode=" + currentMode + " written to buildinfo.properties"
+                : "; no buildinfo.properties found for this project, language not written"));
+}
+
+/** Guesses the project language from file extensions: most files wins
+ *  (ties: JAVA, then GODOT, then HTML); nothing recognizable means GENERIC. */
+private AppMode guessModeFromExtensions(java.util.Collection<File> files) {
+    int java = 0;
+    int gd = 0;
+    int web = 0;
+    for (File f : files) {
+        if (f == null) continue;
+        String n = f.getName().toLowerCase();
+        if (n.endsWith(".java")) {
+            java++;
+        } else if (n.endsWith(".gd")) {
+            gd++;
+        } else if ((n.endsWith(".js") || n.endsWith(".mjs") || n.endsWith(".ts")
+                || n.endsWith(".jsx") || n.endsWith(".tsx") || n.endsWith(".html")
+                || n.endsWith(".htm") || n.endsWith(".css"))
+                && AppMode.HTML.accepts(n)) {
+            web++;
+        }
+    }
+    if (java == 0 && gd == 0 && web == 0) return AppMode.GENERIC;
+    if (java >= gd && java >= web) return AppMode.JAVA;
+    if (gd >= web) return AppMode.GODOT;
+    return AppMode.HTML;
+}
+
+/** Writes the current language into the project's buildinfo.properties (never creates the file).
+ *  Uses the attached project settings, or searches upward from the loaded files.
+ *  Returns true when the property file was found and holds the current mode. */
+private boolean persistProjectModeNow() {
+    if (currentMode == null) return false;
+    File dir = null;
+    if (projectSettings != null && projectSettings.getFile().isFile()) {
+        dir = projectSettings.getFile().getParentFile();
+    } else {
+        outer:
+        for (File f : new ArrayList<>(repo.getClassFileMap().values())) {
+            if (f == null) continue;
+            File d = f.getParentFile();
+            for (int depth = 0; depth < 8 && d != null; depth++) {
+                if (new File(d, BUILD_INFO_FILE).isFile()) {
+                    dir = d;
+                    break outer;
+                }
+                d = d.getParentFile();
+            }
+        }
+    }
+    if (dir == null) return false;
+    ProjectSettings ps = (projectSettings != null
+            && dir.equals(projectSettings.getFile().getParentFile()))
+            ? projectSettings
+            : new ProjectSettings(dir, null);
+    if (!currentMode.name().equals(ps.loadProjectMode())) {
+        ps.saveProjectMode(currentMode.name());
+    }
+    return true;
+}
+
+private static String canonicalPathOf(File f) {
+    try {
+        return f.getCanonicalPath();
+    } catch (java.io.IOException e) {
+        return f.getAbsolutePath();
+    }
+}
+
+private void setEnabledForFiltered(String query, boolean enable) {
+        String q = query == null ? "" : query.trim().toLowerCase();
+        for (Map.Entry<String, File> e : repo.getClassFileMap().entrySet()) {
+            String path = e.getKey();
+            if (!repo.getClassCodeMap().containsKey(path)) continue;
+            File f = e.getValue();
+            String name = f != null ? f.getName() : path;
+            if (!q.isEmpty() && !name.toLowerCase().contains(q)) continue;
+            if (enable) {
+                repo.getDisabledClasses().remove(path);
+            } else {
+                repo.getDisabledClasses().add(path);
+            }
+        }
+        refreshText();
+        refreshPanels();
+    }
+
+private void addFolderFromChooser() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setDialogTitle("Add Folder — all accepted files inside it (including subfolders)");
+        File start = getCurrentModeDirectory();
+        if (start == null) start = projectSourceRoot;
+        if (start != null && start.isDirectory()) {
+            chooser.setCurrentDirectory(start);
+        }
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
+        File dir = chooser.getSelectedFile();
+        if (dir == null || !dir.isDirectory()) return;
+
+        AppMode filter = (fluidMode && repo.getClassCodeMap().isEmpty()) ? AppMode.GENERIC : currentMode;
+        List<File> found = collectFolderFiles(dir, filter);
+        if (found.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "No files accepted by " + filter + " mode were found in:\n" + dir.getAbsolutePath(),
+                    "Add Folder", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        if (found.size() > 300) {
+            int choice = JOptionPane.showConfirmDialog(this,
+                    "Found " + found.size() + " files in:\n" + dir.getAbsolutePath() + "\n\nAdd all of them?",
+                    "Add Folder", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (choice != JOptionPane.YES_OPTION) return;
+        }
+        addFilesBatched(found);
+    }
+
+private List<File> collectFolderFiles(File root, AppMode filter) {
+        java.util.Set<String> skipDirs = java.util.Set.of(
+                ".git", ".svn", ".hg", "node_modules", ".idea", ".gradle",
+                ".vscode", "__pycache__", "target", "build", "out");
+        List<File> out = new ArrayList<>();
+        java.nio.file.Path rootPath = root.toPath();
+        try {
+            Files.walkFileTree(rootPath, new java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                @Override
+                public java.nio.file.FileVisitResult preVisitDirectory(java.nio.file.Path dir,
+                        java.nio.file.attribute.BasicFileAttributes attrs) {
+                    if (!dir.equals(rootPath) && dir.getFileName() != null
+                            && skipDirs.contains(dir.getFileName().toString().toLowerCase())) {
+                        return java.nio.file.FileVisitResult.SKIP_SUBTREE;
+                    }
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult visitFile(java.nio.file.Path file,
+                        java.nio.file.attribute.BasicFileAttributes attrs) {
+                    File f = file.toFile();
+                    if (filter.accepts(f.getName())) {
+                        out.add(f);
+                    }
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult visitFileFailed(java.nio.file.Path file,
+                        java.io.IOException exc) {
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (java.io.IOException e) {
+            appendTempLog("Add Folder: scan failed: " + e.getMessage());
+        }
+        out.sort(Comparator.comparing(f -> f.getAbsolutePath().toLowerCase()));
+        return out;
     }
 
 }

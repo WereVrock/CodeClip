@@ -62,7 +62,16 @@ return null;
 }
 
 public static boolean containsPatch(String text) {
-return text != null && text.contains(MARKER_PATCH);
+    if (text == null || !text.contains(MARKER_PATCH)) return false;
+    // A Java source file that merely mentions the marker (instruction texts,
+    // parsers, tests) is a class, not a patch.
+    if (startsWithJavaSource(text)) return false;
+    for (String line : text.split("\\R", -1)) {
+        String t = line.trim();
+        while (t.startsWith("`")) t = t.substring(1);
+        if (t.startsWith(MARKER_PATCH)) return true;
+    }
+    return false;
 }
 
 public static String PATCH_MARKER() { return MARKER_PATCH; }
@@ -457,4 +466,19 @@ private static String extractNameFromSpec(String spec) {
     }
 
 private record ParsedBlock(String text, int nextIndex, boolean hitEndOfInput) {}
+
+private static boolean startsWithJavaSource(String text) {
+    for (String line : text.split("\\R", -1)) {
+        String t = line.trim();
+        if (t.isEmpty() || t.startsWith("```") || t.startsWith("//")
+                || t.startsWith("/*") || t.startsWith("*")) continue;
+        return t.startsWith("package ") || t.startsWith("import ")
+                || t.startsWith("public ") || t.startsWith("class ")
+                || t.startsWith("interface ") || t.startsWith("enum ")
+                || t.startsWith("record ") || t.startsWith("abstract ")
+                || t.startsWith("final ");
+    }
+    return false;
+}
+
 }

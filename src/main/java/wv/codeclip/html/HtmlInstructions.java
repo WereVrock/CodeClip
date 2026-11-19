@@ -131,6 +131,18 @@ public final class HtmlInstructions {
         - Only one structural operation per @@PATCH block.
         - File types supported: .html, .htm, .css, .js, .mjs.
 
+        ----------------------------------------------------------------
+        FILE COMMANDS (to see files you don't have yet)
+        ----------------------------------------------------------------
+        Put ONE command line in your reply, alone in a code block:
+          @@Enable SceneSetup.js, BattleRenderer.js, WaterShader.js
+            -> the user enables only these files for the next message
+          @@Copy SceneSetup.js, BattleRenderer.js
+            -> the user copies these files and sends them to you
+        - Exact file names WITH extension, comma-separated, all on one line.
+        - A relative path (js/app.js) is allowed when names are duplicated.
+        - No other text on the command line.
+
         ================================================================
         """;
     

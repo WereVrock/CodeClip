@@ -131,17 +131,16 @@ private void handlePasteFromClipboardInternal() {
     }
 
     try {
-        if (text.trim().startsWith("@@Enable")) {
-            boolean changed = handleEnable(text.trim());
+        if (wv.codeclip.commands.CommandArgs.hasCommand(text, "Enable")) {
+            handleEnable(wv.codeclip.commands.CommandArgs.sliceFromCommand(text, "Enable"));
             firePostPaste(false);
             return;
         }
 
-        if (text.trim().startsWith("@@Copy") || isFencedCopyCommand(text.trim())) {
-            copierCommand.handle(stripFence(text.trim()));
+        if (wv.codeclip.commands.CommandArgs.hasCommand(text, "Copy")) {
+            copierCommand.handle(wv.codeclip.commands.CommandArgs.sliceFromCommand(text, "Copy"));
             return;
         }
-
 
         if (Boolean.TRUE.equals(multiPatchMode.get()) &&
             (PatchParser.containsPatch(text) || looksLikePatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
@@ -169,11 +168,6 @@ private void handlePasteFromClipboardInternal() {
         handlePaste(text);
         firePostPaste(true);
     } catch (Exception ex) {
-        // Top-level safety net. Previously an uncaught exception anywhere in
-        // this call chain (PatchApplier, SourceRootDetector, extractors,
-        // etc.) propagated silently out of the button's ActionListener with
-        // no dialog and nothing visible in a packaged build — the paste
-        // simply appeared to do nothing. Now it's surfaced explicitly.
         ex.printStackTrace();
         JOptionPane.showMessageDialog(
             parent,
@@ -227,7 +221,9 @@ SmartPasteSettings.isAllowClasses()
 
 if (entries.isEmpty()) {
 JOptionPane.showMessageDialog(parent,
-"Smart Paste: no patches or class blocks found.",
+(SmartPasteExtractor.containsClassBlock(text) && !SmartPasteSettings.isAllowClasses())
+? "Smart Paste found class block(s), but \"Allow classes\" is turned off in the Smart Paste settings\n(double-click the Smart Paste checkbox). Nothing was applied."
+: "Smart Paste: no patches or class blocks found.",
 "Nothing Found", JOptionPane.INFORMATION_MESSAGE);
 return false;
 }
@@ -268,6 +264,17 @@ for (SmartPasteExtractor.Entry entry : entries) {
 }
 
 reportBatchErrors(failedResults);
+
+if (SmartPasteExtractor.containsClassBlock(text) && !SmartPasteSettings.isAllowClasses()
+        && entries.stream().noneMatch(e -> e instanceof SmartPasteExtractor.ClassEntry)) {
+    JOptionPane.showMessageDialog(parent,
+        "This paste also contained class block(s) that were skipped because\n"
+        + "\"Allow classes\" is off in the Smart Paste settings.",
+        "Class Blocks Skipped", JOptionPane.WARNING_MESSAGE);
+    if (statusLogger != null) {
+        statusLogger.accept("✗ Class block(s) skipped: Allow classes is off in Smart Paste settings");
+    }
+}
 
 if (!crashedEntries.isEmpty()) {
     StringBuilder sb = new StringBuilder(
@@ -759,6 +766,7 @@ return text.replace("&", "&amp;")
 }
 
 private boolean looksLikePatch(String text) {
+if (looksLikeJavaSource(text)) return false;
 boolean hasFile = false;
 boolean hasDirective = false;
 for (String line : text.split("\n")) {

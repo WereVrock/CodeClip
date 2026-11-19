@@ -203,7 +203,7 @@ private Map<String, String> read() {
             if (line.isEmpty() || line.startsWith("#")) continue;
             int eq = line.indexOf('=');
             if (eq < 0) continue;
-            map.put(line.substring(0, eq), line.substring(eq + 1));
+            map.put(line.substring(0, eq), healEscapedValue(line.substring(eq + 1)));
         }
     } catch (IOException e) {
         e.printStackTrace();
@@ -231,4 +231,42 @@ private void write(Map<String, String> map) {
             e.printStackTrace();
         }
     }
+
+/**
+ * Values written by java.util.Properties.store() look like C\:\\dir\\sub
+ * (':' and '\' escaped). A legitimate Windows path always contains ':' and
+ * therefore never contains the sequence "\:" unless it was escaped, so that
+ * sequence is a reliable marker. Un-escape such values; the next write
+ * stores them in clean form.
+ */
+private static String healEscapedValue(String v) {
+    if (v == null || !v.contains("\\:")) return v;
+    StringBuilder sb = new StringBuilder(v.length());
+    for (int i = 0; i < v.length(); i++) {
+        char c = v.charAt(i);
+        if (c == '\\' && i + 1 < v.length()) {
+            char n = v.charAt(i + 1);
+            if (n == '\\' || n == ':' || n == '=' || n == '#' || n == '!' || n == ' ') {
+                sb.append(n);
+                i++;
+                continue;
+            }
+        }
+        sb.append(c);
+    }
+    return sb.toString();
+}
+
+public String loadProjectMode() {
+        return read().getOrDefault("project.mode", "");
+    }
+
+public void saveProjectMode(String mode) {
+    synchronized (lock()) {
+        Map<String, String> m = read();
+        m.put("project.mode", mode == null ? "" : mode);
+        write(m);
+    }
+}
+
 }

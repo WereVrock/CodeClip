@@ -24,6 +24,7 @@ public class FileDropHandler extends DropTargetAdapter {
     private JPanel glassPane;
     private DragOverlayPanel overlayPanel;
     private wv.codeclip.AppMode mode = wv.codeclip.AppMode.JAVA;
+    private final List<File> rejectedThisDrop = new ArrayList<>();
 
     public FileDropHandler(Consumer<File> fileConsumer) {
         this.batchConsumer = files -> files.forEach(fileConsumer);
@@ -157,6 +158,7 @@ public class FileDropHandler extends DropTargetAdapter {
                     collectFiles(file, collected);
                 }
             }
+            warnAboutRejected();
             if (collected.isEmpty()) return;
 
             // Determine which half was hit (dropPoint is relative to glassPane)
@@ -194,7 +196,7 @@ public class FileDropHandler extends DropTargetAdapter {
         }
     }
 
-    private void collectFiles(File file, List<File> out) {
+private void collectFiles(File file, List<File> out) {
         if (file.isDirectory()) {
             try (Stream<java.nio.file.Path> paths = Files.walk(file.toPath())) {
                 paths.filter(p -> mode.accepts(p.toFile().getName()))
@@ -205,10 +207,13 @@ public class FileDropHandler extends DropTargetAdapter {
             }
         } else if (mode.accepts(file.getName())) {
             out.add(file);
+        } else {
+            // Explicitly dropped file that this mode doesn't accept: remember it so we can warn.
+            rejectedThisDrop.add(file);
         }
     }
 
-    // ---------- inner overlay panel ----------
+// ---------- inner overlay panel ----------
 
     private static class DragOverlayPanel extends JPanel {
         DragOverlayPanel() {
@@ -235,4 +240,25 @@ public class FileDropHandler extends DropTargetAdapter {
             return panel;
         }
     }
+
+private void warnAboutRejected() {
+        if (rejectedThisDrop.isEmpty()) return;
+        List<File> rejected = new ArrayList<>(rejectedThisDrop);
+        rejectedThisDrop.clear();
+        StringBuilder sb = new StringBuilder();
+        sb.append(rejected.size()).append(" dropped file(s) were NOT added because they don't belong to the current ")
+          .append(mode).append(" mode:\n\n");
+        int shown = Math.min(rejected.size(), 8);
+        for (int i = 0; i < shown; i++) {
+            sb.append("  • ").append(rejected.get(i).getName()).append("\n");
+        }
+        if (rejected.size() > shown) {
+            sb.append("  … and ").append(rejected.size() - shown).append(" more\n");
+        }
+        sb.append("\nSwitch the language (Settings → Language…) if you want to add them.");
+        String msg = sb.toString();
+        SwingUtilities.invokeLater(() -> javax.swing.JOptionPane.showMessageDialog(
+                frame, msg, "Files Not Added", javax.swing.JOptionPane.WARNING_MESSAGE));
+    }
+
 }

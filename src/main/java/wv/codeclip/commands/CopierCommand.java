@@ -19,44 +19,28 @@ public class CopierCommand {
     }
 
 public boolean handle(String text) {
-        String arg = text.substring("@@Copy".length()).trim();
-        if (arg.isEmpty()) return false;
+        String arg = CommandArgs.argsOf(text, "Copy");
+        if (arg == null || arg.isBlank()) return false;
 
-        String[] parts = arg.split("[,\\s]+");
-        List<String> targets = new ArrayList<>();
-        for (String p : parts) {
-            String trimmed = p.trim();
-            if (!trimmed.isEmpty()) targets.add(trimmed.toLowerCase());
-        }
+        List<String> targets = CommandArgs.parseTargets(arg);
         if (targets.isEmpty()) return false;
 
         StringBuilder sb = new StringBuilder();
         List<String> copied = new ArrayList<>();
         List<String> notFound = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
 
         for (String target : targets) {
             boolean found = false;
-            for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
-                if (entry.getValue() == null) continue;
-                String name = entry.getValue().getName().toLowerCase();
-                String[] exts = wv.codeclip.modecontext.ModeContext.getMode().getExtensions();
-                boolean matches = name.equals(target);
-                if (!matches) {
-                    for (String ext : exts) {
-                        if (name.equals(target + ext)) { matches = true; break; }
-                    }
-                }
-                if (matches) {
-                    String code = repo.getClassCodeMap().get(entry.getKey());
-                    if (code != null) {
-                        String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
-                        sb.append(prefix).append(" ===== ").append(entry.getValue().getName()).append(" =====\n");
-                        sb.append(code).append("\n\n");
-                        copied.add(entry.getValue().getName());
-                        found = true;
-                    }
-                    break;
-                }
+            for (Map.Entry<String, java.io.File> m : CommandArgs.resolve(repo, target)) {
+                String code = repo.getClassCodeMap().get(m.getKey());
+                if (code == null) continue;
+                found = true;
+                if (!seen.add(m.getKey())) continue;
+                sb.append(prefix).append(" ===== ").append(m.getValue().getName()).append(" =====\n");
+                sb.append(code).append("\n\n");
+                copied.add(m.getValue().getName());
             }
             if (!found) {
                 notFound.add(target);

@@ -11,43 +11,15 @@ public class PatchDuplicateDetector {
     public enum Result { CLEAR, DUPLICATE }
 
 public Result check(String rawPatchText) {
-    String incomingTitle = PatchParser.extractTitle(rawPatchText);
-    String incomingDesc  = PatchParser.extractDesc(rawPatchText);
-
-    System.out.println("[DupDetector] check() called");
-    System.out.println("[DupDetector] incomingTitle=" + incomingTitle);
-    System.out.println("[DupDetector] incomingDesc=" + incomingDesc);
-    System.out.println("[DupDetector] buffer size=" + recentPatches.size());
-
-    if (incomingTitle == null && incomingDesc == null) {
-        System.out.println("[DupDetector] no title/desc, returning CLEAR");
-        return Result.CLEAR;
-    }
-
+    // Compare the full normalized body. The old check required BOTH @@TITLE: and
+    // @@DESC: to be present and equal, so patches with only a title (the normal
+    // HTML-mode shape) were never detected as duplicates.
+    String incomingBody = normalize(rawPatchText);
     for (String recent : recentPatches) {
-        String recentTitle = PatchParser.extractTitle(recent);
-        String recentDesc  = PatchParser.extractDesc(recent);
-
-        System.out.println("[DupDetector] comparing with recent: title=" + recentTitle + " desc=" + recentDesc);
-
-        boolean titleMatch = incomingTitle != null && incomingTitle.equals(recentTitle);
-        boolean descMatch  = incomingDesc  != null && incomingDesc.equals(recentDesc);
-
-        System.out.println("[DupDetector] titleMatch=" + titleMatch + " descMatch=" + descMatch);
-
-        if (titleMatch && descMatch) {
-            String n1 = normalize(rawPatchText);
-            String n2 = normalize(recent);
-            boolean bodyMatch = n1.equals(n2);
-            System.out.println("[DupDetector] bodyMatch=" + bodyMatch);
-            if (bodyMatch) {
-                System.out.println("[DupDetector] returning DUPLICATE");
-                return Result.DUPLICATE;
-            }
+        if (incomingBody.equals(normalize(recent))) {
+            return Result.DUPLICATE;
         }
     }
-
-    System.out.println("[DupDetector] returning CLEAR");
     return Result.CLEAR;
 }
 

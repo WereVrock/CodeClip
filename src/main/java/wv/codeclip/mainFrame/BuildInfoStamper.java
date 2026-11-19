@@ -129,32 +129,29 @@ public void stampWithContent(String content, Consumer<String> setPendingTargetBu
         }
         File file = new File(sourceRoot, BUILD_INFO_FILE);
 
-        // Undo of a build stamp must revert ONLY the build stamp, not a
-        // rename or protocols-folder pick that happened after it. Extract
-        // the two build keys from the undo snapshot and merge them into the
-        // file's current contents — everything else stays as it is now.
-        java.util.Properties old = new java.util.Properties();
-        try {
-            old.load(new java.io.StringReader(content));
-        } catch (IOException ignored) {
-        }
-        String oldTimestamp = old.getProperty("LAST_UPDATED");
-        String oldBuildNo   = old.getProperty("BUILD_NO");
+        // Undo of a build stamp must revert ONLY the build stamp. Go through
+        // ProjectSettings (manual UTF-8 read-modify-write) instead of
+        // Properties.store, which escapes ':' and '\' and corrupts
+        // backup.directory / protocols.directory.
+        String oldTimestamp = extractTimestampFromContent(content);
+        String oldBuildNoRaw = extractBuildNoFromContent(content);
+        String oldBuildNo = "?".equals(oldBuildNoRaw) ? null : oldBuildNoRaw;
 
-        java.util.Properties current = new java.util.Properties();
-        if (file.exists()) {
-            try (java.io.FileReader r = new java.io.FileReader(file)) {
-                current.load(r);
-            } catch (IOException ignored) {
+        if (oldTimestamp != null || oldBuildNo != null) {
+            String currentContent = null;
+            if (file.exists()) {
+                try {
+                    currentContent = Files.readString(file.toPath());
+                } catch (IOException ignored) {
+                }
             }
+            String curBuildNo = extractBuildNoFromContent(currentContent);
+            String ts = oldTimestamp != null ? oldTimestamp : extractTimestampFromContent(currentContent);
+            String bn = oldBuildNo != null ? oldBuildNo : ("?".equals(curBuildNo) ? "" : curBuildNo);
+            new wv.codeclip.io.ProjectSettings(sourceRoot, null).saveBuildInfo(ts, bn);
         }
-        if (oldTimestamp != null) current.setProperty("LAST_UPDATED", oldTimestamp);
-        if (oldBuildNo   != null) current.setProperty("BUILD_NO", oldBuildNo);
 
         try {
-            try (java.io.FileWriter w = new java.io.FileWriter(file)) {
-                current.store(w, null);
-            }
             String path = file.getAbsolutePath();
             String written = Files.readString(file.toPath());
             repo.getClassCodeMap().put(path, written);

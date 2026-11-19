@@ -40,7 +40,7 @@ public List<Entry> extract(boolean includeClasses) {
     List<int[]> classPositions = new ArrayList<>();
 
     String text = this.text.replaceAll("(?m)^```@@", "@@");
-    text = text.replaceAll("(?s)", "");
+    text = stripIgnoreBlocks(text);
     text = text.replaceAll("(?m)^!@@", "//escaped@@");
 
     String patchMarker = PatchParser.PATCH_MARKER();
@@ -94,7 +94,7 @@ public List<Entry> extract(boolean includeClasses) {
             if (!isInsideAnyBlock(fenceIdx, patchPositions)) {
                 int lineEndIdx = text.indexOf('\n', fenceIdx);
                 String inner = lineEndIdx >= 0 ? text.substring(lineEndIdx + 1, closeIdx) : "";
-                if (!inner.contains(patchMarker)) {
+                if (!looksLikePatchBlock(inner)) {
                     classPositions.add(new int[]{fenceIdx, blockEnd});
                 }
             }
@@ -235,6 +235,29 @@ private int findMatchingBrace(String code, int openBraceIdx) {
         else if (c == '}') { depth--; if (depth == 0) return i; }
     }
     return -1;
+}
+
+private static boolean containsPatchLine(String inner, String patchMarker) {
+    for (String line : inner.split("\\R", -1)) {
+        if (line.trim().equals(patchMarker)) return true;
+    }
+    return false;
+}
+
+private static String stripIgnoreBlocks(String s) {
+    // Only markers at column 0 on their own line count. A class that merely
+    // contains the marker text (e.g. inside an indented text block) is untouched.
+    return s.replaceAll("(?ms)^@@IGNORE[ \\t]*\\R.*?^@@IGNOREEND[ \\t]*(?:\\R|\\z)", "");
+}
+
+private static boolean looksLikePatchBlock(String inner) {
+    for (String line : inner.split("\\R", -1)) {
+        String t = line.trim();
+        if (t.isEmpty()) continue;
+        return t.startsWith("@@PATCH") || t.startsWith("@@TITLE:")
+                || t.startsWith("@@DESC:") || t.startsWith("@@FILE:");
+    }
+    return false;
 }
 
 }

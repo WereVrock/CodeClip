@@ -111,24 +111,7 @@ public void handlePasteFromClipboard() {
             return;
         }
 
-        String trimmed = text.trim();
-        if (trimmed.startsWith("@@Enable")) {
-            enablerCommand.handle(trimmed);
-            firePostPaste(false);
-            return;
-        }
-        if (trimmed.startsWith("@@Copy")) {
-            copierCommand.handle(trimmed);
-            return;
-        }
-        if (trimmed.startsWith("@@Move")) {
-            boolean changed = moverCommand.handle(trimmed, HtmlDirectory.isSet() ? HtmlDirectory.get() : null);
-            firePostPaste(changed);
-            return;
-        }
-        if (trimmed.startsWith("@@Delete")) {
-            boolean changed = deleterCommand.handle(trimmed);
-            firePostPaste(changed);
+        if (handleCommandsIfPresent(text)) {
             return;
         }
 
@@ -172,24 +155,7 @@ public void handleSmartPasteFromClipboard() {
             return;
         }
 
-        String trimmed = text.trim();
-        if (trimmed.startsWith("@@Enable")) {
-            enablerCommand.handle(trimmed);
-            firePostPaste(false);
-            return;
-        }
-        if (trimmed.startsWith("@@Copy")) {
-            copierCommand.handle(trimmed);
-            return;
-        }
-        if (trimmed.startsWith("@@Move")) {
-            boolean changed = moverCommand.handle(trimmed, HtmlDirectory.isSet() ? HtmlDirectory.get() : null);
-            firePostPaste(changed);
-            return;
-        }
-        if (trimmed.startsWith("@@Delete")) {
-            boolean changed = deleterCommand.handle(trimmed);
-            firePostPaste(changed);
+        if (handleCommandsIfPresent(text)) {
             return;
         }
 
@@ -771,6 +737,32 @@ private String describeChange(PatchChange change) {
         JOptionPane.showMessageDialog(parent, msg.toString(),
                 "Duplicate File Detected", JOptionPane.WARNING_MESSAGE);
         return null;
+    }
+
+private boolean handleCommandsIfPresent(String text) {
+        if (wv.codeclip.commands.CommandArgs.hasCommand(text, "Enable")) {
+            enablerCommand.handle(wv.codeclip.commands.CommandArgs.sliceFromCommand(text, "Enable"));
+            firePostPaste(false);
+            return true;
+        }
+        if (wv.codeclip.commands.CommandArgs.hasCommand(text, "Copy")) {
+            copierCommand.handle(wv.codeclip.commands.CommandArgs.sliceFromCommand(text, "Copy"));
+            return true;
+        }
+        if (wv.codeclip.commands.CommandArgs.hasCommand(text, "Move")) {
+            boolean changed = moverCommand.handle(
+                    wv.codeclip.commands.CommandArgs.sliceFromCommand(text, "Move"),
+                    HtmlDirectory.isSet() ? HtmlDirectory.get() : null);
+            firePostPaste(changed);
+            return true;
+        }
+        if (wv.codeclip.commands.CommandArgs.hasCommand(text, "Delete")) {
+            boolean changed = deleterCommand.handle(
+                    wv.codeclip.commands.CommandArgs.sliceFromCommand(text, "Delete"));
+            firePostPaste(changed);
+            return true;
+        }
+        return false;
     }
 
 }

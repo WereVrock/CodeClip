@@ -24,52 +24,51 @@ public class EnablerCommand {
      * match a loaded class is reported back via statusLogger instead of
      * being silently dropped.
      */
-    public boolean handle(String text) {
-        String arg = text.substring("@@Enable".length()).trim();
-        if (arg.isEmpty()) return false;
 
-        String[] parts = arg.split("[,\\s]+");
-        List<String> targets = new ArrayList<>();
-        for (String p : parts) {
-            String trimmed = p.trim();
-            if (!trimmed.isEmpty()) targets.add(trimmed.toLowerCase());
-        }
+public boolean handle(String text) {
+        String arg = CommandArgs.argsOf(text, "Enable");
+        if (arg == null || arg.isBlank()) return false;
+
+        List<String> targets = CommandArgs.parseTargets(arg);
         if (targets.isEmpty()) return false;
-
-        // Disable all, then enable only the matched targets
-        repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
 
         List<String> enabled = new ArrayList<>();
         List<String> notFound = new ArrayList<>();
+        java.util.Set<String> keysToEnable = new java.util.LinkedHashSet<>();
 
         for (String target : targets) {
-            boolean found = false;
-            for (Map.Entry<String, java.io.File> entry : repo.getClassFileMap().entrySet()) {
-                if (entry.getValue() == null) continue;
-                String name = entry.getValue().getName().toLowerCase();
-                if (name.equals(target) || name.equals(target + ".java")) {
-                    repo.getDisabledClasses().remove(entry.getKey());
-                    enabled.add(entry.getValue().getName());
-                    found = true;
-                    break;
+            List<Map.Entry<String, java.io.File>> matches = CommandArgs.resolve(repo, target);
+            if (matches.isEmpty()) {
+                notFound.add(target);
+                continue;
+            }
+            for (Map.Entry<String, java.io.File> m : matches) {
+                if (keysToEnable.add(m.getKey())) {
+                    enabled.add(m.getValue().getName());
                 }
             }
-            if (!found) {
-                notFound.add(target);
+        }
+
+        // Only change the enabled state when at least one name matched, so a
+        // fully mistyped command can no longer disable everything.
+        if (!keysToEnable.isEmpty()) {
+            repo.getDisabledClasses().addAll(repo.getClassCodeMap().keySet());
+            repo.getDisabledClasses().removeAll(keysToEnable);
+            refreshCallback.run();
+        }
+
+        if (statusLogger != null) {
+            if (!enabled.isEmpty()) {
+                statusLogger.accept("@@Enable: " + String.join(", ", enabled));
+            } else {
+                statusLogger.accept("@@Enable: no matching files, enabled state left unchanged");
             }
-        }
-
-        refreshCallback.run();
-
-        if (!enabled.isEmpty() && statusLogger != null) {
-            statusLogger.accept("@@Enable: " + String.join(", ", enabled));
-        }
-        for (String missing : notFound) {
-            if (statusLogger != null) {
+            for (String missing : notFound) {
                 statusLogger.accept("@@Enable ERROR: \"" + missing + "\" not found in loaded classes");
             }
         }
 
         return !enabled.isEmpty();
     }
+
 }
