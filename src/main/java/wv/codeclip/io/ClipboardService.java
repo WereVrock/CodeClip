@@ -16,9 +16,11 @@ public class ClipboardService {
         return null;
     }
 
-    public void write(String text) {
+public void write(String text) {
         Toolkit.getDefaultToolkit()
                 .getSystemClipboard()
                 .setContents(new StringSelection(text), null);
+        wv.codeclip.ui.ClipboardFlash.flash();
     }
+
 }
