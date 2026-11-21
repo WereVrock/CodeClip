@@ -171,12 +171,11 @@ public class FileDropHandler extends DropTargetAdapter {
 
             // If dropped on the right half, copy file CONTENTS to clipboard
             if (rightHalf) {
-                String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
                 StringBuilder sb = new StringBuilder();
                 for (File f : collected) {
                     try {
                         String content = Files.readString(f.toPath());
-                        sb.append(prefix).append(" ===== ").append(f.getName()).append(" =====\n");
+                        sb.append(wv.codeclip.config.FileMarker.header(f.getName()));
                         sb.append(content).append("\n\n");
                     } catch (IOException e) {
                         // silently skip unreadable files
@@ -186,6 +185,7 @@ public class FileDropHandler extends DropTargetAdapter {
                     Toolkit.getDefaultToolkit()
                            .getSystemClipboard()
                            .setContents(new StringSelection(sb.toString()), null);
+                    wv.codeclip.ui.ClipboardFlash.flash();
                 }
             }
 
@@ -198,10 +198,38 @@ public class FileDropHandler extends DropTargetAdapter {
 
 private void collectFiles(File file, List<File> out) {
         if (file.isDirectory()) {
-            try (Stream<java.nio.file.Path> paths = Files.walk(file.toPath())) {
-                paths.filter(p -> mode.accepts(p.toFile().getName()))
-                     .map(java.nio.file.Path::toFile)
-                     .forEach(out::add);
+            final java.util.Set<String> skipDirs = java.util.Set.of(
+                    ".git", ".svn", ".hg", "node_modules", ".idea", ".gradle",
+                    ".vscode", "__pycache__", "target", "build", "out");
+            final java.nio.file.Path rootPath = file.toPath();
+            try {
+                Files.walkFileTree(rootPath, new java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                    @Override
+                    public java.nio.file.FileVisitResult preVisitDirectory(java.nio.file.Path dir,
+                            java.nio.file.attribute.BasicFileAttributes attrs) {
+                        if (!dir.equals(rootPath) && dir.getFileName() != null
+                                && skipDirs.contains(dir.getFileName().toString().toLowerCase())) {
+                            return java.nio.file.FileVisitResult.SKIP_SUBTREE;
+                        }
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public java.nio.file.FileVisitResult visitFile(java.nio.file.Path p,
+                            java.nio.file.attribute.BasicFileAttributes attrs) {
+                        File f = p.toFile();
+                        if (attrs.isRegularFile() && mode.accepts(f.getName())) {
+                            out.add(f);
+                        }
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public java.nio.file.FileVisitResult visitFileFailed(java.nio.file.Path p,
+                            IOException exc) {
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                });
             } catch (IOException e) {
                 e.printStackTrace();
             }

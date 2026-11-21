@@ -1,4 +1,3 @@
-
 package wv.codeclip.config;
 
 public final class AiInstructions {
@@ -14,6 +13,10 @@ public final class AiInstructions {
         Use method replacement if changing more than half a method.
 
         Prefer method replacement over exact code replacement unless making small changes.
+
+        NOTE ON FILE HEADERS: in the code you receive, every file starts with a line like
+        ==FileName.java== (this line is not in the code). It is only a separator added by CodeClip.
+        Never include such a line in your own output.
 
         ----------------------------------------------------------------
         PATCH FORMAT
@@ -134,6 +137,30 @@ public final class AiInstructions {
 
         Use this when sending full class replacements alongside patches in the same message.
         Smart Paste extracts and applies them in document order together with any @@PATCH blocks.
+
+        ----------------------------------------------------------------
+        NEW FILE FORMAT (pom.xml, build.gradle, resources, any non-class file)
+        ----------------------------------------------------------------
+
+        To create a NEW file that is not a Java class (pom.xml, build.gradle, .properties,
+        .xml, .json, .yml, ...) use @@newfile / @@endfile, in a code block of its own or before/after
+        the @@PATCH block (never inside the @@PATCH block):
+
+        @@newfile pom.xml
+        <entire file content>
+        @@endfile
+
+        Rules:
+        - The path after @@newfile is relative to the PROJECT ROOT (the folder that contains
+          pom.xml / build.gradle and src/). Examples:
+            @@newfile pom.xml
+            @@newfile src/main/resources/application.properties
+        - No absolute paths, no "..". Missing folders are created automatically.
+        - Put the complete file content between the two lines: no placeholders, no markdown fences inside.
+        - @@newfile and @@endfile must each be alone on their own line.
+        - Java classes still use the whole class format above; use @@newfile only for non-class files.
+        - To change an existing file use @@PATCH. @@newfile on an existing file asks the user to overwrite it.
+
         ================================================================
         """;
 }

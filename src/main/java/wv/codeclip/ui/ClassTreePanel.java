@@ -299,11 +299,11 @@ private JPanel buildClassRow(String path, int depth) {
         copyBtn.addActionListener(e -> {
             String code = repo.getClassCodeMap().get(path);
             if (code != null) {
-                String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
-                String text = prefix + " ===== " + name + " =====\n" + code + "\n";
+                String text = wv.codeclip.config.FileMarker.header(name) + code + "\n";
                 java.awt.Toolkit.getDefaultToolkit()
                         .getSystemClipboard()
                         .setContents(new java.awt.datatransfer.StringSelection(text), null);
+                ClipboardFlash.flash();
                 copyBtn.setText("Copied!");
                 javax.swing.Timer t = new javax.swing.Timer(1200, ev -> copyBtn.setText("Copy"));
                 t.setRepeats(false);

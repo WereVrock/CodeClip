@@ -190,6 +190,17 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
     public CodeClipFrame() {
 
+        wv.codeclip.ui.SystemLog.install();
+        wv.codeclip.ui.SystemLog.setErrorListener(msg -> SwingUtilities.invokeLater(() -> {
+            if (persistentLogPane == null) {
+                return;
+            }
+            try {
+                appendTempLog("Exception: " + msg + " (see System > System Log)");
+            } catch (Throwable ignored) {
+            }
+        }));
+
         wv.codeclip.config.CodeClipBuildInfo.getBuildInfo();
         recentProjects.load(settings);
         wv.codeclip.godot.GodotDirectory.load(settings);
@@ -414,6 +425,15 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
                 + "resets current state, and rebinds everything to the new project.");
         quickSetupItem.addActionListener(e -> quickSetup());
         fileMenu.add(quickSetupItem);
+        JMenuItem addFolderMenuItem = new JMenuItem("Add Folder…");
+        addFolderMenuItem.setToolTipText(
+                "Add every file in a folder and its subfolders that the current mode accepts");
+        addFolderMenuItem.addActionListener(e -> addFolderFromChooser());
+        fileMenu.add(addFolderMenuItem);
+        JMenuItem openDirMenuItem = new JMenuItem("Open File Directory");
+        openDirMenuItem.setToolTipText("Open the project's directory in the system file explorer");
+        openDirMenuItem.addActionListener(e -> openFileDirectory());
+        fileMenu.add(openDirMenuItem);
         fileMenu.addSeparator();
         JMenuItem saveStateItem = new JMenuItem("Save Project State Now");
         saveStateItem.setToolTipText("Writes all loaded files into Recent Projects and the startup file list.");
@@ -542,6 +562,10 @@ settingsMenu.add(compileCheckItem);
         JMenuItem checkpointItem = new JMenuItem("Checkpoint…");
         checkpointItem.addActionListener(e -> openCheckpointDialog());
         systemMenu.add(checkpointItem);
+        JMenuItem systemLogItem = new JMenuItem("System Log…");
+        systemLogItem.setToolTipText("Shows System.out/System.err output, exceptions and logger messages");
+        systemLogItem.addActionListener(e -> wv.codeclip.ui.SystemLog.show(this));
+        systemMenu.add(systemLogItem);
         JMenuItem resetItem = new JMenuItem("Reset");
         resetItem.addActionListener(e -> {
             int confirm = JOptionPane.showConfirmDialog(
@@ -780,8 +804,17 @@ settingsMenu.add(compileCheckItem);
 
         JButton enableAllBtn = new JButton("Enable All");
         JButton disableAllBtn = new JButton("Disable All");
+        JToggleButton filterModeBtn = new JToggleButton("▽");
+        filterModeBtn.setFocusable(false);
+        filterModeBtn.setMargin(new Insets(2, 8, 2, 8));
+        filterModeBtn.setToolTipText("Toggle: Enable/Disable only the files matching the search filter");
+        filterModeBtn.addActionListener(e -> {
+            boolean on = filterModeBtn.isSelected();
+            enableAllBtn.setText(on ? "Enable Filtered" : "Enable All");
+            disableAllBtn.setText(on ? "Disable Filtered" : "Disable All");
+        });
         enableAllBtn.addActionListener(e -> {
-            if (!classSearch.getText().isBlank()) {
+            if (filterModeBtn.isSelected()) {
                 setEnabledForFiltered(classSearch.getText(), true);
                 return;
             }
@@ -790,7 +823,7 @@ settingsMenu.add(compileCheckItem);
             refreshPanels();
         });
         disableAllBtn.addActionListener(e -> {
-            if (!classSearch.getText().isBlank()) {
+            if (filterModeBtn.isSelected()) {
                 setEnabledForFiltered(classSearch.getText(), false);
                 return;
             }
@@ -798,11 +831,16 @@ settingsMenu.add(compileCheckItem);
             refreshText();
             refreshPanels();
         });
+        Runnable scrollListsToTop = () -> SwingUtilities.invokeLater(() -> {
+            classScroll.getViewport().setViewPosition(new Point(0, 0));
+            treeScroll.getViewport().setViewPosition(new Point(0, 0));
+        });
         JButton sortOrder = new JButton(SORT_LABELS[sortMode]);
         sortOrder.addActionListener(e -> {
             sortMode = (sortMode + 1) % SORT_LABELS.length;
             sortOrder.setText(SORT_LABELS[sortMode]);
             refreshPanels();
+            scrollListsToTop.run();
         });
         sortOrder.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
@@ -811,20 +849,20 @@ settingsMenu.add(compileCheckItem);
                     sortMode = (sortMode - 1 + SORT_LABELS.length) % SORT_LABELS.length;
                     sortOrder.setText(SORT_LABELS[sortMode]);
                     refreshPanels();
+                    scrollListsToTop.run();
                 }
             }
         });
 
-        JPanel enableDisablePanel = new JPanel(new GridLayout(3, 1, 0, 2));
-        JPanel enableDisableRow = new JPanel(new GridLayout(1, 2, 4, 0));
-        enableDisableRow.add(enableAllBtn);
-        enableDisableRow.add(disableAllBtn);
+        JPanel enableDisablePanel = new JPanel(new GridLayout(2, 1, 0, 2));
+        JPanel enableDisableButtons = new JPanel(new GridLayout(1, 2, 4, 0));
+        enableDisableButtons.add(enableAllBtn);
+        enableDisableButtons.add(disableAllBtn);
+        JPanel enableDisableRow = new JPanel(new BorderLayout(4, 0));
+        enableDisableRow.add(enableDisableButtons, BorderLayout.CENTER);
+        enableDisableRow.add(filterModeBtn, BorderLayout.EAST);
         enableDisablePanel.add(enableDisableRow);
         enableDisablePanel.add(sortOrder);
-        JButton addFolderBtn = new JButton("Add Folder…");
-        addFolderBtn.setToolTipText("Add every file in a folder and its subfolders that the current mode accepts");
-        addFolderBtn.addActionListener(e -> addFolderFromChooser());
-        enableDisablePanel.add(addFolderBtn);
 
         JPanel searchPanel = new JPanel(new BorderLayout(4, 0));
         JButton clearButton = new JButton("✕");
@@ -1806,11 +1844,11 @@ public void addClassPanel(String path, String name) {
         copy.addActionListener(e -> {
             String code = repo.getClassCodeMap().get(path);
             if (code != null) {
-                String prefix = wv.codeclip.modecontext.ModeContext.getCommentPrefix();
-                String text = prefix + " ===== " + name + " =====\n" + code + "\n";
+                String text = wv.codeclip.config.FileMarker.header(name) + code + "\n";
                 Toolkit.getDefaultToolkit()
                         .getSystemClipboard()
                         .setContents(new java.awt.datatransfer.StringSelection(text), null);
+                wv.codeclip.ui.ClipboardFlash.flash();
             }
         });
 
@@ -4099,7 +4137,7 @@ return null;
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("\n\n===== PROTOCOLS =====\n\n");
+        sb.append("\n\n==PROTOCOLS==\n\n");
         for (String fileName : fileNames) {
             StringBuilder err = new StringBuilder();
             wv.codeclip.protocol.model.ProtocolFile file = protocolLibrary.loadSafely(fileName, err);
@@ -4652,8 +4690,7 @@ private void addFolderFromChooser() {
         JFileChooser chooser = new JFileChooser();
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         chooser.setDialogTitle("Add Folder — all accepted files inside it (including subfolders)");
-        File start = getCurrentModeDirectory();
-        if (start == null) start = projectSourceRoot;
+        File start = getDefaultDirectory();
         if (start != null && start.isDirectory()) {
             chooser.setCurrentDirectory(start);
         }
@@ -4717,6 +4754,45 @@ private List<File> collectFolderFiles(File root, AppMode filter) {
         }
         out.sort(Comparator.comparing(f -> f.getAbsolutePath().toLowerCase()));
         return out;
+    }
+
+private File getDefaultDirectory() {
+        File d = getCurrentModeDirectory();
+        if (d != null && d.isDirectory()) {
+            return d;
+        }
+        if (projectSourceRoot != null && projectSourceRoot.isDirectory()) {
+            return projectSourceRoot;
+        }
+        File detected = detectSourceRoot();
+        if (detected != null && detected.isDirectory()) {
+            return detected;
+        }
+        return null;
+    }
+
+private void openFileDirectory() {
+        File dir = getDefaultDirectory();
+        if (dir == null) {
+            JOptionPane.showMessageDialog(this,
+                    "No project directory is known yet.\nLoad some files or set a directory first.",
+                    "Open File Directory", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        try {
+            if (java.awt.Desktop.isDesktopSupported()
+                    && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.OPEN)) {
+                java.awt.Desktop.getDesktop().open(dir);
+            } else {
+                JOptionPane.showMessageDialog(this,
+                        "Opening folders is not supported on this system:\n" + dir.getAbsolutePath(),
+                        "Open File Directory", JOptionPane.WARNING_MESSAGE);
+            }
+        } catch (java.io.IOException ex) {
+            JOptionPane.showMessageDialog(this,
+                    "Could not open directory:\n" + dir.getAbsolutePath() + "\n\n" + ex.getMessage(),
+                    "Open File Directory", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
 }

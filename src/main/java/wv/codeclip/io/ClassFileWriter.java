@@ -64,4 +64,18 @@ public File createFile(String packageName, String className, String code, File s
                 : "";
         return new File(sourceRoot, pkgPath);
     }
+
+public void writeFile(File file, String content, boolean isNewFile) throws IOException {
+        // Generic (non-class) file writer: creates missing parent folders.
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
+        }
+        Files.writeString(file.toPath(), content);
+        // A brand-new file is its own baseline, same as createFile().
+        if (isNewFile) {
+            repo.setCheckpoint(file.getAbsolutePath(), content);
+        }
+    }
+
 }

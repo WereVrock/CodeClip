@@ -5,10 +5,16 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Approximate ("fuzzy") text matching used by HTML mode's surgical patching
- * when an @@FIND block has no exact match in the target file. Slides windows
- * of nearby line counts across the file and scores each window against the
- * target text using normalized Levenshtein similarity.
+ * Approximate ("fuzzy") text matching used by HTML/Generic mode's surgical
+ * patching when an @@FIND block has no exact match in the target file. Slides
+ * windows of nearby line counts across the file and scores each window against
+ * the target text using normalized Levenshtein similarity.
+ *
+ * Whitespace is ignored when comparing: leading/trailing whitespace of every
+ * line is trimmed, inner whitespace runs are collapsed, and blank lines are
+ * dropped. A block that differs from the file only in indentation, trailing
+ * spaces, CRLF vs LF or blank lines therefore scores 100%. Candidate offsets
+ * and text still refer to the ORIGINAL file content.
  *
  * Pure matching logic only — no UI, no logging, no file I/O. Progress
  * reporting and cancellation are supported via ProgressListener/CancelToken
@@ -52,18 +58,23 @@ public final class HtmlFuzzyMatcher {
         int minWindow = Math.max(1, findLineCount - WINDOW_SLACK_LINES);
         int maxWindow = Math.min(codeLines.length, findLineCount + WINDOW_SLACK_LINES);
 
+        // lineStart[i] = offset of line i in the ORIGINAL code; normLines[i] = whitespace-normalized line i.
         int[] lineStart = new int[codeLines.length + 1];
+        String[] normLines = new String[codeLines.length];
         lineStart[0] = 0;
         for (int i = 0; i < codeLines.length; i++) {
             lineStart[i + 1] = lineStart[i] + codeLines[i].length() + 1;
+            normLines[i] = normalizeLine(codeLines[i]);
         }
+
+        String normFind = normalizeText(find);
+        int findLen = normFind.length();
 
         int totalWindows = estimateWindowCount(codeLines.length, findLineCount);
         int scanned = 0;
         double bestSoFar = 0.0;
 
         List<Candidate> results = new ArrayList<>();
-        int findLen = find.length();
         double allowedFraction = 1.0 - (minPercent / 100.0);
 
         for (int windowSize = minWindow; windowSize <= maxWindow; windowSize++) {
@@ -76,20 +87,21 @@ public final class HtmlFuzzyMatcher {
                 }
 
                 int end = start + windowSize;
-                String windowText = joinLines(codeLines, start, end);
+                String normWindow = joinNormalized(normLines, start, end);
 
-                int maxLen = Math.max(windowText.length(), findLen);
+                int maxLen = Math.max(normWindow.length(), findLen);
                 scanned++;
                 if (maxLen == 0) continue;
-                int lenDiff = Math.abs(windowText.length() - findLen);
+                int lenDiff = Math.abs(normWindow.length() - findLen);
                 if (lenDiff > maxLen * allowedFraction) continue;
 
-                double sim = similarityPercent(windowText, find);
+                double sim = similarityNormalized(normWindow, normFind);
                 if (sim > bestSoFar) bestSoFar = sim;
                 if (sim >= minPercent) {
                     int startOffset = lineStart[start];
-                    int endOffset = startOffset + windowText.length();
-                    results.add(new Candidate(startOffset, endOffset, windowText, sim));
+                    int endOffset = lineStart[end] - 1; // exclude the newline after the last window line
+                    results.add(new Candidate(startOffset, endOffset,
+                            code.substring(startOffset, endOffset), sim));
                 }
             }
         }
@@ -134,22 +146,63 @@ public final class HtmlFuzzyMatcher {
         return a.startOffset() < b.endOffset() && b.startOffset() < a.endOffset();
     }
 
-public static double similarityPercent(String a, String b) {
-    if (a.equals(b)) return 100.0;
-    String an = collapseWhitespace(a);
-    String bn = collapseWhitespace(b);
-    if (an.equals(bn)) return 100.0;
-    int dist = levenshtein(an, bn);
-    int maxLen = Math.max(an.length(), bn.length());
-    if (maxLen == 0) return 100.0;
-    return Math.max(0.0, (1.0 - ((double) dist / maxLen)) * 100.0);
-}
+    /** Whitespace-insensitive similarity of two texts, 0..100. */
+    public static double similarityPercent(String a, String b) {
+        if (a.equals(b)) return 100.0;
+        return similarityNormalized(normalizeText(a), normalizeText(b));
+    }
 
-private static String collapseWhitespace(String s) {
-    return s.replaceAll("[ \\t]+", " ");
-}
+    private static double similarityNormalized(String an, String bn) {
+        if (an.equals(bn)) return 100.0;
+        int maxLen = Math.max(an.length(), bn.length());
+        if (maxLen == 0) return 100.0;
+        int dist = levenshtein(an, bn);
+        return Math.max(0.0, (1.0 - ((double) dist / maxLen)) * 100.0);
+    }
 
-public static String formatPercent(double value) {
+    /** Trims every line, collapses inner whitespace runs, drops blank lines. */
+    private static String normalizeText(String s) {
+        String[] lines = s.split("\n", -1);
+        StringBuilder sb = new StringBuilder(s.length());
+        for (String line : lines) {
+            String n = normalizeLine(line);
+            if (n.isEmpty()) continue;
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(n);
+        }
+        return sb.toString();
+    }
+
+    private static String normalizeLine(String line) {
+        String t = line.strip(); // also removes a trailing '\r'
+        if (t.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder(t.length());
+        boolean inWhitespace = false;
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (Character.isWhitespace(c)) {
+                if (!inWhitespace) sb.append(' ');
+                inWhitespace = true;
+            } else {
+                sb.append(c);
+                inWhitespace = false;
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String joinNormalized(String[] normLines, int start, int end) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = start; i < end; i++) {
+            String n = normLines[i];
+            if (n.isEmpty()) continue;
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(n);
+        }
+        return sb.toString();
+    }
+
+    public static String formatPercent(double value) {
         return String.format(Locale.US, "%.1f", value);
     }
 
@@ -172,14 +225,5 @@ public static String formatPercent(double value) {
         int count = 1;
         for (int i = 0; i < text.length(); i++) if (text.charAt(i) == '\n') count++;
         return count;
-    }
-
-    private static String joinLines(String[] lines, int start, int end) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = start; i < end; i++) {
-            sb.append(lines[i]);
-            if (i < end - 1) sb.append('\n');
-        }
-        return sb.toString();
     }
 }

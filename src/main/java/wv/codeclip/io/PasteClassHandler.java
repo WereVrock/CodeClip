@@ -4,8 +4,6 @@ import wv.codeclip.parse.JavaSourceParser;
 import wv.codeclip.parse.JavaBraceEndChecker;
 import wv.codeclip.parse.MissingMethodDetector;
 import wv.codeclip.parse.SourceRootDetector;
-import wv.codeclip.io.ClipboardService;
-import wv.codeclip.io.ClassFileWriter;
 import wv.codeclip.patch.PatchErrorDialog;
 import wv.codeclip.patch.PatchApplier;
 import wv.codeclip.patch.PatchParser;
@@ -142,8 +140,13 @@ private void handlePasteFromClipboardInternal() {
             return;
         }
 
-        if (Boolean.TRUE.equals(multiPatchMode.get()) &&
-            (PatchParser.containsPatch(text) || looksLikePatch(text) || SmartPasteExtractor.containsClassBlock(text))) {
+        // New-file blocks always go through the smart path, even when the
+        // Smart Paste checkbox is off: they are extracted first and the
+        // remaining text (patches, class blocks) is handled as usual.
+        boolean hasNewFile = wv.codeclip.ui.NewFileExtractor.containsNewFile(text);
+
+        if (hasNewFile || (Boolean.TRUE.equals(multiPatchMode.get()) &&
+            (PatchParser.containsPatch(text) || looksLikePatch(text) || SmartPasteExtractor.containsClassBlock(text)))) {
             boolean changed = handleSmartPaste(text);
             firePostPaste(changed);
             return;
@@ -214,14 +217,33 @@ PatchErrorDialog.show((JFrame) parent, results, repo);
 }
 
 private boolean handleSmartPaste(String text) {
-SmartPasteExtractor extractor = new SmartPasteExtractor(text);
+wv.codeclip.ui.NewFileExtractor.Result nfResult = wv.codeclip.ui.NewFileExtractor.extract(text);
+List<wv.codeclip.ui.NewFileExtractor.NewFile> newFiles = nfResult.files();
+String body = nfResult.remaining();
+
+if (!nfResult.errors().isEmpty()) {
+    StringBuilder esb = new StringBuilder("These new file blocks are incomplete and were skipped:\n\n");
+    for (String er : nfResult.errors()) {
+        esb.append("• ").append(er).append("\n");
+        if (statusLogger != null) {
+            statusLogger.accept("✗ New file block skipped: " + er);
+        }
+    }
+    JOptionPane.showMessageDialog(parent, esb.toString(),
+        "New File Block Error", JOptionPane.WARNING_MESSAGE);
+}
+
+SmartPasteExtractor extractor = new SmartPasteExtractor(body);
 List<SmartPasteExtractor.Entry> entries = extractor.extract(
 SmartPasteSettings.isAllowClasses()
 );
 
-if (entries.isEmpty()) {
+if (entries.isEmpty() && newFiles.isEmpty()) {
+if (!nfResult.errors().isEmpty()) {
+    return false;
+}
 JOptionPane.showMessageDialog(parent,
-(SmartPasteExtractor.containsClassBlock(text) && !SmartPasteSettings.isAllowClasses())
+(SmartPasteExtractor.containsClassBlock(body) && !SmartPasteSettings.isAllowClasses())
 ? "Smart Paste found class block(s), but \"Allow classes\" is turned off in the Smart Paste settings\n(double-click the Smart Paste checkbox). Nothing was applied."
 : "Smart Paste: no patches or class blocks found.",
 "Nothing Found", JOptionPane.INFORMATION_MESSAGE);
@@ -234,6 +256,16 @@ List<String> titles = new ArrayList<>();
 List<PatchApplier.PatchResult> failedResults = new ArrayList<>();
 List<String> crashedEntries = new ArrayList<>();
 
+// New files first, so patches later in the same paste can target them.
+int newFileCount = 0;
+try {
+    newFileCount = handleNewFileEntries(newFiles, logLines, combinedSnapshot, titles);
+} catch (Exception ex) {
+    crashedEntries.add("(new file block) — " + ex.getClass().getSimpleName()
+        + (ex.getMessage() != null ? ": " + ex.getMessage() : ""));
+    ex.printStackTrace();
+}
+
 for (SmartPasteExtractor.Entry entry : entries) {
     try {
         if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
@@ -242,14 +274,7 @@ for (SmartPasteExtractor.Entry entry : entries) {
             handlePasteInternal(ce.text(), logLines, combinedSnapshot, titles);
         }
     } catch (Exception ex) {
-        // One block throwing an unexpected exception (as opposed to the
-        // IllegalArgumentException PatchParser normally raises for format
-        // errors, which is already caught inside handleSmartPatchEntry)
-        // must NOT abort the whole batch — every other block in this same
-        // paste has to keep getting a chance to apply. Previously this was
-        // unguarded, so a single bad block silently killed the entire
-        // method with no dialog, no log entry, and nothing printed anywhere
-        // visible in a packaged (non-console) build.
+        // One block throwing must NOT abort the whole batch.
         String label;
         if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
             String t = PatchParser.extractTitle(pe.text());
@@ -265,7 +290,7 @@ for (SmartPasteExtractor.Entry entry : entries) {
 
 reportBatchErrors(failedResults);
 
-if (SmartPasteExtractor.containsClassBlock(text) && !SmartPasteSettings.isAllowClasses()
+if (SmartPasteExtractor.containsClassBlock(body) && !SmartPasteSettings.isAllowClasses()
         && entries.stream().noneMatch(e -> e instanceof SmartPasteExtractor.ClassEntry)) {
     JOptionPane.showMessageDialog(parent,
         "This paste also contained class block(s) that were skipped because\n"
@@ -307,11 +332,12 @@ int classCount = (int) entries.stream()
 String time = java.time.LocalTime.now()
 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
 String footer = "─".repeat(32);
-String header = "── Smart Paste [" + time + "]: "
-+ (patchCount > 0 ? patchCount + " patch block" + (patchCount > 1 ? "s" : "") : "")
-+ (patchCount > 0 && classCount > 0 ? ", " : "")
-+ (classCount > 0 ? classCount + " class" + (classCount > 1 ? "es" : "") : "")
-+ ", " + logLines.size() + " change" + (logLines.size() > 1 ? "s" : "") + " ──";
+List<String> parts = new ArrayList<>();
+if (patchCount > 0) parts.add(patchCount + " patch block" + (patchCount > 1 ? "s" : ""));
+if (classCount > 0) parts.add(classCount + " class" + (classCount > 1 ? "es" : ""));
+if (newFileCount > 0) parts.add(newFileCount + " new file" + (newFileCount > 1 ? "s" : ""));
+parts.add(logLines.size() + " change" + (logLines.size() > 1 ? "s" : ""));
+String header = "── Smart Paste [" + time + "]: " + String.join(", ", parts) + " ──";
 statusLogger.accept(footer);
 for (int i = logLines.size() - 1; i >= 0; i--) {
 statusLogger.accept(logLines.get(i));
@@ -832,6 +858,169 @@ if (remaining > 0) {
 sb.append("  ... and ").append(remaining).append(" more\n");
 }
 }
+
+private int handleNewFileEntries(List<wv.codeclip.ui.NewFileExtractor.NewFile> newFiles,
+            List<String> logLines, Map<String, String> combinedSnapshot, List<String> titles) {
+        if (newFiles == null || newFiles.isEmpty()) return 0;
+
+        File root = null;
+        try {
+            root = resolveProjectRoot();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        if (root == null) {
+            JOptionPane.showMessageDialog(parent,
+                    "Could not determine the project root, so the new file block(s) were not applied.\n"
+                    + "Load at least one project class first.",
+                    "New File", JOptionPane.WARNING_MESSAGE);
+            if (statusLogger != null) {
+                statusLogger.accept("✗ New file block(s) skipped: project root unknown");
+            }
+            return 0;
+        }
+
+        java.nio.file.Path rootPath = root.toPath().toAbsolutePath().normalize();
+        boolean smart = Boolean.TRUE.equals(multiPatchMode.get());
+        boolean skipCreate = smart && SmartPasteSettings.isSkipCreateConfirm();
+        boolean skipOverwrite = smart && SmartPasteSettings.isSkipOverwriteConfirm();
+        int applied = 0;
+
+        for (wv.codeclip.ui.NewFileExtractor.NewFile nf : newFiles) {
+            String rel = nf.path().trim().replace('\\', '/');
+            while (rel.startsWith("./")) rel = rel.substring(2);
+
+            java.nio.file.Path target = null;
+            String problem = null;
+            if (rel.isEmpty() || rel.startsWith("/") || rel.matches("^[A-Za-z]:.*")) {
+                problem = "path must be relative to the project root";
+            } else {
+                try {
+                    target = rootPath.resolve(rel).normalize();
+                    if (!target.startsWith(rootPath) || target.equals(rootPath)) {
+                        problem = "path escapes the project root";
+                    }
+                } catch (java.nio.file.InvalidPathException ex) {
+                    problem = "invalid path";
+                }
+            }
+            if (problem == null && target.toFile().isDirectory()) {
+                problem = "path is an existing folder";
+            }
+            if (problem != null) {
+                if (statusLogger != null) {
+                    statusLogger.accept("✗ New file skipped: " + nf.path() + " — " + problem);
+                }
+                JOptionPane.showMessageDialog(parent,
+                        "New file skipped:\n" + nf.path() + "\n\nReason: " + problem
+                        + "\nProject root: " + rootPath,
+                        "New File", JOptionPane.WARNING_MESSAGE);
+                continue;
+            }
+
+            File file = target.toFile();
+            boolean exists = file.isFile();
+
+            String existingKey = null;
+            for (Map.Entry<String, File> e : repo.getClassFileMap().entrySet()) {
+                File f = e.getValue();
+                if (f != null && f.toPath().toAbsolutePath().normalize().equals(target)) {
+                    existingKey = e.getKey();
+                    break;
+                }
+            }
+
+            if (exists && !skipOverwrite) {
+                int c = JOptionPane.showConfirmDialog(parent,
+                        "File already exists:\n" + file.getAbsolutePath()
+                        + "\n\nOverwrite it with the new content?",
+                        "Overwrite File", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (c != JOptionPane.YES_OPTION) continue;
+            } else if (!exists && !skipCreate) {
+                int c = JOptionPane.showConfirmDialog(parent,
+                        "Create new file?\n\n" + file.getAbsolutePath(),
+                        "Create File", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+                if (c != JOptionPane.OK_OPTION) continue;
+            }
+
+            String oldCode = null;
+            if (exists) {
+                oldCode = existingKey != null ? repo.getClassCodeMap().get(existingKey) : null;
+                if (oldCode == null) {
+                    try {
+                        oldCode = Files.readString(file.toPath());
+                    } catch (IOException ex) {
+                        oldCode = "";
+                    }
+                }
+            }
+
+            try {
+                fileWriter.writeFile(file, nf.content(), existingKey == null);
+                File repoFile = existingKey != null ? repo.getClassFileMap().get(existingKey) : file;
+                fileWriter.registerInRepo(repoFile, nf.content());
+                String key = repoFile.getAbsolutePath();
+                repo.recordChange(key, exists
+                        ? ClassRepository.ChangeKind.WHOLE_UPDATE
+                        : ClassRepository.ChangeKind.NEW);
+                combinedSnapshot.putIfAbsent(key, exists ? oldCode : null);
+
+                String name = file.getName();
+                String prefix = exists ? "File Updated: " : "File Created: ";
+                titles.add(prefix + name);
+                logLines.add(prefix + name + " (" + file.getAbsolutePath() + ")");
+                if (existingKey == null) {
+                    addPanelCallback.accept(key, name);
+                }
+                if (exists) {
+                    notifyCodeChanged(key, nf.content());
+                }
+                applied++;
+            } catch (IOException ex) {
+                JOptionPane.showMessageDialog(parent,
+                        "Failed to write file:\n" + file.getAbsolutePath() + "\n\n" + ex.getMessage(),
+                        "Error", JOptionPane.ERROR_MESSAGE);
+                if (statusLogger != null) {
+                    statusLogger.accept("✗ New file failed: " + nf.path() + " — " + ex.getMessage());
+                }
+            }
+        }
+
+        if (applied > 0) {
+            refreshCallback.run();
+        }
+        return applied;
+    }
+
+private File resolveProjectRoot() {
+        File src = rootDetector.detect(null);
+        if (src == null) return null;
+
+        // 1) Nearest folder (going up) that holds a build file.
+        File dir = src;
+        for (int i = 0; i < 6 && dir != null; i++) {
+            if (new File(dir, "pom.xml").isFile()
+                    || new File(dir, "build.gradle").isFile()
+                    || new File(dir, "build.gradle.kts").isFile()
+                    || new File(dir, "settings.gradle").isFile()
+                    || new File(dir, "settings.gradle.kts").isFile()) {
+                return dir;
+            }
+            dir = dir.getParentFile();
+        }
+
+        // 2) Standard layout (src/main/java): the project root is above "src".
+        File cur = src;
+        while (cur != null) {
+            if (cur.getName().equals("src") && cur.getParentFile() != null) {
+                return cur.getParentFile();
+            }
+            cur = cur.getParentFile();
+        }
+
+        // 3) Fallback: the source root itself.
+        return src;
+    }
 
 }
 

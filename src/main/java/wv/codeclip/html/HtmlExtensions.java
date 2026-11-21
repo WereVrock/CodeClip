@@ -10,7 +10,7 @@ public final class HtmlExtensions {
     private HtmlExtensions() {}
 
     public static final String[] EXTENSIONS = {
-        ".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg", ".php", ".toml"
+        ".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg", ".php", ".toml", ".bat"
     };
 
     public static boolean accepts(String filename) {

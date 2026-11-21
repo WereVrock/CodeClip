@@ -64,7 +64,7 @@ public final class StrictPatchApplier {
         }
 
         if (best.similarityPercent() >= FUZZY_HIGH_THRESHOLD) {
-            String newCode = splice(code, best, replace);
+            String newCode = splice(code, best, find, replace);
             return new FindReplaceResult(newCode, MatchTier.FUZZY_HIGH, best.similarityPercent(), best.text());
         }
 
@@ -79,15 +79,16 @@ public final class StrictPatchApplier {
                     fr.fileName());
         }
 
-        String newCode = splice(code, best, replace);
+        String newCode = splice(code, best, find, replace);
         return new FindReplaceResult(newCode, MatchTier.FUZZY_LOW, best.similarityPercent(), best.text());
     }
 
-    private static String splice(String code, HtmlFuzzyMatcher.Candidate match, String replace) {
-        return code.substring(0, match.startOffset()) + replace + code.substring(match.endOffset());
+private static String splice(String code, HtmlFuzzyMatcher.Candidate match, String find, String replace) {
+        String adapted = IndentAdapter.adapt(match.text(), find, replace);
+        return code.substring(0, match.startOffset()) + adapted + code.substring(match.endOffset());
     }
 
-    private static int countOccurrences(String text, String find) {
+private static int countOccurrences(String text, String find) {
         if (find == null || find.isEmpty()) return 0;
         int count = 0;
         int idx = 0;

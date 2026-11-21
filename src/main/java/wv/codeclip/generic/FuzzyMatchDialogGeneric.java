@@ -41,11 +41,7 @@ public class FuzzyMatchDialogGeneric extends JDialog {
         header.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
         add(header, BorderLayout.NORTH);
 
-        JPanel splitPanel = new JPanel(new GridLayout(1, 2, 8, 0));
-        splitPanel.add(codePanel("Requested (@@FIND)", requestedFind,
-                new Color(220, 240, 255), new Color(0, 90, 180)));
-        splitPanel.add(codePanel("Actually Matched (" + pct + "%)", actualMatch,
-                new Color(255, 243, 205), new Color(180, 130, 0)));
+        JPanel splitPanel = wv.codeclip.html.FuzzyDiffView.build(requestedFind, actualMatch, pct);
         add(splitPanel, BorderLayout.CENTER);
 
         String clipboardMessage =
@@ -76,7 +72,7 @@ public class FuzzyMatchDialogGeneric extends JDialog {
         btnPanel.add(acceptBtn);
         add(btnPanel, BorderLayout.SOUTH);
 
-        setPreferredSize(new Dimension(860, 460));
+        setPreferredSize(new Dimension(980, 560));
         pack();
         setLocationRelativeTo(getOwner());
     }

@@ -51,12 +51,11 @@ public void resetAll(JPanel classPanel) {
 
 private String buildAllContent() {
         StringBuilder sb = new StringBuilder();
-        String prefix = ModeContext.getCommentPrefix();
         repo.getClassCodeMap().forEach((path, code) -> {
             if (!repo.getDisabledClasses().contains(path)) {
                 File file = repo.getClassFileMap().get(path);
                 String name = (file != null) ? file.getName() : path;
-                sb.append(prefix).append(" ===== ").append(name).append(" =====\n");
+                sb.append(wv.codeclip.config.FileMarker.header(name));
                 sb.append(code).append("\n\n");
             }
         });
@@ -103,6 +102,7 @@ public void copyAll(Runnable clearLogsCallback, String cleanNotes, String protoc
                 .getSystemClipboard()
                 .setContents(new StringSelection(sb.toString()), null);
 
+        ClipboardFlash.flash();
         clearLogsCallback.run();
     }
 
@@ -110,6 +110,7 @@ public void copyCodeOnly() {
         Toolkit.getDefaultToolkit()
                 .getSystemClipboard()
                 .setContents(new StringSelection(buildAllContent()), null);
+        ClipboardFlash.flash();
     }
 
 public void copyArchitecture() {
@@ -137,6 +138,7 @@ public void copyArchitecture() {
         Toolkit.getDefaultToolkit()
                 .getSystemClipboard()
                 .setContents(new StringSelection(tree), null);
+        ClipboardFlash.flash();
     }
 
     public void updateAll(Runnable refreshCallback, Consumer<String> removePanelCallback) {
