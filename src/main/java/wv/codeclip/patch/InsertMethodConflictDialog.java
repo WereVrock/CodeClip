@@ -10,7 +10,7 @@ import java.awt.*;
  */
 public class InsertMethodConflictDialog extends JDialog {
 
-    public enum Choice { REPLACE, KEEP }
+    public enum Choice { REPLACE, REPLACE_ALL, KEEP }
 
     private Choice result = Choice.KEEP;
 
@@ -73,6 +73,12 @@ public class InsertMethodConflictDialog extends JDialog {
         btnPanel.add(copyMsgBtn);
         btnPanel.add(keepBtn);
         btnPanel.add(replaceBtn);
+        if (wv.codeclip.ui.UserNotifier.batchButtonsVisible()) {
+            JButton replaceAllBtn = new JButton("Replace All");
+            replaceAllBtn.setToolTipText("Replace this method and auto-replace every remaining conflict in this paste.");
+            replaceAllBtn.addActionListener(e -> { result = Choice.REPLACE_ALL; dispose(); });
+            btnPanel.add(replaceAllBtn);
+        }
         add(btnPanel, BorderLayout.SOUTH);
 
         setPreferredSize(new Dimension(860, 480));

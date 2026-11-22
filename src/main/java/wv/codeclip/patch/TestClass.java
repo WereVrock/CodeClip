@@ -11,8 +11,9 @@ public static String greet() {
      * This method has a very long Javadoc comment to increase the size
      * of the patch and help expose any layout issues in the UI.
      */
-    public static String farewell() {
-        return "Adios from Patch 3 (fixed Javadoc)!";
+
+public static String farewell(String message) {
+        return message;
     }
 
 public static String farewell2() {

@@ -262,7 +262,9 @@ private boolean handleSmartPaste(String text) {
     List<String> titles = new ArrayList<>();
     List<PatchApplier.PatchResult> failedResults = new ArrayList<>();
 
+    wv.codeclip.ui.UserNotifier.expectSteps(patchEntries.size() + scriptEntries.size());
     for (SmartPasteExtractor.Entry entry : patchEntries) {
+        if (wv.codeclip.ui.UserNotifier.isCancelled()) break;
         if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
             handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles, failedResults);
         }
@@ -271,6 +273,7 @@ private boolean handleSmartPaste(String text) {
     reportBatchErrors(failedResults);
 
     for (GodotScriptExtractor.ScriptEntry script : scriptEntries) {
+        if (wv.codeclip.ui.UserNotifier.isCancelled()) break;
         boolean ok = handleGdScriptPaste(script.code(), script.fileName());
         if (ok) logLines.add("Script pasted: " + script.fileName());
     }

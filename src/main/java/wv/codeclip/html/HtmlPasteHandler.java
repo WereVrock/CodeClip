@@ -134,6 +134,7 @@ public void handlePasteFromClipboard() {
         if (hasFileMarkers) {
             boolean allowNewFiles = confirmRootForNewFilesIfNeeded();
             for (HtmlScriptExtractor.FileEntry entry : HtmlScriptExtractor.extract(text)) {
+                if (wv.codeclip.ui.UserNotifier.isCancelled()) break;
                 applyFileEntry(entry, outcome, allowNewFiles);
             }
         }
@@ -172,7 +173,9 @@ public void handleSmartPasteFromClipboard() {
         boolean hasFileEntries = entries.stream().anyMatch(e -> e instanceof HtmlSmartPasteExtractor.FileEntry);
         boolean allowNewFiles = hasFileEntries && confirmRootForNewFilesIfNeeded();
 
+        wv.codeclip.ui.UserNotifier.expectSteps(entries.size());
         for (HtmlSmartPasteExtractor.Entry entry : entries) {
+            if (wv.codeclip.ui.UserNotifier.isCancelled()) break;
             if (entry instanceof HtmlSmartPasteExtractor.PatchEntry pe) {
                 applyPatchBlock(pe.text(), outcome);
             } else if (entry instanceof HtmlSmartPasteExtractor.FileEntry fe) {
@@ -332,6 +335,7 @@ private void applyFileEntry(HtmlScriptExtractor.FileEntry entry, PasteOutcome ou
         // Each entry keyed by the requested @@FILE: name (not resolved path) so
         // every change — including unresolved/ambiguous ones — keeps its own
         // distinct error and nothing gets silently merged or dropped.
+        wv.codeclip.ui.UserNotifier.expectSteps(changes.size());
         Map<String, String> workingCode = new HashMap<>();
         Map<String, String> errorsByFile = new LinkedHashMap<>();
         List<String> appliedDescs = new ArrayList<>();
@@ -384,6 +388,9 @@ private void applyFileEntry(HtmlScriptExtractor.FileEntry entry, PasteOutcome ou
             PatchErrorDialog.show(parent, sb.toString(), errorsByFile, repo, text);
         }
 
+        if (wv.codeclip.ui.UserNotifier.isCancelled()) {
+            return; // batch cancelled: nothing of this block is written
+        }
         for (Map.Entry<String, String> entry : workingCode.entrySet()) {
             String path = entry.getKey();
             String finalCode = entry.getValue();
@@ -466,9 +473,9 @@ private String applyFindReplaceWithFuzzyFeedback(String actualFileName, PatchCha
         switch (result.tier()) {
             case FUZZY_HIGH -> {
                 if (HtmlFuzzySettings.isConfirmHighConfidenceMatches()) {
-                    FuzzyMatchDialog.Decision decision = FuzzyMatchDialog.show(
+                    boolean accepted = wv.codeclip.ui.UserNotifier.confirmFuzzyMatch(
                             parent, actualFileName, result.similarityPercent(), fr.find(), result.matchedText(), true);
-                    if (decision == FuzzyMatchDialog.Decision.REJECT) {
+                    if (!accepted) {
                         throw new PatchException(
                                 "@@FIND fuzzy match in " + actualFileName + " ("
                                 + HtmlFuzzyMatcher.formatPercent(result.similarityPercent())
@@ -485,9 +492,9 @@ private String applyFindReplaceWithFuzzyFeedback(String actualFileName, PatchCha
                 }
             }
             case FUZZY_LOW -> {
-                FuzzyMatchDialog.Decision decision = FuzzyMatchDialog.show(
+                boolean accepted = wv.codeclip.ui.UserNotifier.confirmFuzzyMatch(
                         parent, actualFileName, result.similarityPercent(), fr.find(), result.matchedText(), false);
-                if (decision == FuzzyMatchDialog.Decision.REJECT) {
+                if (!accepted) {
                     throw new PatchException(
                             "@@FIND fuzzy match in " + actualFileName + " ("
                             + HtmlFuzzyMatcher.formatPercent(result.similarityPercent())

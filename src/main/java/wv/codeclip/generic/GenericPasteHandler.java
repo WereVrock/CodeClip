@@ -144,6 +144,7 @@ public class GenericPasteHandler {
         if (hasFileMarkers) {
             boolean allowNewFiles = confirmRootForNewFilesIfNeeded();
             for (GenericScriptExtractor.FileEntry entry : GenericScriptExtractor.extract(text)) {
+                if (wv.codeclip.ui.UserNotifier.isCancelled()) break;
                 applyFileEntry(entry, outcome, allowNewFiles);
             }
         }
@@ -199,7 +200,9 @@ public class GenericPasteHandler {
         boolean hasFileEntries = entries.stream().anyMatch(e -> e instanceof GenericSmartPasteExtractor.FileEntry);
         boolean allowNewFiles = hasFileEntries && confirmRootForNewFilesIfNeeded();
 
+        wv.codeclip.ui.UserNotifier.expectSteps(entries.size());
         for (GenericSmartPasteExtractor.Entry entry : entries) {
+            if (wv.codeclip.ui.UserNotifier.isCancelled()) break;
             if (entry instanceof GenericSmartPasteExtractor.PatchEntry pe) {
                 applyPatchBlock(pe.text(), outcome);
             } else if (entry instanceof GenericSmartPasteExtractor.FileEntry fe) {
@@ -347,6 +350,7 @@ public class GenericPasteHandler {
             return;
         }
 
+        wv.codeclip.ui.UserNotifier.expectSteps(changes.size());
         Map<String, String> workingCode = new HashMap<>();
         Map<String, String> errorsByFile = new LinkedHashMap<>();
         List<String> appliedDescs = new ArrayList<>();
@@ -398,6 +402,9 @@ public class GenericPasteHandler {
             PatchErrorDialog.show(parent, sb.toString(), errorsByFile, repo, text);
         }
 
+        if (wv.codeclip.ui.UserNotifier.isCancelled()) {
+            return; // batch cancelled: nothing of this block is written
+        }
         for (Map.Entry<String, String> entry : workingCode.entrySet()) {
             String path = entry.getKey();
             String finalCode = entry.getValue();
@@ -463,9 +470,9 @@ public class GenericPasteHandler {
         switch (result.tier()) {
             case FUZZY_HIGH -> {
                 if (GenericFuzzySettings.isConfirmHighConfidenceMatches()) {
-                    FuzzyMatchDialogGeneric.Decision decision = FuzzyMatchDialogGeneric.show(
+                    boolean accepted = wv.codeclip.ui.UserNotifier.confirmFuzzyMatch(
                             parent, actualFileName, result.similarityPercent(), fr.find(), result.matchedText(), true);
-                    if (decision == FuzzyMatchDialogGeneric.Decision.REJECT) {
+                    if (!accepted) {
                         throw new PatchException(
                                 "@@FIND fuzzy match in " + actualFileName + " ("
                                 + wv.codeclip.html.HtmlFuzzyMatcher.formatPercent(result.similarityPercent())
@@ -482,9 +489,9 @@ public class GenericPasteHandler {
                 }
             }
             case FUZZY_LOW -> {
-                FuzzyMatchDialogGeneric.Decision decision = FuzzyMatchDialogGeneric.show(
+                boolean accepted = wv.codeclip.ui.UserNotifier.confirmFuzzyMatch(
                         parent, actualFileName, result.similarityPercent(), fr.find(), result.matchedText(), false);
-                if (decision == FuzzyMatchDialogGeneric.Decision.REJECT) {
+                if (!accepted) {
                     throw new PatchException(
                             "@@FIND fuzzy match in " + actualFileName + " ("
                             + wv.codeclip.html.HtmlFuzzyMatcher.formatPercent(result.similarityPercent())

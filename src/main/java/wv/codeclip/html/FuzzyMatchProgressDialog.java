@@ -70,6 +70,19 @@ public class FuzzyMatchProgressDialog extends JDialog {
         });
 
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        if (wv.codeclip.ui.UserNotifier.batchButtonsVisible()) {
+            JButton terminateAllBtn = new JButton("Cancel All Batch");
+            terminateAllBtn.setForeground(new Color(160, 40, 40));
+            terminateAllBtn.setToolTipText("Stops this search and skips every remaining step of this paste.");
+            terminateAllBtn.addActionListener(e -> {
+                wv.codeclip.ui.UserNotifier.cancelBatch();
+                cancelled.set(true);
+                terminateAllBtn.setEnabled(false);
+                terminateBtn.setEnabled(false);
+                statusLabel.setText("Cancelling…");
+            });
+            btnPanel.add(terminateAllBtn);
+        }
         btnPanel.add(terminateBtn);
         add(btnPanel, BorderLayout.SOUTH);
 
@@ -120,6 +133,9 @@ public class FuzzyMatchProgressDialog extends JDialog {
 
     public static HtmlFuzzyMatcher.ScanResult runScan(JFrame parent, String fileName,
                                                        String code, String find, double minPercent) {
+        if (wv.codeclip.ui.UserNotifier.isCancelled()) {
+            return new HtmlFuzzyMatcher.ScanResult(List.of(), true);
+        }
         int estimated = HtmlFuzzyMatcher.estimateWindowCount(code, find);
         if (estimated < SHOW_PROGRESS_MIN_WINDOWS) {
             return HtmlFuzzyMatcher.findCandidatesWithProgress(code, find, minPercent,

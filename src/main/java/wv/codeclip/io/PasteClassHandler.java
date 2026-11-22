@@ -266,7 +266,9 @@ try {
     ex.printStackTrace();
 }
 
+wv.codeclip.ui.UserNotifier.expectSteps(entries.size() + newFiles.size());
 for (SmartPasteExtractor.Entry entry : entries) {
+if (wv.codeclip.ui.UserNotifier.isCancelled()) break;
     try {
         if (entry instanceof SmartPasteExtractor.PatchEntry pe) {
             handleSmartPatchEntry(pe.text(), logLines, combinedSnapshot, titles, failedResults);
@@ -372,6 +374,7 @@ String desc  = PatchParser.extractDesc(patchText);
 List<PatchChange> changes;
 try {
 changes = new PatchParser().parse(patchText);
+wv.codeclip.ui.UserNotifier.expectSteps(changes.size());
 } catch (IllegalArgumentException e) {
 String[] parts = PatchParser.splitRawBlock(e.getMessage());
 PatchErrorDialog.show(parent,
@@ -468,6 +471,7 @@ List<PatchChange> changes;
 
 try {
 changes = patchParser.parse(text);
+wv.codeclip.ui.UserNotifier.expectSteps(changes.size());
 } catch (IllegalArgumentException e) {
 String[] parts = PatchParser.splitRawBlock(e.getMessage());
 PatchErrorDialog.show(parent, "Patch format error:\n\n" + parts[0], null, null, parts[1]);
@@ -887,6 +891,7 @@ private int handleNewFileEntries(List<wv.codeclip.ui.NewFileExtractor.NewFile> n
         int applied = 0;
 
         for (wv.codeclip.ui.NewFileExtractor.NewFile nf : newFiles) {
+            if (wv.codeclip.ui.UserNotifier.isCancelled()) break;
             String rel = nf.path().trim().replace('\\', '/');
             while (rel.startsWith("./")) rel = rel.substring(2);
 

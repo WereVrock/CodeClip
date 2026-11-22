@@ -15,6 +15,17 @@ public class PatchUndoManager {
     }
     private final Deque<Entry> undoStack = new ArrayDeque<>();
     private final Deque<Entry> redoStack = new ArrayDeque<>();
+    private long pushCount = 0;
+
+    /** Total number of undo entries ever pushed. Used to mark a point in time (e.g. start of a paste). */
+    public long getPushCount() {
+        return pushCount;
+    }
+
+    /** Drops the redo stack. Used after a cancelled batch is rolled back, so the cancelled paste cannot be redone. */
+    public void clearRedo() {
+        redoStack.clear();
+    }
     private java.util.function.Consumer<String> panelRemovalCallback;
     private java.util.function.BiConsumer<String, String> panelAddCallback;
     public void setPanelRemovalCallback(java.util.function.Consumer<String> callback) {
@@ -25,12 +36,14 @@ public class PatchUndoManager {
     }
 
 public void pushUndo(Map<String, String> snapshot, String title) {
+    pushCount++;
     undoStack.addFirst(new Entry(snapshot, title));
     if (undoStack.size() > MAX_HISTORY) undoStack.removeLast();
     redoStack.clear();
 }
 
 public void pushUndo(Map<String, String> snapshot, String title, java.util.List<String> allTitles) {
+    pushCount++;
     undoStack.addFirst(new Entry(snapshot, title, allTitles));
     if (undoStack.size() > MAX_HISTORY) undoStack.removeLast();
     redoStack.clear();

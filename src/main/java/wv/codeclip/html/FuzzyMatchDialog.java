@@ -15,7 +15,7 @@ import java.awt.*;
  */
 public class FuzzyMatchDialog extends JDialog {
 
-    public enum Decision { ACCEPT, REJECT }
+    public enum Decision { ACCEPT, ACCEPT_ALL, REJECT }
 
     private Decision result = Decision.REJECT;
 
@@ -72,6 +72,12 @@ public class FuzzyMatchDialog extends JDialog {
         btnPanel.add(copyBtn);
         btnPanel.add(rejectBtn);
         btnPanel.add(acceptBtn);
+        if (wv.codeclip.ui.UserNotifier.batchButtonsVisible()) {
+            JButton acceptAllBtn = new JButton("Accept All");
+            acceptAllBtn.setToolTipText("Accept this match and every remaining confirmation in this paste without asking again.");
+            acceptAllBtn.addActionListener(e -> { result = Decision.ACCEPT_ALL; dispose(); });
+            btnPanel.add(acceptAllBtn);
+        }
         add(btnPanel, BorderLayout.SOUTH);
 
         setPreferredSize(new Dimension(980, 560));

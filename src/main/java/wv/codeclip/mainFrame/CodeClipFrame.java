@@ -108,6 +108,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private JButton lastErrorBtn;
     private JMenuItem lastErrorMenuItem;
     private Runnable syncUndoRedo;
+    private long undoPushMarkBeforeBatch = 0;
 
     private JTabbedPane notesTabs;
     private JTextPane persistentLogPane;
@@ -285,6 +286,7 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
         buildUI();
         installDnD();
+        wv.codeclip.ui.UserNotifier.setLogSink(this::appendTempLog);
 
 // Load persisted state
         currentMode = AppMode.valueOf(settings.loadMode());
@@ -675,6 +677,10 @@ settingsMenu.add(compileCheckItem);
         });
 
         java.util.function.Consumer<Boolean> postPaste = (changed) -> {
+            if (wv.codeclip.ui.UserNotifier.isCancelled()) {
+                rollbackCancelledBatch();
+                return;
+            }
             syncUndoRedo.run();
             if (changed) {
                 stampBuildInfo();
@@ -973,6 +979,8 @@ settingsMenu.add(compileCheckItem);
             syncUndoRedo.run();
             syncProtocolUndoRedo.run();
             showPasteBusyBar();
+            undoPushMarkBeforeBatch = undoManager.getPushCount();
+            wv.codeclip.ui.UserNotifier.beginBatch();
             try {
                 if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
                     // Godot mode has no Smart Paste — always single-block.
@@ -995,6 +1003,8 @@ settingsMenu.add(compileCheckItem);
                     pasteHandler.handlePasteFromClipboard();
                 }
             } finally {
+                rollbackCancelledBatch();
+                wv.codeclip.ui.UserNotifier.endBatch();
                 hidePasteBusyBar();
             }
             syncUndoRedo.run();
@@ -3052,9 +3062,7 @@ private void updateDirectoryButton() {
                 appendTempLog("Auto-replaced duplicate method: " + methodName);
                 return true;
             }
-            InsertMethodConflictDialog.Choice choice
-                    = InsertMethodConflictDialog.show(this, methodName, existingCode, incomingCode);
-            return choice == InsertMethodConflictDialog.Choice.REPLACE;
+            return wv.codeclip.ui.UserNotifier.replaceMethodConflict(this, methodName, existingCode, incomingCode);
         };
         pasteHandler.setConflictResolver(resolver);
 
@@ -4792,6 +4800,49 @@ private void openFileDirectory() {
             JOptionPane.showMessageDialog(this,
                     "Could not open directory:\n" + dir.getAbsolutePath() + "\n\n" + ex.getMessage(),
                     "Open File Directory", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+/**
+     * If the current paste batch was cancelled, undoes every undo entry that
+     * the batch pushed (everything above undoTopBeforeBatch), restoring files
+     * on disk and in the repo. Safe to call more than once: the second call
+     * finds nothing left to undo. Deliberately does NOT re-stamp build info
+     * or touch version history, since a cancelled paste never produced either.
+     */
+
+private void rollbackCancelledBatch() {
+        if (!wv.codeclip.ui.UserNotifier.isCancelled()) {
+            return;
+        }
+        int toUndo = (int) (undoManager.getPushCount() - undoPushMarkBeforeBatch);
+        // Idempotent: a second call (postPaste + finally) finds nothing left.
+        undoPushMarkBeforeBatch = undoManager.getPushCount();
+        int undone = 0;
+        try {
+            while (undone < toUndo && undoManager.canUndo()) {
+                if (undoManager.undo(repo) == null) {
+                    break;
+                }
+                undone++;
+            }
+        } catch (java.io.IOException ex) {
+            appendTempLog("\u2717 Batch rollback failed: " + ex.getMessage());
+        }
+        if (undone > 0) {
+            // The undone entries landed on the redo stack; a cancelled paste must not be redoable.
+            undoManager.clearRedo();
+            pasteHandler.clearDuplicateHistory();
+            godotPasteHandler.clearDuplicateHistory();
+            htmlPasteHandler.clearDuplicateHistory();
+            genericPasteHandler.clearDuplicateHistory();
+            refreshText();
+            refreshPanels();
+            appendTempLog("\u2717 Batch cancelled \u2014 " + undone
+                    + " change set(s) rolled back, nothing from this paste was kept.");
+        }
+        if (syncUndoRedo != null) {
+            syncUndoRedo.run();
         }
     }
 

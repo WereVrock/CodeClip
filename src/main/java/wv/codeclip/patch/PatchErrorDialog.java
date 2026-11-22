@@ -348,6 +348,17 @@ private JPanel buildResultPanel(String errorMessage, Map<String, String> errorsB
             bottomPanel.add(copyBlockAndErrorBtn);
         }
 
+        if (wv.codeclip.ui.UserNotifier.batchButtonsVisible()) {
+            JButton cancelAllBtn = new JButton("Cancel All Batch");
+            cancelAllBtn.setForeground(new Color(160, 40, 40));
+            cancelAllBtn.setToolTipText("Close this and skip every remaining step of this paste. "
+                    + "Everything already applied in this paste is rolled back.");
+            cancelAllBtn.addActionListener(e -> {
+                wv.codeclip.ui.UserNotifier.cancelBatch();
+                dispose();
+            });
+            bottomPanel.add(cancelAllBtn);
+        }
         bottomPanel.add(closeBtn);
 
         JPanel root = new JPanel(new BorderLayout(0, 8));
