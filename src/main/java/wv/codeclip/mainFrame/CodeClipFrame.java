@@ -37,6 +37,8 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 // Replaces JTextArea — supports colored segments
     private final JTextPane notesTextPane = new JTextPane();
 
+    private wv.codeclip.ui.ContentSearchDialog contentSearchDialog = null;
+
 // Source of truth
     private String notesBuffer = "";
     private String logBuffer = "";
@@ -184,6 +186,9 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
 
     private final wv.codeclip.io.RecentProjects recentProjects = new wv.codeclip.io.RecentProjects();
     private JMenu recentProjectsMenu;
+    /** Source roots the user removed from Recent. The currently loaded project
+     *  must not silently re-register itself under one of these. */
+    private final java.util.Set<String> suppressedRecentRoots = new java.util.HashSet<>();
 
     private JWindow loadBarWindow;
     private JProgressBar loadProgressBar;
@@ -553,12 +558,22 @@ settingsMenu.add(compileCheckItem);
             settings.saveProperties();
         });
         extraMenu.add(copyCodemapItem);
+        // "Copy File Map" now lives in the "..." file actions dialog.
         copyMetaItem = new JMenuItem("Copy Meta Instructions");
         copyMetaItem.addActionListener(e -> {
             new ClipboardService().write(wv.codeclip.config.MetaInstructions.TEXT);
         });
         extraMenu.add(copyMetaItem);
         menuBar.add(extraMenu);
+
+        JMenu searchMenu = new JMenu("Search");
+        JMenuItem contentSearchItem = new JMenuItem("Search in Files…");
+        contentSearchItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_F,
+                java.awt.event.InputEvent.CTRL_DOWN_MASK | java.awt.event.InputEvent.SHIFT_DOWN_MASK));
+        contentSearchItem.setToolTipText("Search inside the contents of the loaded files");
+        contentSearchItem.addActionListener(e -> openContentSearchDialog());
+        searchMenu.add(contentSearchItem);
+        menuBar.add(searchMenu);
 
         JMenu systemMenu = new JMenu("System");
         JMenuItem checkpointItem = new JMenuItem("Checkpoint…");
@@ -770,6 +785,12 @@ settingsMenu.add(compileCheckItem);
         });
 
         classPanel.setLayout(new BoxLayout(classPanel, BoxLayout.Y_AXIS));
+        classPanel.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                maybeShowClassPanelContextMenu(e);
+            }
+        });
         JScrollPane classScroll = new JScrollPane(classPanel);
         classScroll.getVerticalScrollBar().setUnitIncrement(16);
 
@@ -2710,6 +2731,7 @@ private void applyBackupCheckpointsIfNeeded() {
         projectNameManager.resetToUnattached();
         protocolDirectoryManager.resetToUnattached();
         backupAppliedPaths.clear();
+        suppressedRecentRoots.clear();
         backupWarnedForRoot = null;
 
         // Reset means "fresh directories for the next project". The pending
@@ -2841,6 +2863,10 @@ private void applyBackupCheckpointsIfNeeded() {
             }
         }
 
+        // Bind the mode directory to the root saved in the Recent entry.
+        // Without this, the post-Reset auto-set picks the folder holding the
+        // most files (e.g. SA/src/sim) instead of the real project root.
+        setCurrentModeDirectory(rootDir);
         addFilesBatched(existing);
     }
 
@@ -2885,6 +2911,9 @@ private void applyBackupCheckpointsIfNeeded() {
         }
         // Drop any old entry for this root first, so a stale (smaller) file
         // list can never survive even if add() only bumps an existing entry.
+        if (suppressedRecentRoots.contains(rootPath)) {
+            return;
+        }
         recentProjects.remove(rootPath);
         recentProjects.add(rootPath, projectNameManager.getProjectName(), paths, currentMode.name());
         recentProjects.save(settings);
@@ -4401,6 +4430,7 @@ private void addRemoveFromRecentSubmenu() {
         if (choice == JOptionPane.YES_OPTION) {
             for (wv.codeclip.io.RecentProjects.Entry en : entries) {
                 recentProjects.remove(en.sourceRoot());
+                suppressedRecentRoots.add(en.sourceRoot());
             }
             recentProjects.save(settings);
             settings.saveProperties();
@@ -4412,6 +4442,7 @@ private void addRemoveFromRecentSubmenu() {
 
 private void removeRecentEntry(wv.codeclip.io.RecentProjects.Entry entry) {
     recentProjects.remove(entry.sourceRoot());
+    suppressedRecentRoots.add(entry.sourceRoot());
     recentProjects.save(settings);
     settings.saveProperties();
     appendTempLog("Removed from Recent: " + entry.menuLabel());
@@ -4844,6 +4875,107 @@ private void rollbackCancelledBatch() {
         if (syncUndoRedo != null) {
             syncUndoRedo.run();
         }
+    }
+
+// ------------------------------------------------------------------
+    // Copy File Map
+    // ------------------------------------------------------------------
+
+    private void maybeShowClassPanelContextMenu(java.awt.event.MouseEvent e) {
+        if (e.getButton() != java.awt.event.MouseEvent.BUTTON3) {
+            return;
+        }
+        Component deepest = SwingUtilities.getDeepestComponentAt(
+                classPanel, e.getX(), e.getY());
+        String className = findClassNameForComponent(deepest);
+        if (className == null) {
+            return;
+        }
+        JPopupMenu pm = new JPopupMenu();
+        JMenuItem item = new JMenuItem("Copy File Map");
+        item.addActionListener(ev -> copyFileMapForLoadedClass(className));
+        pm.add(item);
+        pm.show(classPanel, e.getX(), e.getY());
+    }
+
+    private String findClassNameForComponent(Component c) {
+        Component cur = c;
+        while (cur != null && cur != classPanel) {
+            if (cur instanceof JComponent jc) {
+                Object n = jc.getClientProperty("name");
+                if (n instanceof String s && !s.isBlank()) {
+                    return s;
+                }
+            }
+            cur = cur.getParent();
+        }
+        return null;
+    }
+
+    private void promptCopyFileMapDialog() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Pick a file to map");
+        if (projectSourceRoot != null && projectSourceRoot.exists()) {
+            chooser.setCurrentDirectory(projectSourceRoot);
+        }
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        File chosen = chooser.getSelectedFile();
+        if (chosen == null) {
+            return;
+        }
+        copyFileMapForFile(chosen);
+    }
+
+    private void copyFileMapForLoadedClass(String className) {
+        File f = repo.getClassFileMap().get(className);
+        if (f == null) {
+            appendTempLog("[Codemap] No file associated with " + className);
+            return;
+        }
+        copyFileMapForFile(f);
+    }
+
+    private void copyFileMapForFile(File file) {
+        String map;
+        try {
+            String content = Files.readString(file.toPath());
+            map = wv.codeclip.codemap.sourceMapper.SourceMappers.map(
+                    content, file.getName());
+        } catch (Exception ex) {
+            String warn = "[Codemap] Could not read " + file.getName()
+                    + ": " + ex.getMessage();
+            appendTempLog(warn);
+            new ClipboardService().write(warn);
+            return;
+        }
+
+        if (map == null || map.isBlank()) {
+            String warn = "[Codemap] No analyzer available for "
+                    + file.getName()
+                    + " (extension not supported yet). Nothing copied.";
+            appendTempLog(warn);
+            new ClipboardService().write(warn);
+            return;
+        }
+
+        new ClipboardService().write(map);
+        appendTempLog("[Codemap] Copied file map for " + file.getName()
+                + " (" + map.length() + " chars)");
+    }
+
+private void openContentSearchDialog() {
+        if (contentSearchDialog == null || !contentSearchDialog.isDisplayable()) {
+            contentSearchDialog = new wv.codeclip.ui.ContentSearchDialog(
+                    this, repo, settings,
+                    () -> {
+                        refreshText();
+                        refreshPanels();
+                    });
+        }
+        contentSearchDialog.setVisible(true);
+        contentSearchDialog.focusQuery();
     }
 
 }

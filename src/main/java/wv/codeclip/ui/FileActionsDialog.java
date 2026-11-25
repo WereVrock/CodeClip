@@ -3,6 +3,9 @@ package wv.codeclip.ui;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.Desktop;
+import java.awt.event.KeyEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.File;
 import java.io.IOException;
 
@@ -59,7 +62,9 @@ public static void show(JFrame parent, File file, java.util.function.Consumer<St
             return;
         }
 
-        JDialog dialog = new JDialog(parent, file.getName(), true);
+        // Non-modal on purpose: a modal dialog swallows outside clicks, so it
+        // could never detect them. See installAutoClose().
+        JDialog dialog = new JDialog(parent, file.getName(), false);
         dialog.setLayout(new BorderLayout(10, 10));
         dialog.getRootPane().setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
 
@@ -92,15 +97,24 @@ public static void show(JFrame parent, File file, java.util.function.Consumer<St
 
         JButton editBtn = new JButton("Edit");
         editBtn.setToolTipText("Opens the file in Notepad++ if installed, otherwise Notepad.");
-        editBtn.addActionListener(e -> openInEditor(dialog, file));
+        editBtn.addActionListener(e -> {
+            openInEditor(dialog, file);
+            dialog.dispose();
+        });
 
         JButton playBtn = new JButton("Play");
         playBtn.setToolTipText("Opens the file with the system default application.");
-        playBtn.addActionListener(e -> openWithDefaultApp(dialog, file));
+        playBtn.addActionListener(e -> {
+            openWithDefaultApp(dialog, file);
+            dialog.dispose();
+        });
 
         JButton locationBtn = new JButton("Open File Location");
         locationBtn.setToolTipText("Opens the containing folder and selects the file.");
-        locationBtn.addActionListener(e -> openFileLocation(dialog, file));
+        locationBtn.addActionListener(e -> {
+            openFileLocation(dialog, file);
+            dialog.dispose();
+        });
 
         JButton closeBtn = new JButton("Close");
         closeBtn.addActionListener(e -> dialog.dispose());
@@ -109,6 +123,15 @@ public static void show(JFrame parent, File file, java.util.function.Consumer<St
         btnPanel.add(editBtn);
         btnPanel.add(playBtn);
         btnPanel.add(locationBtn);
+
+        JButton mapBtn = new JButton("Copy File Map");
+        mapBtn.setToolTipText("Copies a structure map (exports, imports, summary) of this file to the clipboard.");
+        mapBtn.setEnabled(exists);
+        mapBtn.addActionListener(e -> {
+            copyFileMap(dialog, file);
+            dialog.dispose();
+        });
+        btnPanel.add(mapBtn);
 
         if (onRemove != null) {
             JButton removeBtn = new JButton("Remove");
@@ -147,6 +170,7 @@ public static void show(JFrame parent, File file, java.util.function.Consumer<St
 
         dialog.pack();
         dialog.setMinimumSize(new Dimension(520, exists ? 160 : 190));
+        installAutoClose(dialog);
         dialog.setLocationRelativeTo(parent);
         dialog.setVisible(true);
     }
@@ -192,7 +216,7 @@ public static void show(JFrame parent, File file, java.util.function.Consumer<St
      * cover the overwhelming majority of real installs and keep this
      * dependency-free.
      */
-    private static String findNotepadPlusPlus() {
+    static String findNotepadPlusPlus() {
         String[] candidates = {
                 System.getenv("ProgramFiles") + "\\Notepad++\\notepad++.exe",
                 System.getenv("ProgramFiles(x86)") + "\\Notepad++\\notepad++.exe",
@@ -294,4 +318,51 @@ private static void openFileLocation(Component parent, File file) {
                 "File Action Failed",
                 JOptionPane.ERROR_MESSAGE);
     }
+
+private static void copyFileMap(Component parent, File file) {
+        String map;
+        try {
+            String content = java.nio.file.Files.readString(file.toPath());
+            map = wv.codeclip.codemap.sourceMapper.SourceMappers.map(content, file.getName());
+        } catch (Exception | LinkageError ex) {
+            showFailure(parent, "Could not build the file map", ex);
+            return;
+        }
+        if (map == null || map.isBlank()) {
+            JOptionPane.showMessageDialog(parent,
+                    "No file map is available for this file type yet.\nNothing was copied.",
+                    "Copy File Map", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        new wv.codeclip.io.ClipboardService().write(map);
+        ClipboardFlash.flash();
+    }
+
+/**
+     * Closes the dialog on Esc and when it loses focus (outside click, other
+     * app). Focus moving to a confirm/error dialog owned by this one does not
+     * count, so Remove/Delete confirmations keep working.
+     */
+    private static void installAutoClose(JDialog dialog) {
+        dialog.getRootPane().registerKeyboardAction(e -> dialog.dispose(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW);
+        dialog.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowDeactivated(WindowEvent e) {
+                SwingUtilities.invokeLater(() -> {
+                    if (!dialog.isDisplayable() || dialog.isActive()) {
+                        return;
+                    }
+                    for (Window owned : dialog.getOwnedWindows()) {
+                        if (owned.isVisible()) {
+                            return;
+                        }
+                    }
+                    dialog.dispose();
+                });
+            }
+        });
+    }
+
 }
