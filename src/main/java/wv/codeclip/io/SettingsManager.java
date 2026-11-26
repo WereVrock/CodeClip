@@ -244,4 +244,12 @@ public String loadCodemapScope() {
         for (String k : toRemove) properties.remove(k);
     }
 
+public boolean loadIgnoreDotFiles() {
+        return Boolean.parseBoolean(properties.getProperty("ignore.dot.files", "true"));
+    }
+
+public void saveIgnoreDotFiles(boolean value) {
+        properties.setProperty("ignore.dot.files", String.valueOf(value));
+    }
+
 }

@@ -25,6 +25,7 @@ public class FileDropHandler extends DropTargetAdapter {
     private DragOverlayPanel overlayPanel;
     private wv.codeclip.AppMode mode = wv.codeclip.AppMode.JAVA;
     private final List<File> rejectedThisDrop = new ArrayList<>();
+    private boolean ignoreDotFiles = true;
 
     public FileDropHandler(Consumer<File> fileConsumer) {
         this.batchConsumer = files -> files.forEach(fileConsumer);
@@ -208,7 +209,8 @@ private void collectFiles(File file, List<File> out) {
                     public java.nio.file.FileVisitResult preVisitDirectory(java.nio.file.Path dir,
                             java.nio.file.attribute.BasicFileAttributes attrs) {
                         if (!dir.equals(rootPath) && dir.getFileName() != null
-                                && skipDirs.contains(dir.getFileName().toString().toLowerCase())) {
+                                && (skipDirs.contains(dir.getFileName().toString().toLowerCase())
+                                    || (ignoreDotFiles && dir.getFileName().toString().startsWith(".")))) {
                             return java.nio.file.FileVisitResult.SKIP_SUBTREE;
                         }
                         return java.nio.file.FileVisitResult.CONTINUE;
@@ -218,7 +220,8 @@ private void collectFiles(File file, List<File> out) {
                     public java.nio.file.FileVisitResult visitFile(java.nio.file.Path p,
                             java.nio.file.attribute.BasicFileAttributes attrs) {
                         File f = p.toFile();
-                        if (attrs.isRegularFile() && mode.accepts(f.getName())) {
+                        if (attrs.isRegularFile() && mode.accepts(f.getName())
+                                && !(ignoreDotFiles && f.getName().startsWith("."))) {
                             out.add(f);
                         }
                         return java.nio.file.FileVisitResult.CONTINUE;
@@ -287,6 +290,10 @@ private void warnAboutRejected() {
         String msg = sb.toString();
         SwingUtilities.invokeLater(() -> javax.swing.JOptionPane.showMessageDialog(
                 frame, msg, "Files Not Added", javax.swing.JOptionPane.WARNING_MESSAGE));
+    }
+
+public void setIgnoreDotFiles(boolean ignoreDotFiles) {
+        this.ignoreDotFiles = ignoreDotFiles;
     }
 
 }

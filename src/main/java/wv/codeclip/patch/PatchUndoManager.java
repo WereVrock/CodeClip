@@ -4,6 +4,8 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Deque;
 import java.util.Map;
 public class PatchUndoManager {
@@ -16,6 +18,7 @@ public class PatchUndoManager {
     private final Deque<Entry> undoStack = new ArrayDeque<>();
     private final Deque<Entry> redoStack = new ArrayDeque<>();
     private long pushCount = 0;
+    private final List<PatchRecord> pendingPatchRecords = new ArrayList<>();
 
     /** Total number of undo entries ever pushed. Used to mark a point in time (e.g. start of a paste). */
     public long getPushCount() {
@@ -177,6 +180,35 @@ private static boolean hasProjectMarker(File dir) {
 
 public Entry peekUndo() {
     return undoStack.peekFirst();
+}
+
+/** Returns the patch records collected since the last call and clears them. */
+public List<PatchRecord> drainPatchRecords() {
+    List<PatchRecord> out = new ArrayList<>(pendingPatchRecords);
+    pendingPatchRecords.clear();
+    return out;
+}
+
+/**
+ * Remembers what one successfully applied patch block changed (per file: content
+ * before and after) so it can be reverted on its own later. 'before' is the undo
+ * snapshot of that block; 'after' is read from the repo, which already holds the
+ * patched code. The frame collects pending records when it creates the version
+ * event for the paste.
+ */
+public void recordPatch(String title, Map<String, String> before, ClassRepository repo) {
+    if (before == null || before.isEmpty()) return;
+    Map<String, String> b = new java.util.LinkedHashMap<>();
+    Map<String, String> a = new java.util.LinkedHashMap<>();
+    for (Map.Entry<String, String> e : before.entrySet()) {
+        String now = repo.getClassCodeMap().get(e.getKey());
+        if (e.getValue() == null || now == null || now.equals(e.getValue())) continue;
+        b.put(e.getKey(), e.getValue());
+        a.put(e.getKey(), now);
+    }
+    if (b.isEmpty()) return;
+    String name = (title != null && !title.isBlank()) ? title.trim() : "Untitled patch";
+    pendingPatchRecords.add(new PatchRecord(name, b, a));
 }
 
 }

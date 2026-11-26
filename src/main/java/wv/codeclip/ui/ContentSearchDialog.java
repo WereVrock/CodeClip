@@ -50,6 +50,7 @@ public final class ContentSearchDialog extends JDialog {
     private static final String PREF_WS = "search.ignoreWhitespace";
     private static final String PREF_SCOPE = "search.scope";
     private static final String PREF_FILES = "search.fileFilter";
+    private static final String PREF_TREE = "search.folderView";
 
     private static final int AUTO_EXPAND_HIT_LIMIT = 300;
 
@@ -74,8 +75,11 @@ public final class ContentSearchDialog extends JDialog {
     private final JLabel statusLabel = new JLabel(" ");
     private final JLabel errorLabel = new JLabel(" ");
 
-    private final JButton enableOnlyBtn = new JButton("Enable Only Matched");
-    private final JButton enableAlsoBtn = new JButton("Enable Matched");
+    private final JButton enableOnlyBtn = new JButton("Enable");
+    private final JButton enableAlsoBtn = new JButton("Enable Also");
+    private final JButton disableBtn = new JButton("Disable");
+    private final JButton selectAllBtn = new JButton("Select All");
+    private final JToggleButton treeViewBtn = new JToggleButton("Folder view");
     private final JButton copyEnableBtn = new JButton("Copy @@Enable");
     private final JButton copyResultsBtn = new JButton("Copy Results");
     private final JButton openBtn = new JButton("Open in Editor");
@@ -89,6 +93,11 @@ public final class ContentSearchDialog extends JDialog {
     private int searchGeneration = 0;
 
     private final List<FileResult> lastResults = new ArrayList<>();
+    private final Set<String> selectedPaths = new LinkedHashSet<>();
+    private final Map<String, DefaultMutableTreeNode> folderNodes = new HashMap<>();
+    private String treeRootPath = "";
+
+    private record FolderData(String name, String path) {}
     private final Set<String> duplicateNames = new HashSet<>();
     private String lastDescription = "";
     private int totalHits = 0;
@@ -161,6 +170,8 @@ public final class ContentSearchDialog extends JDialog {
         scopeRow.add(scopeBox);
         scopeRow.add(new JLabel("Files:"));
         scopeRow.add(fileFilterField);
+        treeViewBtn.setToolTipText("Group the results by folder; a folder checkbox selects every file inside it");
+        scopeRow.add(treeViewBtn);
 
         errorLabel.setForeground(new Color(180, 30, 30));
 
@@ -179,15 +190,21 @@ public final class ContentSearchDialog extends JDialog {
         JScrollPane treeScroll = new JScrollPane(tree);
         treeScroll.getVerticalScrollBar().setUnitIncrement(16);
 
-        enableOnlyBtn.setToolTipText("Disable every file except the ones with matches");
-        enableAlsoBtn.setToolTipText("Enable the files with matches, keep the rest as they are");
-        copyEnableBtn.setToolTipText("Copies an @@Enable line listing the files with matches");
+        enableOnlyBtn.setToolTipText("Disable every file, then enable only the checked ones");
+        enableAlsoBtn.setToolTipText("Enable the checked files, keep the currently enabled ones");
+        disableBtn.setToolTipText("Disable the checked files");
+        selectAllBtn.setToolTipText("Check or uncheck every file in the results");
+        copyEnableBtn.setToolTipText("Copies an @@Enable line listing the checked files");
         copyResultsBtn.setToolTipText("Copies the result list (file, line, text) to the clipboard");
         openBtn.setToolTipText("Opens the selected file at the selected line (Notepad++ if installed)");
 
+        JPanel selectionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        selectionRow.add(selectAllBtn);
+        selectionRow.add(enableOnlyBtn);
+        selectionRow.add(enableAlsoBtn);
+        selectionRow.add(disableBtn);
+
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        actions.add(enableOnlyBtn);
-        actions.add(enableAlsoBtn);
         actions.add(copyEnableBtn);
         actions.add(copyResultsBtn);
         actions.add(openBtn);
@@ -200,8 +217,11 @@ public final class ContentSearchDialog extends JDialog {
         buttonRow.add(closeRow, BorderLayout.EAST);
 
         JPanel bottom = new JPanel(new BorderLayout(0, 6));
+        JPanel bottomCenter = new JPanel(new BorderLayout(0, 4));
+        bottomCenter.add(selectionRow, BorderLayout.NORTH);
+        bottomCenter.add(buttonRow, BorderLayout.CENTER);
         bottom.add(statusLabel, BorderLayout.NORTH);
-        bottom.add(buttonRow, BorderLayout.CENTER);
+        bottom.add(bottomCenter, BorderLayout.CENTER);
 
         content.add(top, BorderLayout.NORTH);
         content.add(treeScroll, BorderLayout.CENTER);
@@ -227,8 +247,17 @@ public final class ContentSearchDialog extends JDialog {
         ignoreWsBox.addActionListener(rerun);
         scopeBox.addActionListener(rerun);
 
-        enableOnlyBtn.addActionListener(e -> enableMatched(true));
-        enableAlsoBtn.addActionListener(e -> enableMatched(false));
+        enableOnlyBtn.addActionListener(e -> enableSelected(true));
+        enableAlsoBtn.addActionListener(e -> enableSelected(false));
+        disableBtn.addActionListener(e -> disableSelected());
+        selectAllBtn.addActionListener(e -> toggleSelectAll());
+        treeViewBtn.addActionListener(e -> rebuildTreeModel());
+        tree.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                handleCheckClick(e);
+            }
+        });
         copyEnableBtn.addActionListener(e -> copyEnableLine());
         copyResultsBtn.addActionListener(e -> copyResults());
         openBtn.addActionListener(e -> openSelected());
@@ -274,16 +303,21 @@ public final class ContentSearchDialog extends JDialog {
         stopBtn.setEnabled(searching);
     }
 
-    private void updateActionButtons() {
-        boolean has = !lastResults.isEmpty();
-        enableOnlyBtn.setEnabled(has);
-        enableAlsoBtn.setEnabled(has);
-        copyEnableBtn.setEnabled(has);
-        copyResultsBtn.setEnabled(has);
-        openBtn.setEnabled(has);
-    }
+private void updateActionButtons() {
+    boolean has = !lastResults.isEmpty();
+    boolean anySelected = !selectedPaths.isEmpty();
+    enableOnlyBtn.setEnabled(anySelected);
+    enableAlsoBtn.setEnabled(anySelected);
+    disableBtn.setEnabled(anySelected);
+    selectAllBtn.setEnabled(has);
+    selectAllBtn.setText(has && selectedPaths.size() == lastResults.size()
+            ? "Deselect All" : "Select All");
+    copyEnableBtn.setEnabled(has);
+    copyResultsBtn.setEnabled(has);
+    openBtn.setEnabled(has);
+}
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // Searching
     // ------------------------------------------------------------------
 
@@ -344,6 +378,7 @@ public final class ContentSearchDialog extends JDialog {
         }
 
         lastDescription = describe(opts, enabledOnly, filter);
+        treeRootPath = commonDirOf(targets);
         savePrefs();
 
         final int generation = ++searchGeneration;
@@ -433,38 +468,31 @@ public final class ContentSearchDialog extends JDialog {
         searchGeneration++;
     }
 
-    private void clearResults() {
-        rootNode.removeAllChildren();
-        treeModel.reload();
-        lastResults.clear();
-        totalHits = 0;
-        filesWithHits = 0;
-        truncatedFiles = 0;
-        updateActionButtons();
-    }
+private void clearResults() {
+    rootNode.removeAllChildren();
+    treeModel.reload();
+    lastResults.clear();
+    selectedPaths.clear();
+    folderNodes.clear();
+    totalHits = 0;
+    filesWithHits = 0;
+    truncatedFiles = 0;
+    updateActionButtons();
+}
 
-    private void addResult(FileResult r) {
-        lastResults.add(r);
-        totalHits += r.hits().size();
-        filesWithHits++;
-        if (r.truncated()) {
-            truncatedFiles++;
-        }
-        DefaultMutableTreeNode fileNode = new DefaultMutableTreeNode(r);
-        for (Hit h : r.hits()) {
-            fileNode.add(new DefaultMutableTreeNode(new HitNode(r, h)));
-        }
-        treeModel.insertNodeInto(fileNode, rootNode, rootNode.getChildCount());
-        if (rootNode.getChildCount() == 1) {
-            tree.expandPath(new TreePath(rootNode));
-        }
-        if (totalHits <= AUTO_EXPAND_HIT_LIMIT) {
-            tree.expandPath(new TreePath(fileNode.getPath()));
-        }
-        updateActionButtons();
+private void addResult(FileResult r) {
+    lastResults.add(r);
+    selectedPaths.add(r.path());
+    totalHits += r.hits().size();
+    filesWithHits++;
+    if (r.truncated()) {
+        truncatedFiles++;
     }
+    insertResultNode(r);
+    updateActionButtons();
+}
 
-    private String finalStatus(boolean stopped, int searched, int total, int failed, long ms) {
+private String finalStatus(boolean stopped, int searched, int total, int failed, long ms) {
         StringBuilder sb = new StringBuilder();
         if (totalHits == 0) {
             sb.append("No matches");
@@ -511,16 +539,183 @@ public final class ContentSearchDialog extends JDialog {
         return last instanceof DefaultMutableTreeNode n ? n.getUserObject() : null;
     }
 
-    private Set<String> matchedPaths() {
-        Set<String> paths = new LinkedHashSet<>();
-        for (FileResult r : lastResults) {
-            paths.add(r.path());
+    private void insertResultNode(FileResult r) {
+        DefaultMutableTreeNode fileNode = new DefaultMutableTreeNode(r);
+        for (Hit h : r.hits()) {
+            fileNode.add(new DefaultMutableTreeNode(new HitNode(r, h)));
         }
-        return paths;
+        boolean folderView = treeViewBtn.isSelected();
+        DefaultMutableTreeNode parent = folderView ? folderNodeFor(r.path()) : rootNode;
+        treeModel.insertNodeInto(fileNode, parent, parent.getChildCount());
+        if (rootNode.getChildCount() == 1) {
+            tree.expandPath(new TreePath(rootNode));
+        }
+        if (folderView) {
+            tree.expandPath(new TreePath(parent.getPath()));
+        }
+        if (totalHits <= AUTO_EXPAND_HIT_LIMIT) {
+            tree.expandPath(new TreePath(fileNode.getPath()));
+        }
     }
 
-    private void enableMatched(boolean exclusive) {
-        Set<String> matched = matchedPaths();
+    /** Finds or creates the folder chain (relative to the common root) for a file. */
+    private DefaultMutableTreeNode folderNodeFor(String filePath) {
+        File parent = new File(filePath).getParentFile();
+        if (parent == null) {
+            return rootNode;
+        }
+        List<File> chain = new ArrayList<>();
+        for (File d = parent; d != null; d = d.getParentFile()) {
+            if (d.getAbsolutePath().equals(treeRootPath)) {
+                break;
+            }
+            chain.add(0, d);
+        }
+        DefaultMutableTreeNode current = rootNode;
+        for (File d : chain) {
+            String key = d.getAbsolutePath();
+            DefaultMutableTreeNode node = folderNodes.get(key);
+            if (node == null) {
+                String name = d.getName().isEmpty() ? key : d.getName();
+                node = new DefaultMutableTreeNode(new FolderData(name, key));
+                treeModel.insertNodeInto(node, current, current.getChildCount());
+                folderNodes.put(key, node);
+            }
+            current = node;
+        }
+        return current;
+    }
+
+    private void rebuildTreeModel() {
+        rootNode.removeAllChildren();
+        folderNodes.clear();
+        treeModel.reload();
+        for (FileResult r : new ArrayList<>(lastResults)) {
+            insertResultNode(r);
+        }
+        updateActionButtons();
+    }
+
+    private static String commonDirOf(List<Target> targets) {
+        File common = null;
+        for (Target t : targets) {
+            File dir = new File(t.path()).getParentFile();
+            if (dir == null) {
+                return "";
+            }
+            if (common == null) {
+                common = dir;
+                continue;
+            }
+            while (common != null
+                    && !dir.getAbsolutePath().equals(common.getAbsolutePath())
+                    && !dir.getAbsolutePath().startsWith(common.getAbsolutePath() + File.separator)) {
+                common = common.getParentFile();
+            }
+            if (common == null) {
+                return "";
+            }
+        }
+        return common != null ? common.getAbsolutePath() : "";
+    }
+
+    /** Collects the file paths under a node without descending into hit nodes. */
+    private void collectFilePaths(DefaultMutableTreeNode node, List<String> out) {
+        Object uo = node.getUserObject();
+        if (uo instanceof FileResult fr) {
+            out.add(fr.path());
+            return;
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            collectFilePaths((DefaultMutableTreeNode) node.getChildAt(i), out);
+        }
+    }
+
+    /** 0 = none selected, 1 = all selected, 2 = some selected. */
+    private int selectionState(List<String> paths) {
+        if (paths.isEmpty()) {
+            return 0;
+        }
+        int picked = 0;
+        for (String p : paths) {
+            if (selectedPaths.contains(p)) {
+                picked++;
+            }
+        }
+        if (picked == 0) {
+            return 0;
+        }
+        return picked == paths.size() ? 1 : 2;
+    }
+
+    private void handleCheckClick(MouseEvent e) {
+        if (e.getButton() != MouseEvent.BUTTON1) {
+            return;
+        }
+        int row = tree.getRowForLocation(e.getX(), e.getY());
+        if (row < 0) {
+            return;
+        }
+        Rectangle b = tree.getRowBounds(row);
+        if (b == null || e.getX() > b.x + 22) {
+            return;
+        }
+        TreePath p = tree.getPathForRow(row);
+        if (p == null || !(p.getLastPathComponent() instanceof DefaultMutableTreeNode node)) {
+            return;
+        }
+        Object o = node.getUserObject();
+        if (o instanceof FileResult fr) {
+            if (!selectedPaths.remove(fr.path())) {
+                selectedPaths.add(fr.path());
+            }
+        } else if (o instanceof FolderData) {
+            List<String> paths = new ArrayList<>();
+            collectFilePaths(node, paths);
+            if (selectionState(paths) == 1) {
+                selectedPaths.removeAll(paths);
+            } else {
+                selectedPaths.addAll(paths);
+            }
+        } else {
+            return;
+        }
+        tree.repaint();
+        updateActionButtons();
+    }
+
+    private void toggleSelectAll() {
+        if (lastResults.isEmpty()) {
+            return;
+        }
+        boolean allSelected = selectedPaths.size() == lastResults.size();
+        selectedPaths.clear();
+        if (!allSelected) {
+            for (FileResult r : lastResults) {
+                selectedPaths.add(r.path());
+            }
+        }
+        tree.repaint();
+        updateActionButtons();
+    }
+
+    private void disableSelected() {
+        if (selectedPaths.isEmpty()) {
+            return;
+        }
+        int count = 0;
+        for (String path : new ArrayList<>(selectedPaths)) {
+            if (repo.getClassCodeMap().containsKey(path)) {
+                repo.getDisabledClasses().add(path);
+                count++;
+            }
+        }
+        onEnabledChanged.run();
+        statusLabel.setText("Disabled " + count + " selected file(s).");
+    }
+
+    private void enableSelected(boolean exclusive) {
+        Set<String> matched = new LinkedHashSet<>(selectedPaths);
         if (matched.isEmpty()) {
             return;
         }
@@ -530,27 +725,34 @@ public final class ContentSearchDialog extends JDialog {
         repo.getDisabledClasses().removeAll(matched);
         onEnabledChanged.run();
         statusLabel.setText((exclusive ? "Enabled only " : "Enabled ") + matched.size()
-                + " matched file(s).");
+                + " selected file(s).");
     }
 
-    private void copyEnableLine() {
-        List<String> tokens = new ArrayList<>();
-        for (FileResult r : lastResults) {
-            String token = r.name();
-            if (duplicateNames.contains(r.name().toLowerCase(Locale.ROOT))) {
-                File parent = new File(r.path()).getParentFile();
-                if (parent != null && !parent.getName().isEmpty()) {
-                    token = parent.getName() + "/" + r.name();
-                }
-            }
-            tokens.add(token);
+private void copyEnableLine() {
+    List<String> tokens = new ArrayList<>();
+    for (FileResult r : lastResults) {
+        if (!selectedPaths.contains(r.path())) {
+            continue;
         }
-        new ClipboardService().write("@@Enable " + String.join(", ", tokens));
-        ClipboardFlash.flash();
-        statusLabel.setText("Copied @@Enable line for " + tokens.size() + " file(s).");
+        String token = r.name();
+        if (duplicateNames.contains(r.name().toLowerCase(Locale.ROOT))) {
+            File parent = new File(r.path()).getParentFile();
+            if (parent != null && !parent.getName().isEmpty()) {
+                token = parent.getName() + "/" + r.name();
+            }
+        }
+        tokens.add(token);
     }
+    if (tokens.isEmpty()) {
+        statusLabel.setText("No files are checked.");
+        return;
+    }
+    new ClipboardService().write("@@Enable " + String.join(", ", tokens));
+    ClipboardFlash.flash();
+    statusLabel.setText("Copied @@Enable line for " + tokens.size() + " file(s).");
+}
 
-    private void copyResults() {
+private void copyResults() {
         StringBuilder sb = new StringBuilder();
         sb.append(lastDescription).append("\n");
         sb.append(totalHits).append(" match(es) in ").append(filesWithHits).append(" file(s)\n\n");
@@ -623,6 +825,7 @@ public final class ContentSearchDialog extends JDialog {
         regexBox.setSelected(Boolean.parseBoolean(settings.getRawProperty(PREF_REGEX, "false")));
         ignoreWsBox.setSelected(Boolean.parseBoolean(settings.getRawProperty(PREF_WS, "false")));
         fileFilterField.setText(settings.getRawProperty(PREF_FILES, ""));
+        treeViewBtn.setSelected(Boolean.parseBoolean(settings.getRawProperty(PREF_TREE, "false")));
         try {
             int idx = Integer.parseInt(settings.getRawProperty(PREF_SCOPE, "0"));
             scopeBox.setSelectedIndex(idx == 1 ? 1 : 0);
@@ -638,6 +841,7 @@ public final class ContentSearchDialog extends JDialog {
         settings.setRawProperty(PREF_REGEX, Boolean.toString(regexBox.isSelected()));
         settings.setRawProperty(PREF_WS, Boolean.toString(ignoreWsBox.isSelected()));
         settings.setRawProperty(PREF_FILES, fileFilterField.getText());
+        settings.setRawProperty(PREF_TREE, Boolean.toString(treeViewBtn.isSelected()));
         settings.setRawProperty(PREF_SCOPE, Integer.toString(scopeBox.getSelectedIndex()));
         settings.saveProperties();
     }
@@ -688,7 +892,50 @@ public final class ContentSearchDialog extends JDialog {
         return sb.toString();
     }
 
-    private static final class ResultRenderer extends DefaultTreeCellRenderer {
+    /** Small L&F-independent checkbox icon: 0 = empty, 1 = checked, 2 = partial. */
+    private static final class CheckIcon implements Icon {
+        private static final int SIZE = 13;
+        private final int state;
+
+        CheckIcon(int state) {
+            this.state = state;
+        }
+
+        @Override
+        public int getIconWidth() {
+            return SIZE;
+        }
+
+        @Override
+        public int getIconHeight() {
+            return SIZE;
+        }
+
+        @Override
+        public void paintIcon(Component c, Graphics g, int x, int y) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(Color.WHITE);
+                g2.fillRect(x, y, SIZE - 1, SIZE - 1);
+                g2.setColor(new Color(110, 110, 110));
+                g2.drawRect(x, y, SIZE - 1, SIZE - 1);
+                g2.setColor(new Color(30, 100, 210));
+                if (state == 1) {
+                    g2.setStroke(new BasicStroke(2f));
+                    g2.drawLine(x + 3, y + 6, x + 5, y + 9);
+                    g2.drawLine(x + 5, y + 9, x + 10, y + 3);
+                } else if (state == 2) {
+                    g2.fillRect(x + 3, y + 5, SIZE - 6, 3);
+                }
+            } finally {
+                g2.dispose();
+            }
+        }
+    }
+
+    private final class ResultRenderer extends DefaultTreeCellRenderer {
         @Override
         public Component getTreeCellRendererComponent(JTree tree, Object value, boolean sel,
                                                       boolean expanded, boolean leaf, int row,
@@ -696,14 +943,28 @@ public final class ContentSearchDialog extends JDialog {
             super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus);
             setIcon(null);
             String dim = sel ? "#dddddd" : "#808080";
-            Object o = value instanceof DefaultMutableTreeNode n ? n.getUserObject() : null;
+            DefaultMutableTreeNode node = value instanceof DefaultMutableTreeNode n ? n : null;
+            Object o = node != null ? node.getUserObject() : null;
 
             if (o instanceof FileResult fr) {
+                setIcon(new CheckIcon(selectedPaths.contains(fr.path()) ? 1 : 0));
                 File parent = new File(fr.path()).getParentFile();
                 String dir = parent != null ? parent.getName() : "";
                 setText("<html><b>" + esc(fr.name()) + "</b> <font color='" + dim + "'>("
                         + fr.hits().size() + (fr.truncated() ? "+" : "") + ")&nbsp;&nbsp;"
                         + esc(dir) + "</font></html>");
+            } else if (o instanceof FolderData fd) {
+                List<String> paths = new ArrayList<>();
+                collectFilePaths(node, paths);
+                int picked = 0;
+                for (String p : paths) {
+                    if (selectedPaths.contains(p)) {
+                        picked++;
+                    }
+                }
+                setIcon(new CheckIcon(selectionState(paths)));
+                setText("<html><b>" + esc(fd.name()) + "</b> <font color='" + dim + "'>("
+                        + picked + "/" + paths.size() + ")</font></html>");
             } else if (o instanceof HitNode hn) {
                 Hit h = hn.hit();
                 String p = h.preview();

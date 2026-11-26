@@ -393,6 +393,7 @@ for (Map.Entry<String, String> e : result.undoSnapshot().entrySet()) {
 combinedSnapshot.putIfAbsent(e.getKey(), e.getValue());
 }
 if (title != null) titles.add(title);
+undoManager.recordPatch(title, result.undoSnapshot(), repo);
 refreshCallback.run();
 notifyCodeChangedForPatch(changes);
 
@@ -489,6 +490,7 @@ return false;
         if (result.hasSuccesses()) {
         duplicateDetector.record(text);
 undoManager.pushUndo(result.undoSnapshot(), title);
+undoManager.recordPatch(title, result.undoSnapshot(), repo);
 refreshCallback.run();
 notifyCodeChangedForPatch(changes);
 

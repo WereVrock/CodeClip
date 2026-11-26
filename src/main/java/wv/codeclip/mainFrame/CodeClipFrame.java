@@ -140,6 +140,24 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
     private int logLineCount = 0;
 
     private static final String BUILD_INFO_FILE = "buildinfo.properties";
+    private JCheckBoxMenuItem ignoreDotFilesItem;
+
+    private static final String ENABLE_INSTRUCTIONS =
+            "To see specific files, give the user ONE command line (ideally alone in a code block) that they paste into CodeClip:\n\n"
+            + "@@Enable FileA.ext, FileB.ext, FileC.ext\n\n"
+            + "Rules: use the exact file names WITH their extension (e.g. SceneSetup.js, Foo.java, style.css); "
+            + "separate with commas; keep all names on that one line; put no other text on that line. "
+            + "A relative path (js/app.js) is allowed to disambiguate duplicate names.";
+    private static final String COPIER_INSTRUCTIONS =
+            "To read specific files, give the user ONE command line (ideally alone in a code block). They paste it and CodeClip copies those files so they can send them back to you:\n\n"
+            + "@@Copy FileA.ext, FileB.ext, FileC.ext\n\n"
+            + "Same rules as @@Enable: exact names with extension, comma-separated, one line, nothing else on it.";
+    private static final String MOVE_INSTRUCTIONS =
+            "Use @@Move to move/rename a loaded file\n\n"
+            + "@@Move OldName.ext -> new/relative/path.ext";
+    private static final String DELETE_INSTRUCTIONS =
+            "Use @@Delete to delete loaded files from disk\n\n"
+            + "@@Delete FileName1.ext, FileName2.ext";
     private static final int ICON_SIZE = 64;
     /** Single files larger than this are not loaded. Prevents one minified
      *  bundle or generated dump from dominating the heap and stalling every
@@ -309,6 +327,10 @@ public class CodeClipFrame extends JFrame implements java.awt.event.FocusListene
         wireConflictResolver();
         SmartPasteSettings.load(settings);
         alwaysOnTopCheck.setSelected(settings.loadAlwaysOnTop());
+        ignoreDotFilesItem.setSelected(settings.loadIgnoreDotFiles());
+        if (fileDropHandler != null) {
+            fileDropHandler.setIgnoreDotFiles(ignoreDotFilesItem.isSelected());
+        }
         renderNotes();
 
         String[] savedPaths = settings.loadClassPaths();
@@ -464,6 +486,19 @@ compileCheckItem.setToolTipText(
 compileCheckItem.addActionListener(e ->
 wv.codeclip.patch.PostPatchVerifierSettings.setCompileCheckEnabled(compileCheckItem.isSelected()));
 settingsMenu.add(compileCheckItem);
+        ignoreDotFilesItem = new JCheckBoxMenuItem("Ignore files/folders starting with dot", true);
+        ignoreDotFilesItem.setToolTipText(
+                "When adding a folder (drag & drop or File > Add Folder), skip files and "
+                + "folders whose name starts with '.' (e.g. .git, .env, .gitignore).");
+        ignoreDotFilesItem.addActionListener(e -> {
+            boolean on = ignoreDotFilesItem.isSelected();
+            if (fileDropHandler != null) {
+                fileDropHandler.setIgnoreDotFiles(on);
+            }
+            settings.saveIgnoreDotFiles(on);
+            settings.saveProperties();
+        });
+        settingsMenu.add(ignoreDotFilesItem);
         JMenuItem languageItem = new JMenuItem("Language…");
         languageItem.addActionListener(e -> openLanguageDialog());
         settingsMenu.add(languageItem);
@@ -503,6 +538,20 @@ settingsMenu.add(compileCheckItem);
         menuBar.add(settingsMenu);
 
         JMenu extraMenu = new JMenu("Extra");
+        JMenuItem copyAllInfoItem = new JMenuItem("Copy Codemap + Copy Instructions");
+        copyAllInfoItem.setToolTipText(
+                "Codemap and the @@Copy instructions in one paste.");
+        copyAllInfoItem.addActionListener(e -> {
+            wv.codeclip.codemap.CodeMapBuilder.Scope scope = promptCodemapScope();
+            if (scope == null) {
+                return; // user cancelled
+            }
+            new ClipboardService().write(buildCodemapAndInstructions(scope));
+            settings.saveCodemapScope(scope.name());
+            settings.saveProperties();
+        });
+        extraMenu.add(copyAllInfoItem);
+        extraMenu.addSeparator();
         JMenuItem copyArchItem = new JMenuItem("Copy Architecture");
         copyArchItem.addActionListener(e -> actions.copyArchitecture());
         extraMenu.add(copyArchItem);
@@ -510,40 +559,16 @@ settingsMenu.add(compileCheckItem);
         timestampItem.addActionListener(e -> openTimestampDialog());
         extraMenu.add(timestampItem);
         JMenuItem copyEnablerItem = new JMenuItem("Copy Enable Instructions");
-        copyEnablerItem.addActionListener(e -> {
-            new ClipboardService().write(
-                    "To see specific files, give the user ONE command line (ideally alone in a code block) that they paste into CodeClip:\n\n"
-                    + "@@Enable FileA.ext, FileB.ext, FileC.ext\n\n"
-                    + "Rules: use the exact file names WITH their extension (e.g. SceneSetup.js, Foo.java, style.css); "
-                    + "separate with commas; keep all names on that one line; put no other text on that line. "
-                    + "A relative path (js/app.js) is allowed to disambiguate duplicate names."
-            );
-        });
+        copyEnablerItem.addActionListener(e -> new ClipboardService().write(ENABLE_INSTRUCTIONS));
         extraMenu.add(copyEnablerItem);
         JMenuItem copyCopierItem = new JMenuItem("Copy Copier Instructions");
-        copyCopierItem.addActionListener(e -> {
-            new ClipboardService().write(
-                    "To read specific files, give the user ONE command line (ideally alone in a code block). They paste it and CodeClip copies those files so they can send them back to you:\n\n"
-                    + "@@Copy FileA.ext, FileB.ext, FileC.ext\n\n"
-                    + "Same rules as @@Enable: exact names with extension, comma-separated, one line, nothing else on it."
-            );
-        });
+        copyCopierItem.addActionListener(e -> new ClipboardService().write(COPIER_INSTRUCTIONS));
         extraMenu.add(copyCopierItem);
         JMenuItem copyMoveItem = new JMenuItem("Copy Move Instructions");
-        copyMoveItem.addActionListener(e -> {
-            new ClipboardService().write(
-                    "Use @@Move to move/rename a loaded file\n\n"
-                    + "@@Move OldName.ext -> new/relative/path.ext"
-            );
-        });
+        copyMoveItem.addActionListener(e -> new ClipboardService().write(MOVE_INSTRUCTIONS));
         extraMenu.add(copyMoveItem);
         JMenuItem copyDeleteItem = new JMenuItem("Copy Delete Instructions");
-        copyDeleteItem.addActionListener(e -> {
-            new ClipboardService().write(
-                    "Use @@Delete to delete loaded files from disk\n\n"
-                    + "@@Delete FileName1.ext, FileName2.ext"
-            );
-        });
+        copyDeleteItem.addActionListener(e -> new ClipboardService().write(DELETE_INSTRUCTIONS));
         extraMenu.add(copyDeleteItem);
         JMenuItem copyCodemapItem = new JMenuItem("Copy Codemap");
         copyCodemapItem.addActionListener(e -> {
@@ -1001,6 +1026,7 @@ settingsMenu.add(compileCheckItem);
             syncProtocolUndoRedo.run();
             showPasteBusyBar();
             undoPushMarkBeforeBatch = undoManager.getPushCount();
+            undoManager.drainPatchRecords(); // drop stale records from earlier non-versioned pastes
             wv.codeclip.ui.UserNotifier.beginBatch();
             try {
                 if (wv.codeclip.modecontext.ModeContext.isGodotMode()) {
@@ -1356,6 +1382,9 @@ private void openLanguageDialog() {
             fluidMode = true;
             saveFluidFlag();
             switchMode(detectModeForFiles(repo.getClassFileMap().values()));
+            if (!repo.getClassCodeMap().isEmpty()) {
+                exitFluidMode();
+            }
             return;
         }
         AppMode chosen = (AppMode) selected;
@@ -1470,12 +1499,10 @@ private void quickSetup() {
      */
 
 private void updateModeLabel() {
-        if (modeLabel != null) {
-            modeLabel.setText(fluidMode
-                    ? "FLUID \u2192 " + currentMode
-                    : currentMode.toString());
-        }
+    if (modeLabel != null) {
+        modeLabel.setText(fluidMode ? "FLUID" : currentMode.toString());
     }
+}
 
 private void addClass(File file) {
         addFilesBatched(List.of(file));
@@ -1489,6 +1516,7 @@ private void addFilesBatched(List<File> files) {
             switchMode(detected);
         }
         appendTempLog("Project language: " + detected);
+        exitFluidMode();
         // The drop may have been collected in a broader mode (GENERIC accepts
         // everything); keep only what the detected language accepts.
         List<File> modeFiltered = new ArrayList<>();
@@ -2039,9 +2067,17 @@ private record PanelEntry(JPanel panel, String path, String name,
         private final String targetBuild;      // BUILD_NO at the time of this version
         private final java.util.List<String> allTitles; // every @@TITLE: in a batch, in order
         private boolean isCheckpoint;
+        private final java.util.List<wv.codeclip.patch.PatchRecord> patches;
 
         VersionEvent(String title, String files, String timestamp, String targetBuild,
                      java.util.List<String> allTitles, boolean isCheckpoint) {
+            this(title, files, timestamp, targetBuild, allTitles, isCheckpoint, java.util.List.of());
+        }
+
+        VersionEvent(String title, String files, String timestamp, String targetBuild,
+                     java.util.List<String> allTitles, boolean isCheckpoint,
+                     java.util.List<wv.codeclip.patch.PatchRecord> patches) {
+            this.patches = patches != null ? patches : java.util.List.of();
             this.title = title;
             this.files = files;
             this.timestamp = timestamp;
@@ -2057,6 +2093,7 @@ private record PanelEntry(JPanel panel, String path, String name,
         String targetBuild() { return targetBuild; }
         java.util.List<String> allTitles() { return allTitles; }
         boolean isCheckpoint() { return isCheckpoint; }
+        java.util.List<wv.codeclip.patch.PatchRecord> patches() { return patches; }
     }
 
     private String describeEntry(wv.codeclip.patch.PatchUndoManager.Entry entry) {
@@ -3463,7 +3500,8 @@ private void addVersionEventFromUndoTop() {
                 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         String build = pendingTargetBuild != null ? pendingTargetBuild : "?";
         boolean isCheckpoint = pendingIsCheckpoint;
-        versionHistory.add(new VersionEvent(title, files, time, build, allTitles, isCheckpoint));
+        versionHistory.add(new VersionEvent(title, files, time, build, allTitles, isCheckpoint,
+                undoManager.drainPatchRecords()));
         versionCurrentIdx = versionHistory.size() - 1;
         pendingTargetBuild = null;
         pendingIsCheckpoint = false;
@@ -3995,7 +4033,13 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
         closeBtn.addActionListener(e -> dlg.dispose());
         btnRow.add(closeBtn);
 
-        dlg.add(btnRow, BorderLayout.SOUTH);
+        JPanel southStack = new JPanel(new BorderLayout(0, 6));
+        JPanel patchPanel = buildPatchRevertPanel(ev, active, dlg);
+        if (patchPanel != null) {
+            southStack.add(patchPanel, BorderLayout.NORTH);
+        }
+        southStack.add(btnRow, BorderLayout.SOUTH);
+        dlg.add(southStack, BorderLayout.SOUTH);
 
         dlg.pack();
         dlg.setMinimumSize(new Dimension(420, 320));
@@ -4006,6 +4050,144 @@ private void showVersionDetail(VersionEvent ev, boolean active) {
         dlg.setLocationRelativeTo(this);
         dlg.setVisible(true);
     }
+
+/**
+ * Reverts one recorded patch against the current file contents. On success the
+ * change is pushed as a normal undo entry and shows up as a new version named
+ * "<title> patch is reverted". Returns true when something was reverted.
+ */
+private boolean revertSinglePatch(JDialog owner, wv.codeclip.patch.PatchRecord rec) {
+    java.util.function.Function<String, String> nameOf = p -> {
+        File f = repo.getClassFileMap().get(p);
+        return f != null ? f.getName() : new File(p).getName();
+    };
+
+    Map<String, String> current = new LinkedHashMap<>();
+    for (String path : rec.after().keySet()) {
+        current.put(path, repo.getClassCodeMap().get(path));
+    }
+    wv.codeclip.patch.PatchReverter.Result res = wv.codeclip.patch.PatchReverter.revert(rec, current);
+
+    if (!res.conflicts().isEmpty()) {
+        StringBuilder sb = new StringBuilder("\"" + rec.title() + "\" can't be reverted cleanly in:\n\n");
+        for (String p : res.conflicts()) {
+            sb.append("  • ").append(nameOf.apply(p)).append("\n");
+        }
+        sb.append("\nLater changes touched the same lines, or the file is no longer loaded.")
+          .append("\nNothing was changed.");
+        JOptionPane.showMessageDialog(owner, sb.toString(), "Revert Patch", JOptionPane.WARNING_MESSAGE);
+        return false;
+    }
+    if (res.newContents().isEmpty()) {
+        JOptionPane.showMessageDialog(owner,
+                "Nothing to revert — the files already match their state before this patch.",
+                "Revert Patch", JOptionPane.INFORMATION_MESSAGE);
+        return false;
+    }
+
+    StringBuilder ask = new StringBuilder("Revert \"" + rec.title() + "\"?\n\nFiles:\n");
+    for (String p : res.newContents().keySet()) {
+        ask.append("  • ").append(nameOf.apply(p)).append("\n");
+    }
+    if (JOptionPane.showConfirmDialog(owner, ask.toString(), "Revert Patch",
+            JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE) != JOptionPane.OK_OPTION) {
+        return false;
+    }
+
+    Map<String, String> snapshot = new LinkedHashMap<>();
+    List<String> failed = new ArrayList<>();
+    for (Map.Entry<String, String> e : res.newContents().entrySet()) {
+        String path = e.getKey();
+        File file = repo.getClassFileMap().get(path);
+        if (file == null) {
+            failed.add(nameOf.apply(path));
+            continue;
+        }
+        try {
+            String previous = repo.getClassCodeMap().get(path);
+            Files.writeString(file.toPath(), e.getValue());
+            snapshot.put(path, previous);
+            repo.getClassCodeMap().put(path, e.getValue());
+            repo.recordChange(path, ClassRepository.ChangeKind.PATCH_UPDATE);
+        } catch (java.io.IOException ex) {
+            failed.add(file.getName() + ": " + ex.getMessage());
+        }
+    }
+    if (!failed.isEmpty()) {
+        JOptionPane.showMessageDialog(owner,
+                "Could not write:\n\n  • " + String.join("\n  • ", failed),
+                "Revert Patch", JOptionPane.ERROR_MESSAGE);
+    }
+    if (snapshot.isEmpty()) {
+        return false;
+    }
+
+    undoManager.pushUndo(snapshot, rec.title() + " patch is reverted");
+    refreshText();
+    for (String path : snapshot.keySet()) {
+        onCodeChanged(path, repo.getClassCodeMap().get(path));
+    }
+    pasteHandler.clearDuplicateHistory();
+    godotPasteHandler.clearDuplicateHistory();
+    htmlPasteHandler.clearDuplicateHistory();
+    genericPasteHandler.clearDuplicateHistory();
+    syncUndoRedo.run();
+    stampBuildInfo();
+    addVersionEventFromUndoTop();
+    registerCurrentProjectInRecent();
+    appendTempLog("Patch reverted: " + rec.title());
+    return true;
+}
+
+/** One row per recorded patch with its own Revert button. Null when nothing was recorded. */
+private JPanel buildPatchRevertPanel(VersionEvent ev, boolean active, JDialog dlg) {
+    List<wv.codeclip.patch.PatchRecord> records = ev.patches();
+    if (records == null || records.isEmpty()) return null;
+
+    java.util.function.UnaryOperator<String> esc =
+            s -> s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+
+    JPanel rows = new JPanel();
+    rows.setLayout(new BoxLayout(rows, BoxLayout.Y_AXIS));
+    for (wv.codeclip.patch.PatchRecord rec : records) {
+        List<String> names = new ArrayList<>();
+        for (String p : rec.after().keySet()) {
+            File f = repo.getClassFileMap().get(p);
+            names.add(f != null ? f.getName() : new File(p).getName());
+        }
+        JLabel label = new JLabel("<html><b>" + esc.apply(rec.title()) + "</b>  <font color='gray'>"
+                + esc.apply(String.join(", ", names)) + "</font></html>");
+
+        JButton revertBtn = new JButton("Revert");
+        revertBtn.setFocusable(false);
+        revertBtn.setEnabled(active);
+        revertBtn.setToolTipText(active
+                ? "Undo only this patch and record it as a new version"
+                : "This version is undone — redo it first");
+        revertBtn.addActionListener(e -> {
+            if (revertSinglePatch(dlg, rec)) {
+                dlg.dispose();
+            }
+        });
+
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.add(label, BorderLayout.CENTER);
+        row.add(revertBtn, BorderLayout.EAST);
+        row.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+        rows.add(row);
+    }
+
+    JScrollPane scroll = new JScrollPane(rows);
+    scroll.setBorder(BorderFactory.createTitledBorder("Patches in this version — revert individually"));
+    scroll.getVerticalScrollBar().setUnitIncrement(16);
+    scroll.setPreferredSize(new Dimension(420, Math.min(160, 44 + records.size() * 30)));
+
+    JPanel wrapper = new JPanel(new BorderLayout());
+    wrapper.add(scroll, BorderLayout.CENTER);
+    return wrapper;
+}
 
 /** Prompts for a new title and applies it. For checkpoints, persists to project buildinfo. */
     private void renameVersionEvent(VersionEvent ev) {
@@ -4534,6 +4716,14 @@ private void enterFluidMode() {
     switchMode(AppMode.GENERIC);
 }
 
+/** Fluid is only a placeholder until a project resolves to a real mode; after that the mode is simply that mode. */
+private void exitFluidMode() {
+    if (!fluidMode) return;
+    fluidMode = false;
+    saveFluidFlag();
+    updateModeLabel();
+}
+
 /** Writes the project language into buildinfo.properties, only when that file already exists. */
 private void persistProjectMode() {
     persistProjectModeNow();
@@ -4760,13 +4950,15 @@ private List<File> collectFolderFiles(File root, AppMode filter) {
                 ".vscode", "__pycache__", "target", "build", "out");
         List<File> out = new ArrayList<>();
         java.nio.file.Path rootPath = root.toPath();
+        final boolean ignoreDot = ignoreDotFilesItem == null || ignoreDotFilesItem.isSelected();
         try {
             Files.walkFileTree(rootPath, new java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
                 @Override
                 public java.nio.file.FileVisitResult preVisitDirectory(java.nio.file.Path dir,
                         java.nio.file.attribute.BasicFileAttributes attrs) {
                     if (!dir.equals(rootPath) && dir.getFileName() != null
-                            && skipDirs.contains(dir.getFileName().toString().toLowerCase())) {
+                            && (skipDirs.contains(dir.getFileName().toString().toLowerCase())
+                                || (ignoreDot && dir.getFileName().toString().startsWith(".")))) {
                         return java.nio.file.FileVisitResult.SKIP_SUBTREE;
                     }
                     return java.nio.file.FileVisitResult.CONTINUE;
@@ -4776,7 +4968,8 @@ private List<File> collectFolderFiles(File root, AppMode filter) {
                 public java.nio.file.FileVisitResult visitFile(java.nio.file.Path file,
                         java.nio.file.attribute.BasicFileAttributes attrs) {
                     File f = file.toFile();
-                    if (filter.accepts(f.getName())) {
+                    if (filter.accepts(f.getName())
+                            && !(ignoreDot && f.getName().startsWith("."))) {
                         out.add(f);
                     }
                     return java.nio.file.FileVisitResult.CONTINUE;
@@ -4846,6 +5039,7 @@ private void rollbackCancelledBatch() {
         if (!wv.codeclip.ui.UserNotifier.isCancelled()) {
             return;
         }
+        undoManager.drainPatchRecords(); // a cancelled batch produces no version, so its records are dropped
         int toUndo = (int) (undoManager.getPushCount() - undoPushMarkBeforeBatch);
         // Idempotent: a second call (postPaste + finally) finds nothing left.
         undoPushMarkBeforeBatch = undoManager.getPushCount();
@@ -4976,6 +5170,15 @@ private void openContentSearchDialog() {
         }
         contentSearchDialog.setVisible(true);
         contentSearchDialog.focusQuery();
+    }
+
+    /** Codemap followed by the copy instructions, ready for one clipboard write. */
+    private String buildCodemapAndInstructions(wv.codeclip.codemap.CodeMapBuilder.Scope scope) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(new wv.codeclip.codemap.CodeMapBuilder(repo)
+                .build(repo.getDisabledClasses(), scope));
+        sb.append("\n\n").append(COPIER_INSTRUCTIONS);
+        return sb.toString();
     }
 
 }

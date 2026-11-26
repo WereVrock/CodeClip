@@ -337,6 +337,7 @@ private void applyFileEntry(HtmlScriptExtractor.FileEntry entry, PasteOutcome ou
         // distinct error and nothing gets silently merged or dropped.
         wv.codeclip.ui.UserNotifier.expectSteps(changes.size());
         Map<String, String> workingCode = new HashMap<>();
+        Map<String, String> blockBefore = new LinkedHashMap<>();
         Map<String, String> errorsByFile = new LinkedHashMap<>();
         List<String> appliedDescs = new ArrayList<>();
         Map<String, String> resolvedPathByRequestedName = new LinkedHashMap<>();
@@ -399,6 +400,7 @@ private void applyFileEntry(HtmlScriptExtractor.FileEntry entry, PasteOutcome ou
                 Files.writeString(file.toPath(), finalCode);
                 String previous = repo.getClassCodeMap().get(path);
                 outcome.combinedSnapshot.putIfAbsent(path, previous);
+                blockBefore.put(path, previous);
                 repo.getClassCodeMap().put(path, finalCode);
                 repo.getDisabledClasses().remove(path);
                 repo.recordChange(path, ClassRepository.ChangeKind.PATCH_UPDATE);
@@ -420,6 +422,7 @@ private void applyFileEntry(HtmlScriptExtractor.FileEntry entry, PasteOutcome ou
         if (title != null && !workingCode.isEmpty()) {
             outcome.titles.add(title);
         }
+        undoManager.recordPatch(title, blockBefore, repo);
     }
 
     /**
